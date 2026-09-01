@@ -21,7 +21,6 @@ import {
 import {
   whatsappMessagingDefinition,
 } from "./whatsapp-messaging";
-import { qualifiedWhatsAppPrivateMessagingAction } from "./whatsapp-private-transport";
 
 const accountId = "account-signal";
 const rawConversationId = "!chat:beeper.local";
@@ -630,21 +629,7 @@ describe("provider messaging coordinate codecs", () => {
       state: "unavailable",
       reply: "unsupported",
       reason:
-        "capture-required: the checked private no-retry transport still needs a controlled live fixture, fresh context proof, and exact accepted-message reconciliation",
+        "capture-required: the official read runtime has no Wrench-qualified mutation transport",
     });
-    expect(qualifiedWhatsAppPrivateMessagingAction.state).toBe(
-      "supported",
-    );
-    expect(qualifiedWhatsAppPrivateMessagingAction.compileTurnPart(
-      { conversationJid: "15551234567@s.whatsapp.net" },
-      { partId: "part-1", text: "hello", replyToProviderId: null },
-    )).toEqual({
-      conversation_jid: "15551234567@s.whatsapp.net",
-      body: "hello",
-    });
-    expect(() => qualifiedWhatsAppPrivateMessagingAction.compileTurnPart(
-      { conversationJid: "15551234567@s.whatsapp.net" },
-      { partId: "part-1", text: "hello", replyToProviderId: "MSG-1" },
-    )).toThrow("has not qualified replies");
   });
 });

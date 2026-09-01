@@ -203,6 +203,33 @@ describe("wrench CLI grammar", () => {
     }
   });
 
+  test("parses only the transparent one-account WhatsApp Message Like Me export", () => {
+    expect(parseWrenchArguments([
+      "whatsapp",
+      "export-message-like-me",
+      "--auth",
+      "whatsapp-main",
+      "--output",
+      "/tmp/whatsapp-message-like-me",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "whatsapp-export-message-like-me",
+        authId: "whatsapp-main",
+        output: "/tmp/whatsapp-message-like-me",
+        json: true,
+      },
+    });
+    for (const raw of [
+      ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main"],
+      ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main", "--output", "relative"],
+      ["whatsapp", "messages"],
+      ["whatsapp", "export-message-like-me", "--auth", "Bad ID", "--output", "/tmp/export"],
+      ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main", "--output", "/tmp/export", "--limit-messages", "1"],
+    ]) expect(parseWrenchArguments(raw).ok).toBeFalse();
+  });
+
   test("parses the path-free Beeper contact interaction export", () => {
     expect(parseWrenchArguments([
       "beeper",

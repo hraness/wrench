@@ -22,6 +22,11 @@ import {
   parseWhatsAppInteractionProjectionResponse,
   type WhatsAppInteractionProjectionRequest,
 } from "./whatsapp-interaction-projection-protocol";
+import {
+  WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
+  parseWhatsAppMessageExportProjectionResponse,
+  type WhatsAppMessageExportProjectionRequest,
+} from "./whatsapp-message-export-projection-protocol";
 
 const OWNER_JID = "15551234567:3@s.whatsapp.net";
 const helper = join(import.meta.dir, "whatsapp-interaction-projection-helper.ts");
@@ -78,6 +83,7 @@ function createStore(options: {
         file_enc_sha256 BLOB, file_length INTEGER, local_path TEXT,
         downloaded_at INTEGER, media_unavailable_at INTEGER,
         revoked INTEGER NOT NULL DEFAULT 0, deleted_for_me INTEGER NOT NULL DEFAULT 0,
+        deleted_at INTEGER, deletion_reason TEXT, payload_purged_at INTEGER,
         edited INTEGER NOT NULL DEFAULT 0, edited_ts INTEGER NOT NULL DEFAULT 0,
         buttons TEXT${options.extraMessageColumn === true ? ", private_unreviewed TEXT" : ""},
         UNIQUE(chat_jid, msg_id),
@@ -162,6 +168,37 @@ async function response(path: string, value: WhatsAppInteractionProjectionReques
   const result = await invoke(path, value);
   expect(result).toMatchObject({ exitCode: 0, stderr: "" });
   return parseWhatsAppInteractionProjectionResponse(
+    JSON.parse(result.stdout) as unknown,
+    value,
+  );
+}
+
+function messageRequest(
+  path: string,
+  overrides: Partial<WhatsAppMessageExportProjectionRequest> = {},
+): WhatsAppMessageExportProjectionRequest {
+  const store = lstatSync(path, { bigint: true });
+  const session = lstatSync(join(path, "session.db"), { bigint: true });
+  const messages = lstatSync(join(path, "wacli.db"), { bigint: true });
+  return {
+    schemaVersion: 1,
+    operation: "message-like-me.export",
+    accountSubject: "whatsapp:pn:15551234567",
+    cursor: "0",
+    cursorAnchor: null,
+    limit: 10,
+    expectedGeneration: null,
+    storeIdentity: { dev: store.dev.toString(), ino: store.ino.toString() },
+    sessionIdentity: { dev: session.dev.toString(), ino: session.ino.toString() },
+    messageStoreIdentity: { dev: messages.dev.toString(), ino: messages.ino.toString() },
+    ...overrides,
+  };
+}
+
+async function messageResponse(path: string, value: WhatsAppMessageExportProjectionRequest) {
+  const result = await invoke(path, value);
+  expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+  return parseWhatsAppMessageExportProjectionResponse(
     JSON.parse(result.stdout) as unknown,
     value,
   );
@@ -344,6 +381,132 @@ describe("WhatsApp content-free interaction projection helper", () => {
       expect(result.stdout).toContain('"errorCode":"request-invalid"');
       expect(result.stdout).not.toContain(path);
       expect(result.stdout).not.toContain("private-message-body");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("WhatsApp Message Like Me fixed projection helper", () => {
+  test("pages full DM/group rows while excluding non-conversation surfaces and private storage fields", async () => {
+    const path = createStore();
+    try {
+      const database = new Database(join(path, "wacli.db"), { strict: true });
+      try {
+        database.query(`
+          UPDATE messages
+          SET display_text = ?1, quoted_msg_id = ?2, quoted_sender_jid = ?3,
+              media_type = ?4, media_caption = ?5, filename = ?6,
+              mime_type = ?7, file_length = ?8, direct_path = ?9,
+              local_path = ?10, media_key = ?11
+          WHERE msg_id = 'MSG-1'
+        `).run(
+          "display body", "QUOTED-1", OWNER_JID, "image", "caption", "photo.jpg",
+          "image/jpeg", 42, "/private/provider/url", "/private/local/file", Buffer.from("secret-key"),
+        );
+        database.query(`
+          UPDATE messages SET edited = 1, edited_ts = ts + 5 WHERE msg_id = 'MSG-2'
+        `).run();
+        database.query(`
+          UPDATE messages
+          SET revoked = 1, deleted_at = ts + 2, deletion_reason = 'remote-revoke',
+              payload_purged_at = ts + 3
+          WHERE msg_id = 'MSG-3'
+        `).run();
+        database.query(`
+          INSERT INTO messages(chat_jid,msg_id,sender_jid,ts,from_me,reaction_to_id,reaction_emoji)
+          VALUES (?1,?2,?3,?4,0,?5,?6)
+        `).run(
+          "15557654321@s.whatsapp.net", "REACTION-1", "15557654321:2@s.whatsapp.net",
+          1_776_513_603, "MSG-1", "👍",
+        );
+        database.query("INSERT INTO chats(jid, kind) VALUES (?1, ?2)")
+          .run("status@broadcast", "broadcast");
+        database.query(`
+          INSERT INTO messages(chat_jid,msg_id,ts,from_me,text)
+          VALUES ('status@broadcast','STATUS-1',1776513604,0,'excluded status body')
+        `).run();
+      } finally {
+        database.close();
+      }
+      chmodSync(join(path, "wacli.db"), 0o600);
+      const requestValue = messageRequest(path);
+      const projected = await messageResponse(path, requestValue);
+      expect(projected).toMatchObject({
+        schemaVersion: 1,
+        status: "succeeded",
+        localInsertPageComplete: true,
+        nextCursor: null,
+        projectionGeneration: {
+          messageStoreIdentity: requestValue.messageStoreIdentity,
+          schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
+        },
+        messages: [{
+          rowid: "1",
+          chatJid: "15557654321@s.whatsapp.net",
+          chatKind: "dm",
+          messageId: "MSG-1",
+          text: "private body never projected",
+          displayText: "display body",
+          quotedMessageId: "QUOTED-1",
+          mediaType: "image",
+          fileName: "photo.jpg",
+          mimeType: "image/jpeg",
+          fileLength: 42,
+        }, {
+          rowid: "2",
+          chatKind: "group",
+          edited: true,
+          editedAt: "2026-04-18T12:00:06.000Z",
+        }, {
+          rowid: "3",
+          revoked: true,
+          deletedAt: "2026-04-18T12:00:04.000Z",
+          payloadPurgedAt: "2026-04-18T12:00:05.000Z",
+        }, {
+          rowid: "4",
+          reactionToMessageId: "MSG-1",
+          reactionEmoji: "👍",
+        }],
+      });
+      const encoded = JSON.stringify(projected);
+      expect(encoded).not.toContain("excluded status body");
+      expect(encoded).not.toContain("/private/provider/url");
+      expect(encoded).not.toContain("/private/local/file");
+      expect(encoded).not.toContain("secret-key");
+      expect(encoded).not.toContain("deletion_reason");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("binds subsequent pages to both content anchors and the exact file generation", async () => {
+    const path = createStore();
+    try {
+      const firstRequest = messageRequest(path, { limit: 1 });
+      const first = await messageResponse(path, firstRequest);
+      expect(first.status).toBe("succeeded");
+      if (first.status !== "succeeded") throw new Error("expected successful first page");
+      expect(await messageResponse(path, messageRequest(path, {
+        cursor: first.checkpoint.cursor,
+        cursorAnchor: "f".repeat(64),
+        expectedGeneration: first.projectionGeneration,
+        limit: 1,
+      }))).toMatchObject({ status: "failed", errorCode: "projection-invalid" });
+
+      const database = new Database(join(path, "wacli.db"), { strict: true });
+      try {
+        database.query("UPDATE messages SET text = 'changed after page one' WHERE rowid = 2").run();
+      } finally {
+        database.close();
+      }
+      chmodSync(join(path, "wacli.db"), 0o600);
+      expect(await messageResponse(path, messageRequest(path, {
+        cursor: first.checkpoint.cursor,
+        cursorAnchor: first.checkpoint.anchor,
+        expectedGeneration: first.projectionGeneration,
+        limit: 1,
+      }))).toMatchObject({ status: "failed", errorCode: "generation-mismatch" });
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

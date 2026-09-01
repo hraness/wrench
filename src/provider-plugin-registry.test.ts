@@ -410,9 +410,9 @@ describe("provider plugin definition and registry", () => {
       {
         id: "whatsapp-linked-device",
         surface: "whatsapp",
-        version: "1.1.0",
-        current: "b098d86a3fedee6c2a0f5bbd10b683af7ad4c27e4a633930d61e4ee188206a00",
-        prior: "4c58bd39ab0971764bc1361a8093f5965146c81e9be6785eb2c6c324765518c3",
+        version: "1.2.0",
+        current: "f5690e617cb5ef3ac06e2a35dc6833af1f47947688934fb0ccdbdf6aa2620af7",
+        prior: "b098d86a3fedee6c2a0f5bbd10b683af7ad4c27e4a633930d61e4ee188206a00",
         operation: "contacts.list",
         contractVersion: 1,
       },
@@ -3927,6 +3927,7 @@ describe("provider plugin definition and registry", () => {
       "providers/whatsapp-contact-projection-protocol.ts",
       "providers/whatsapp-interaction-projection-helper.ts",
       "providers/whatsapp-interaction-projection-protocol.ts",
+      "providers/whatsapp-message-export-projection-protocol.ts",
     ]) {
       expect(whatsappSourceLabels.has(expected)).toBeTrue();
     }

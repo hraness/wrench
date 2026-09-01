@@ -90,6 +90,10 @@ export const wrenchUsage = `Usage:
                 [--max-participants <n>] [--json]
                 # body-free receipt/output envelope on stdout; progress on stderr
 
+  wrench whatsapp export-message-like-me --auth <id>
+                  --output <new-absolute-directory> [--json]
+                  # local wacli.db bundle only; no send, pairing, or cloud sync
+
   wrench messaging routes --input <-|@absolute-private-file>
                           --private-output <absolute-mode-0600-file> [--json]
   wrench messaging resolve --input <-|@absolute-private-file>

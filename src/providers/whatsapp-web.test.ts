@@ -87,8 +87,27 @@ describe("WhatsApp linked-device protocol registry", () => {
   test("pins one audited protocol implementation and ships manifest parity", () => {
     expect(WHATSAPP_PROTOCOL_PIN).toMatchObject({
       implementation: "github.com/openclaw/wacli",
-      version: "0.13.0",
-      commit: "1e15f646d23598ef5db2bdb4659ac39cc5188ad2",
+      version: "0.15.0",
+      tag: "v0.15.0",
+      commit: "a020de724180d31eccfa5241d45443402d62fb06",
+      transport: "official-release",
+      darwinArm64ArchiveSha256:
+        "2b54f33d246e913a5c33525b4fc895a345363c2dcc673c70fa5f19cffb15d17d",
+      darwinArm64BinarySha256:
+        "a900af4d0dfd10471bcdf74105b9f256d1a08574242a041df3e5985a548826aa",
+      signature: {
+        authority:
+          "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
+        identifier: "org.openclaw.wacli",
+        teamIdentifier: "FWJYW4S8P8",
+        designatedRequirement:
+          'designated => identifier "org.openclaw.wacli" and anchor apple generic and certificate leaf[subject.OU] = FWJYW4S8P8',
+        cdHash: "a67b5d50877d6a2c3386d969d24dfc991bcc6a85",
+        cdHashFull:
+          "a67b5d50877d6a2c3386d969d24dfc991bcc6a8571a3343afc82e8d6de32e486",
+        hardenedRuntime: true,
+        notarized: true,
+      },
     });
     expect(whatsappManifest.schemaVersion).toBe(4);
     expect(whatsappManifest.id).toBe("whatsapp-web");
@@ -103,6 +122,13 @@ describe("WhatsApp linked-device protocol registry", () => {
     expect(Object.keys(whatsappManifest.operations).sort()).toEqual(
       [...WHATSAPP_WEB_OPERATION_NAMES].sort(),
     );
+    const plugin = providerPluginRegistry.get("whatsapp-linked-device");
+    expect(plugin?.version).toBe("1.2.0");
+    expect(plugin?.implementationSources.map((source) => source.label))
+      .not.toContain("providers/whatsapp-private-transport.ts");
+    expect(plugin?.implementationSources.some((source) =>
+      source.label.startsWith("vendor/whatsapp-private-transport/")
+    )).toBeFalse();
     for (const action of WHATSAPP_WEB_OPERATION_NAMES) {
       const operation = whatsappManifest.operations[action];
       expect(operation.webSession).toMatchObject({
@@ -135,10 +161,10 @@ describe("WhatsApp linked-device protocol registry", () => {
       "without opening a WhatsApp connection",
     );
     expect(WHATSAPP_WEB_OPERATIONS["messaging.send"].reason).toContain(
-      "private no-retry text transport",
+      "no Wrench-qualified mutation transport",
     );
     expect(WHATSAPP_WEB_OPERATIONS["messaging.send"].reason).toContain(
-      "remain inactive until a controlled low-stakes live fixture and exact hash-bound reconciliation read are proven",
+      "sending remains unavailable",
     );
     expect(WHATSAPP_COMMUNITY_MEMBERSHIP_POLICY).toMatchObject({
       risk: "R4",

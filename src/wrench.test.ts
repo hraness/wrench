@@ -55,6 +55,7 @@ import {
 import type { ReconcileRunResult } from "./web-session-recovery";
 import { getWebSessionContract, webSessionContractHash } from "./web-session-contracts";
 import { isPublicWebSessionInvocationAuthority } from "./web-session-authentication-policy";
+import type { WhatsAppMessageLikeMeCliRequest } from "./whatsapp-message-like-me-cli";
 
 const installManifest = (
   manifest: Parameters<typeof installManifestWithRegistry>[0],
@@ -1097,6 +1098,109 @@ describe("auth CLI", () => {
       });
       expect(wrench.stdout()).not.toContain(boundSubject);
       expect(loadAuth("beeper-main", testState.environment).subject).toBe(boundSubject);
+    } finally {
+      rmSync(testState.directory, { recursive: true, force: true });
+      rmSync(deviceStore, { recursive: true, force: true });
+    }
+  });
+
+  test("runs one bound WhatsApp account export with transparent progress and an exact receipt", async () => {
+    const testState = state();
+    const deviceStore = realpathSync(mkdtempSync(join(
+      tmpdir(),
+      "wrench-whatsapp-export-device-store-",
+    )));
+    chmodSync(deviceStore, 0o700);
+    try {
+      const boundSubject = "whatsapp:pn:15551234567";
+      saveAuth(createAuth("whatsapp-main", {
+        linkedDeviceProvider: "whatsapp",
+        deviceStore,
+        subject: boundSubject,
+      }), testState.environment);
+      let observed: Record<string, unknown> | undefined;
+      const receipt = Object.freeze({
+        schemaVersion: 1,
+        format: "wrench.whatsapp-message-like-me-export-receipt",
+        status: "succeeded",
+        output: Object.freeze({
+          schemaVersion: 2,
+          directory: "/tmp/whatsapp-message-like-me-fixture",
+          manifestSha256: "c".repeat(64),
+        }),
+        privacy: Object.freeze({ cloudSync: "none" }),
+      });
+      const wrench = capture();
+      const code = await main([
+        "whatsapp",
+        "export-message-like-me",
+        "--auth",
+        "whatsapp-main",
+        "--output",
+        "/tmp/whatsapp-message-like-me-fixture",
+        "--json",
+      ], testState.environment, wrench.output, {
+        loadWhatsAppMessageLikeMeCliRuntime: () => Promise.resolve({
+          exportWhatsAppMessageLikeMeFromAuth: (request: WhatsAppMessageLikeMeCliRequest) => {
+            observed = request as unknown as Record<string, unknown>;
+            expect(() => removeAuth("whatsapp-main", testState.environment))
+              .toThrow("active read projection transition");
+            request.onProgress?.({ phase: "preparing" });
+            request.onProgress?.({ phase: "page-started", page: 1, messages: 0 });
+            request.onProgress?.({ phase: "page-completed", page: 1, messages: 12 });
+            request.onProgress?.({
+              phase: "conversion-completed",
+              messages: 12,
+              conversations: 3,
+              participants: 4,
+            });
+            request.onProgress?.({
+              phase: "bundle-building",
+              elapsedSeconds: 1,
+              records: 20,
+              bytes: 4_096,
+            });
+            request.onProgress?.({
+              phase: "v2-conversion",
+              artifact: 6,
+              artifacts: 6,
+              records: 20,
+            });
+            return Promise.resolve({
+              receipt,
+              bundle: {
+                outputRoot: "/tmp/whatsapp-message-like-me-fixture",
+                manifestPath: "/tmp/whatsapp-message-like-me-fixture/manifest.json",
+                manifestSha256: "c".repeat(64),
+                manifest: {},
+              },
+            } as never);
+          },
+          encodeWhatsAppMessageLikeMeCliResult: () => `${JSON.stringify(receipt)}\n`,
+        } as never),
+      });
+      expect(code).toBe(0);
+      expect(JSON.parse(wrench.stdout())).toEqual(receipt);
+      expect(wrench.stderr()).toBe([
+        "wrench: WhatsApp export: binding the quiescent local store",
+        "wrench: WhatsApp export: page 1 reading; 0 local message rows observed",
+        "wrench: WhatsApp export: page 1 completed; 12 local message rows observed",
+        "wrench: WhatsApp export: local projection complete; 12 rows, 3 conversations, 4 participants",
+        "wrench: WhatsApp export: building private bundle; 20 records, 4096 bytes; 1s elapsed",
+        "wrench: WhatsApp export: publishing bundle v2 artifact 6/6; 20 records converted",
+        "",
+      ].join("\n"));
+      expect(observed).toMatchObject({
+        auth: {
+          id: "whatsapp-main",
+          kind: "linked-device-store",
+          provider: "whatsapp",
+          subject: boundSubject,
+        },
+        outputRoot: "/tmp/whatsapp-message-like-me-fixture",
+        onProgress: expect.any(Function),
+      });
+      expect(wrench.stdout()).not.toContain(boundSubject);
     } finally {
       rmSync(testState.directory, { recursive: true, force: true });
       rmSync(deviceStore, { recursive: true, force: true });

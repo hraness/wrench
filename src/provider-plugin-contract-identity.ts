@@ -363,9 +363,10 @@ const identities = Object.freeze({
   },
   "whatsapp-linked-device": {
     schemaVersion: 1,
-    pluginVersion: "1.1.0",
-    implementationSha256: "b098d86a3fedee6c2a0f5bbd10b683af7ad4c27e4a633930d61e4ee188206a00",
+    pluginVersion: "1.2.0",
+    implementationSha256: "f5690e617cb5ef3ac06e2a35dc6833af1f47947688934fb0ccdbdf6aa2620af7",
     legacyCurrentReadImplementationSha256: [
+      "b098d86a3fedee6c2a0f5bbd10b683af7ad4c27e4a633930d61e4ee188206a00",
       "4c58bd39ab0971764bc1361a8093f5965146c81e9be6785eb2c6c324765518c3",
     ],
     legacyReadImplementationSha256: {

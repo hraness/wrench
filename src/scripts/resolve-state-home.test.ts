@@ -17,7 +17,7 @@ import { join } from "node:path";
 
 const temporaryDirectories: string[] = [];
 const resolverPath = join(import.meta.dir, "resolve-state-home.ts");
-const runtimeVersion = "0.13.0";
+const runtimeVersion = "0.15.0";
 
 interface ResolverFixture {
   readonly dataRoot: string;

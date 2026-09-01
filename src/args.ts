@@ -58,6 +58,12 @@ export type WrenchArguments =
       readonly json: boolean;
     }
   | {
+      readonly command: "whatsapp-export-message-like-me";
+      readonly authId: string;
+      readonly output: string;
+      readonly json: boolean;
+    }
+  | {
       readonly command: "imessage-transport-install";
       readonly binary: string;
       readonly json: boolean;
@@ -909,6 +915,45 @@ export function parseWrenchArguments(raw: readonly string[]): ParseWrenchResult 
         command: "beeper-export-message-like-me",
         ...common,
         output: output!,
+      },
+    };
+  }
+  if (first === "whatsapp") {
+    if (raw[1] !== "export-message-like-me") {
+      return {
+        ok: false,
+        message: "whatsapp requires export-message-like-me",
+      };
+    }
+    const parsed = optionValues(raw.slice(2), ["--auth", "--output"], ["--json"]);
+    if (isFailure(parsed)) return parsed;
+    const authId = parsed.values["--auth"];
+    const output = parsed.values["--output"];
+    if (authId === undefined || validId(authId, "auth ID") !== null) {
+      return {
+        ok: false,
+        message: "whatsapp export-message-like-me requires --auth <lowercase-kebab-id>",
+      };
+    }
+    if (
+      output === undefined
+      || !isAbsolute(output)
+      || resolve(output) !== output
+      || Buffer.byteLength(output, "utf8") > 4_096
+      || /[\0\r\n]/u.test(output)
+    ) {
+      return {
+        ok: false,
+        message: "whatsapp export-message-like-me requires --output <normalized-absolute-directory>",
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        command: "whatsapp-export-message-like-me",
+        authId,
+        output,
+        json: parsed.booleans.has("--json"),
       },
     };
   }

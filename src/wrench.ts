@@ -30,8 +30,10 @@ import { parseWrenchArguments, wrenchUsage, type WrenchArguments } from "./args"
 import type * as BeeperMessageLikeMeCliRuntimeModule from "./beeper-message-like-me-cli";
 import type * as BeeperContactInteractionCliRuntimeModule from "./beeper-contact-interactions-cli";
 import type * as ApplePhotosCliRuntimeModule from "./apple-photos-cli";
+import type * as WhatsAppMessageLikeMeCliRuntimeModule from "./whatsapp-message-like-me-cli";
 import type { BeeperMessageLikeMeProgress } from "./beeper-message-like-me-source";
 import type { BeeperContactInteractionCliProgress } from "./beeper-contact-interactions-cli";
+import type { WhatsAppMessageLikeMeCliProgress } from "./whatsapp-message-like-me-cli";
 import type { GmailCaptureRunner } from "./gmail-capture";
 import type * as MediaRuntimeModule from "./media";
 import {
@@ -236,6 +238,7 @@ type BeeperMessageLikeMeCliRuntime = typeof BeeperMessageLikeMeCliRuntimeModule;
 type BeeperContactInteractionCliRuntime =
   typeof BeeperContactInteractionCliRuntimeModule;
 type ApplePhotosCliRuntime = typeof ApplePhotosCliRuntimeModule;
+type WhatsAppMessageLikeMeCliRuntime = typeof WhatsAppMessageLikeMeCliRuntimeModule;
 type ImsgDirectInstallRuntime =
   typeof import("./providers/imessage-direct-install");
 
@@ -264,6 +267,8 @@ const loadBeeperContactInteractionCliRuntime = (): Promise<BeeperContactInteract
   import("./beeper-contact-interactions-cli");
 const loadApplePhotosCliRuntime = (): Promise<ApplePhotosCliRuntime> =>
   import("./apple-photos-cli");
+const loadWhatsAppMessageLikeMeCliRuntime = (): Promise<WhatsAppMessageLikeMeCliRuntime> =>
+  import("./whatsapp-message-like-me-cli");
 const loadImsgDirectInstallRuntime = (): Promise<ImsgDirectInstallRuntime> =>
   import("./providers/imessage-direct-install");
 
@@ -302,6 +307,8 @@ export type WrenchDependencies = {
   readonly loadBeeperContactInteractionCliRuntime:
     () => Promise<BeeperContactInteractionCliRuntime>;
   readonly loadApplePhotosCliRuntime: () => Promise<ApplePhotosCliRuntime>;
+  readonly loadWhatsAppMessageLikeMeCliRuntime:
+    () => Promise<WhatsAppMessageLikeMeCliRuntime>;
   readonly loadImsgDirectInstallRuntime:
     () => Promise<ImsgDirectInstallRuntime>;
   readonly providerPluginRegistry: ProviderPluginRegistry;
@@ -361,6 +368,7 @@ const defaultDependencies: WrenchDependencies = {
   loadBeeperMessageLikeMeCliRuntime,
   loadBeeperContactInteractionCliRuntime,
   loadApplePhotosCliRuntime,
+  loadWhatsAppMessageLikeMeCliRuntime,
   loadImsgDirectInstallRuntime,
   providerPluginRegistry,
   probePluginSubject: async (
@@ -451,6 +459,9 @@ function resolveDependencies(overrides: Partial<WrenchDependencies>): WrenchDepe
     loadApplePhotosCliRuntime:
       overrides.loadApplePhotosCliRuntime
       ?? defaultDependencies.loadApplePhotosCliRuntime,
+    loadWhatsAppMessageLikeMeCliRuntime:
+      overrides.loadWhatsAppMessageLikeMeCliRuntime
+      ?? defaultDependencies.loadWhatsAppMessageLikeMeCliRuntime,
     loadImsgDirectInstallRuntime:
       overrides.loadImsgDirectInstallRuntime
       ?? defaultDependencies.loadImsgDirectInstallRuntime,
@@ -645,6 +656,58 @@ function renderBeeperMessageLikeMeProgress(
   const exhaustive: never = progress;
   void exhaustive;
   throw new Error("Beeper export progress was invalid");
+}
+
+function renderWhatsAppMessageLikeMeProgress(
+  progress: WhatsAppMessageLikeMeCliProgress,
+): string {
+  const integer = (value: number): number => {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error("WhatsApp export progress was invalid");
+    }
+    return value;
+  };
+  if (progress.phase === "recovery-started") {
+    return "wrench: WhatsApp export: checking prior private export state\n";
+  }
+  if (progress.phase === "recovery-completed") {
+    const recovered = integer(progress.recovered);
+    const published = integer(progress.published);
+    return `wrench: WhatsApp export: private recovery complete; ${recovered} ${plural(recovered, "directory", "directories")} reclaimed, ${published} published ${plural(published, "bundle", "bundles")} preserved\n`;
+  }
+  if (progress.phase === "preparing") {
+    return "wrench: WhatsApp export: binding the quiescent local store\n";
+  }
+  if (progress.phase === "page-started" || progress.phase === "page-completed") {
+    const page = integer(progress.page);
+    const messages = integer(progress.messages);
+    const state = progress.phase === "page-started" ? "reading" : "completed";
+    return `wrench: WhatsApp export: page ${page} ${state}; ${messages} local message rows observed\n`;
+  }
+  if (progress.phase === "conversion-completed") {
+    return `wrench: WhatsApp export: local projection complete; ${integer(progress.messages)} rows, ${integer(progress.conversations)} conversations, ${integer(progress.participants)} participants\n`;
+  }
+  if (progress.phase === "v2-conversion") {
+    return `wrench: WhatsApp export: publishing bundle v2 artifact ${integer(progress.artifact)}/${integer(progress.artifacts)}; ${integer(progress.records)} records converted\n`;
+  }
+  if (
+    progress.phase === "bundle-building"
+    || progress.phase === "bundle-validating"
+    || progress.phase === "bundle-publishing"
+  ) {
+    const action = progress.phase === "bundle-building"
+      ? "building"
+      : progress.phase === "bundle-validating"
+        ? "validating"
+        : "publishing";
+    return `wrench: WhatsApp export: ${action} private bundle; ${integer(progress.records)} records, ${integer(progress.bytes)} bytes; ${integer(progress.elapsedSeconds)}s elapsed\n`;
+  }
+  if (progress.phase === "private-cleanup") {
+    return `wrench: WhatsApp export: cleaning private validation state; ${integer(progress.elapsedSeconds)}s elapsed\n`;
+  }
+  const exhaustive: never = progress;
+  void exhaustive;
+  throw new Error("WhatsApp export progress was invalid");
 }
 
 type PreparedCapture = {
@@ -1990,6 +2053,40 @@ async function runCommand(
       runtime.encodeApplePhotosContactEvidenceCliOutput(result, arguments_.json),
     );
     return 0;
+  }
+  if (arguments_.command === "whatsapp-export-message-like-me") {
+    const admission = acquireReadProjectionAuthAdmission(
+      arguments_.authId,
+      environment,
+    );
+    try {
+      const auth = loadAuth(arguments_.authId, environment);
+      if (auth.kind !== "linked-device-store" || auth.provider !== "whatsapp") {
+        throw new Error(
+          "Message Like Me export requires a WhatsApp linked-device-store auth locator",
+        );
+      }
+      const runtime = await dependencies.loadWhatsAppMessageLikeMeCliRuntime();
+      const result = await runtime.exportWhatsAppMessageLikeMeFromAuth({
+        auth,
+        outputRoot: arguments_.output,
+        environment,
+        onProgress: (progress) => {
+          output.stderr(renderWhatsAppMessageLikeMeProgress(progress));
+        },
+        ...(signal === undefined ? {} : { signal }),
+      });
+      if (arguments_.json) {
+        output.stdout(runtime.encodeWhatsAppMessageLikeMeCliResult(result));
+      } else {
+        output.stdout(`WhatsApp Message Like Me bundle: ${safe(result.bundle.outputRoot)}\n`);
+        output.stdout(`Manifest SHA-256: ${safe(result.bundle.manifestSha256)}\n`);
+        output.stdout("Remote history completeness is not claimed. No cloud sync occurred.\n");
+      }
+      return 0;
+    } finally {
+      admission.release();
+    }
   }
   if (arguments_.command === "beeper-export-contact-interactions") {
     const runtime = await dependencies.loadBeeperContactInteractionCliRuntime();

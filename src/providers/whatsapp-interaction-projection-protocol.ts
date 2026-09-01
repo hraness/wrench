@@ -3,7 +3,7 @@ export const WHATSAPP_INTERACTION_PROJECTION_MAX_LIMIT = 1_000;
 export const WHATSAPP_INTERACTION_PROJECTION_MAX_STDIN_BYTES = 8 * 1024;
 export const WHATSAPP_INTERACTION_PROJECTION_MAX_STDOUT_BYTES = 1024 * 1024;
 export const WHATSAPP_INTERACTION_PROJECTION_SCHEMA_FINGERPRINT =
-  "sha256:994c43a93c88aea9775e9cae94a31f190b158ae0a423a1b0ee0fda83107b4d6c" as const;
+  "sha256:994b5024bc2479a269866060ea14a06230532b5aba8365d31b1f94113df3bc57" as const;
 
 const MAX_ROWID = 9_223_372_036_854_775_807n;
 const ROWID_PATTERN = /^(?:0|[1-9][0-9]{0,18})$/u;
@@ -60,6 +60,7 @@ export const WHATSAPP_INTERACTION_PROJECTION_ERROR_CODES = Object.freeze([
   "database-integrity-failed",
   "schema-mismatch",
   "owner-mismatch",
+  "generation-mismatch",
   "projection-invalid",
   "output-too-large",
 ] as const);

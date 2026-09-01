@@ -17,15 +17,13 @@ import { fileURLToPath } from "node:url";
 import { BoundedByteBuffer } from "@hraness/kb/clip/bounded-byte-buffer";
 
 import type { WrenchAuth } from "../auth";
-import type { BrowserFileResolver } from "../browser";
 import type { OperationInput, WebSessionRecipe } from "../model";
 import { OperationDeadline } from "../operation-deadline";
 import type {
   ProviderPluginLinkedDeviceAttemptBoundaryV1,
 } from "../provider-plugin";
-import { wrenchStateHome } from "../storage";
+import { assertSafeStatePath, wrenchStateHome } from "../storage";
 import type {
-  WebSessionDispatchEvent,
   WebSessionExecution,
   WebSessionCleanupBarrierRegistrar,
   WebSessionOperationDeadline,
@@ -51,28 +49,16 @@ import {
   WHATSAPP_PROTOCOL_PIN,
   WHATSAPP_WEB_OPERATIONS,
   WHATSAPP_WEB_OPERATION_NAMES,
-  isWhatsAppWriteAction,
   parseWhatsAppAuthStatusEnvelope,
   parseWhatsAppJid,
-  parseWhatsAppWriteEnvelope,
-  planWhatsAppWriteCommand,
   projectWhatsAppChatsEnvelope,
   projectWhatsAppMessageEnvelope,
   projectWhatsAppMessagesEnvelope,
-  verifyWhatsAppWriteReadback,
   whatsappMessageId,
   whatsappTargetJid,
   type WhatsAppWebOperationName,
-  type WhatsAppWritePlan,
 } from "./whatsapp-web";
 import { projectContactDirectionStats } from "./contact-projection";
-import {
-  parseWhatsAppPrivateTransportEnvelope,
-  planWhatsAppPrivateTextSend,
-  submittedWhatsAppPrivateOutput,
-  type WhatsAppPrivateTransportBinding,
-  type WhatsAppPrivateTransportResponse,
-} from "./whatsapp-private-transport";
 
 const WHATSAPP_ORIGIN = "https://web.whatsapp.com";
 const DEFAULT_LIMIT = 50;
@@ -95,14 +81,7 @@ export type WacliInvocation = {
   readonly environment: Readonly<Record<string, string>>;
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
-  /** Private mutation payload. It is never copied into argv or environment. */
-  readonly stdin?: string;
   readonly signal?: AbortSignal;
-  /**
-   * Called immediately after the child process exists. Mutation accounting
-   * must treat everything after this point as potentially dispatched.
-   */
-  readonly onSpawn?: () => void;
 };
 
 export type WacliInvocationResult = {
@@ -312,29 +291,179 @@ async function sha256File(path: string): Promise<string> {
   return hash.digest("hex");
 }
 
-async function pinnedBinaryCandidate(pathValue: string): Promise<string | null> {
+type FixedCommandResult = {
+  readonly exitCode: number;
+  readonly output: string;
+};
+
+async function runFixedCodesign(
+  arguments_: readonly string[],
+  signal?: AbortSignal,
+): Promise<FixedCommandResult> {
+  const isAborted = (): boolean => signal?.aborted === true;
+  if (isAborted()) {
+    return Object.freeze({ exitCode: -1, output: "" });
+  }
+  const child = Bun.spawn(["/usr/bin/codesign", ...arguments_], {
+    env: {
+      PATH: "/usr/bin:/bin",
+      LANG: "C",
+      LC_ALL: "C",
+    },
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  let interrupted = false;
+  const interrupt = (): void => {
+    interrupted = true;
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // child.exited remains the process-cleanup proof.
+    }
+  };
+  const onAbort = (): void => interrupt();
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (isAborted()) onAbort();
+  const timeout = setTimeout(interrupt, 5_000);
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      readBoundedStream(child.stdout, 64 * 1024),
+      readBoundedStream(child.stderr, 64 * 1024),
+      child.exited,
+    ]);
+    return Object.freeze({
+      exitCode: interrupted ? -1 : exitCode,
+      output: interrupted ? "" : `${stdout}${stderr}`,
+    });
+  } catch (error) {
+    interrupt();
+    await child.exited;
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+function codeSignatureValue(
+  display: string,
+  key: string,
+): string | null {
+  const prefix = `${key}=`;
+  const lines = display.split(/\r?\n/u)
+    .filter((line) => line.startsWith(prefix));
+  if (lines.length !== 1) return null;
+  return lines[0]?.slice(prefix.length) ?? null;
+}
+
+function normalizeCodeRequirement(value: string): string {
+  return value
+    .replace(/\s+/gu, " ")
+    .replace(/"([A-Za-z0-9.]+)"/gu, "$1")
+    .trim();
+}
+
+async function verifyPinnedWacliSignature(
+  path: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const verified = await runFixedCodesign([
+    "--verify",
+    "--strict",
+    "--verbose=4",
+    path,
+  ], signal);
+  if (verified.exitCode !== 0) return false;
+
+  const display = await runFixedCodesign([
+    "--display",
+    "--verbose=4",
+    path,
+  ], signal);
+  if (display.exitCode !== 0) return false;
+  const signature = WHATSAPP_PROTOCOL_PIN.signature;
+  const authorities = display.output.split(/\r?\n/u)
+    .filter((line) => line.startsWith("Authority="))
+    .map((line) => line.slice("Authority=".length))
+    .filter((authority) => authority.startsWith("Developer ID Application:"));
+  if (
+    codeSignatureValue(display.output, "Identifier") !== signature.identifier
+    || codeSignatureValue(display.output, "TeamIdentifier")
+      !== signature.teamIdentifier
+    || codeSignatureValue(display.output, "CDHash") !== signature.cdHash
+    || codeSignatureValue(display.output, "CandidateCDHashFull sha256")
+      !== signature.cdHashFull
+    || authorities.length !== 1
+    || authorities[0] !== signature.authority
+    || !/\bflags=0x[0-9a-f]+\(runtime\)/iu.test(display.output)
+    || !/^Timestamp=(?!none$).+/mu.test(display.output)
+  ) return false;
+
+  const requirements = await runFixedCodesign([
+    "--display",
+    "--requirements",
+    "-",
+    path,
+  ], signal);
+  if (requirements.exitCode !== 0) return false;
+  const embeddedRequirements = requirements.output.split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("designated =>"));
+  if (
+    embeddedRequirements.length !== 1
+    || normalizeCodeRequirement(embeddedRequirements[0] ?? "")
+      !== normalizeCodeRequirement(signature.designatedRequirement)
+  ) return false;
+
+  return true;
+}
+
+async function pinnedBinaryCandidate(
+  pathValue: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
   let canonical: string;
   try {
     canonical = await realpath(pathValue);
   } catch {
     return null;
   }
-  const stats = await lstat(canonical);
-  if (
-    !stats.isFile()
-    || (stats.mode & 0o022) !== 0
-    || (stats.mode & 0o111) === 0
-    || (!ownedByCurrentUser(stats) && stats.uid !== 0)
-  ) return null;
-  if (process.platform !== "darwin" || process.arch !== "arm64") return null;
-  return await sha256File(canonical)
-      === WHATSAPP_PROTOCOL_PIN.darwinArm64BinarySha256
-    ? canonical
-    : null;
+  try {
+    const stats = await lstat(canonical);
+    if (
+      !stats.isFile()
+      || (stats.mode & 0o077) !== 0
+      || (stats.mode & 0o111) === 0
+      || !ownedByCurrentUser(stats)
+    ) return null;
+    if (process.platform !== "darwin" || process.arch !== "arm64") return null;
+    if (
+      await sha256File(canonical)
+        !== WHATSAPP_PROTOCOL_PIN.darwinArm64BinarySha256
+    ) return null;
+    if (!await verifyPinnedWacliSignature(canonical, signal)) return null;
+    const finalStats = await lstat(canonical);
+    if (
+      !finalStats.isFile()
+      || finalStats.dev !== stats.dev
+      || finalStats.ino !== stats.ino
+      || finalStats.size !== stats.size
+      || finalStats.mode !== stats.mode
+      || !ownedByCurrentUser(finalStats)
+      || await sha256File(canonical)
+        !== WHATSAPP_PROTOCOL_PIN.darwinArm64BinarySha256
+    ) return null;
+    return canonical;
+  } catch {
+    return null;
+  }
 }
 
 export async function resolvePinnedWacliBinary(
   environment: Readonly<Record<string, string | undefined>> = process.env,
+  signal?: AbortSignal,
 ): Promise<string> {
   const candidates = [
     join(
@@ -347,8 +476,19 @@ export async function resolvePinnedWacliBinary(
     ),
   ];
   for (const candidate of candidates) {
-    const found = await pinnedBinaryCandidate(candidate);
-    if (found !== null) return found;
+    try {
+      assertSafeStatePath(candidate, environment);
+    } catch {
+      continue;
+    }
+    const found = await pinnedBinaryCandidate(candidate, signal);
+    if (found === null) continue;
+    try {
+      assertSafeStatePath(candidate, environment);
+      if (await realpath(candidate) === found) return found;
+    } catch {
+      // The lexical state path changed after validation.
+    }
   }
   throw new Error(
     `pinned WhatsApp protocol runtime wacli ${WHATSAPP_PROTOCOL_PIN.version} is not installed or failed integrity verification`,
@@ -359,10 +499,14 @@ export type WhatsAppProtocolRuntimeStatus = {
   readonly ready: boolean;
   readonly implementation: typeof WHATSAPP_PROTOCOL_PIN.implementation;
   readonly version: typeof WHATSAPP_PROTOCOL_PIN.version;
-  readonly integrity: "source-patched+sha256-pinned";
+  readonly integrity: "official-release+sha256+developer-id+notarization";
   readonly transport: typeof WHATSAPP_PROTOCOL_PIN.transport;
-  readonly protocolSha256: typeof WHATSAPP_PROTOCOL_PIN.protocolSha256;
-  readonly qualification: "live-fixture-required";
+  readonly archiveSha256:
+    typeof WHATSAPP_PROTOCOL_PIN.darwinArm64ArchiveSha256;
+  readonly binarySha256:
+    typeof WHATSAPP_PROTOCOL_PIN.darwinArm64BinarySha256;
+  readonly signature: typeof WHATSAPP_PROTOCOL_PIN.signature;
+  readonly qualification: "read-only-runtime";
   readonly setupCommand: string;
 };
 
@@ -388,10 +532,12 @@ export async function inspectWhatsAppProtocolRuntime(
     ready,
     implementation: WHATSAPP_PROTOCOL_PIN.implementation,
     version: WHATSAPP_PROTOCOL_PIN.version,
-    integrity: "source-patched+sha256-pinned",
+    integrity: "official-release+sha256+developer-id+notarization",
     transport: WHATSAPP_PROTOCOL_PIN.transport,
-    protocolSha256: WHATSAPP_PROTOCOL_PIN.protocolSha256,
-    qualification: "live-fixture-required",
+    archiveSha256: WHATSAPP_PROTOCOL_PIN.darwinArm64ArchiveSha256,
+    binarySha256: WHATSAPP_PROTOCOL_PIN.darwinArm64BinarySha256,
+    signature: WHATSAPP_PROTOCOL_PIN.signature,
+    qualification: "read-only-runtime",
     setupCommand: `/bin/sh ${shellQuote(installer)}`,
   });
 }
@@ -435,22 +581,12 @@ async function runWacli(
     [invocation.binary, ...invocation.arguments],
     {
       env: { ...invocation.environment },
-      stdin: invocation.stdin === undefined ? "ignore" : "pipe",
+      stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
       detached: ownsProcessGroup,
     },
   );
-  invocation.onSpawn?.();
-  const writeStdin = async (): Promise<void> => {
-    if (invocation.stdin === undefined) return;
-    const childStdin = child.stdin;
-    if (childStdin === undefined || typeof childStdin === "number") {
-      throw new Error("WhatsApp protocol process omitted its private stdin pipe");
-    }
-    childStdin.write(invocation.stdin);
-    await childStdin.end();
-  };
   let timedOut = false;
   let cancelled = false;
   let forceKill: ReturnType<typeof setTimeout> | null = null;
@@ -498,7 +634,6 @@ async function runWacli(
         Math.min(invocation.maxOutputBytes, MAX_STDERR_BYTES),
       ),
       child.exited,
-      writeStdin(),
     ]);
     if (cancelled) throw new Error("WhatsApp protocol command was cancelled");
     if (timedOut) throw new Error("WhatsApp protocol command timed out");
@@ -546,7 +681,6 @@ async function checkedRun(
     readonly timeoutMs: number;
     readonly maxOutputBytes: number;
     readonly readOnly: boolean;
-    readonly onSpawn?: () => void;
     readonly dependencies?: WhatsAppWebRuntimeDependencies;
     readonly operationDeadline?: WebSessionOperationDeadline;
   },
@@ -565,7 +699,6 @@ async function checkedRun(
     ...(options.operationDeadline === undefined
       ? {}
       : { signal: options.operationDeadline.signal }),
-    ...(options.onSpawn === undefined ? {} : { onSpawn: options.onSpawn }),
   });
   const result = options.operationDeadline === undefined
     ? await invoke()
@@ -598,7 +731,10 @@ async function runtimeBinary(
   operationDeadline?: WebSessionOperationDeadline,
 ): Promise<string> {
   operationDeadline?.throwIfUnavailable(WEB_SESSION_OPERATION_LABEL);
-  const resolveBinary = () => resolvePinnedWacliBinary(environment);
+  const resolveBinary = () => resolvePinnedWacliBinary(
+    environment,
+    operationDeadline?.signal,
+  );
   const binary = dependencies?.binaryPath
     ?? (operationDeadline === undefined
       ? await resolveBinary()
@@ -652,126 +788,6 @@ function readOnlyArguments(
     `${Math.max(1, timeoutMs)}ms`,
     ...command,
   ]);
-}
-
-function writeArguments(
-  store: string,
-  timeoutMs: number,
-  command: readonly string[],
-): readonly string[] {
-  return Object.freeze([
-    "--store",
-    store,
-    "--json",
-    "--full",
-    "--timeout",
-    `${Math.max(1, timeoutMs)}ms`,
-    ...command,
-  ]);
-}
-
-function privateTransportArguments(
-  store: string,
-  timeoutMs: number,
-  command: "send" | "status",
-): readonly string[] {
-  return Object.freeze([
-    "--store",
-    store,
-    "--json",
-    "--full",
-    "--timeout",
-    `${Math.max(1, timeoutMs)}ms`,
-    "wrench-private",
-    command,
-    ...(command === "send" ? ["--input", "-"] : []),
-  ]);
-}
-
-function samePrivateTransportBinding(
-  left: WhatsAppPrivateTransportBinding,
-  right: WhatsAppPrivateTransportBinding,
-): boolean {
-  return left.protocolHash === right.protocolHash
-    && left.toolHash === right.toolHash
-    && left.storeSubject === right.storeSubject
-    && left.authSubject === right.authSubject
-    && left.daemonPid === right.daemonPid
-    && left.daemonStartedAt === right.daemonStartedAt
-    && left.connectionEpoch === right.connectionEpoch;
-}
-
-async function privateTransportCall(
-  runtime: Awaited<ReturnType<typeof boundRuntime>>,
-  command: "send" | "status",
-  timeoutMs: number,
-  options: {
-    readonly stdin?: string;
-    readonly onSpawn?: () => void;
-    readonly dependencies?: WhatsAppWebRuntimeDependencies;
-    readonly operationDeadline?: WebSessionOperationDeadline;
-  },
-): Promise<WhatsAppPrivateTransportResponse> {
-  const processTimeoutMs = remainingTimeoutMs(
-    timeoutMs,
-    options.operationDeadline,
-  );
-  const run = options.dependencies?.run ?? runWacli;
-  const invoke = () => run({
-    binary: runtime.binary,
-    arguments: privateTransportArguments(
-      runtime.store,
-      processTimeoutMs,
-      command,
-    ),
-    environment: wacliEnvironment(false),
-    timeoutMs: processTimeoutMs,
-    maxOutputBytes: 64 * 1024,
-    ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
-    ...(options.onSpawn === undefined ? {} : { onSpawn: options.onSpawn }),
-    ...(options.operationDeadline === undefined
-      ? {}
-      : { signal: options.operationDeadline.signal }),
-  });
-  const result = options.operationDeadline === undefined
-    ? await invoke()
-    : await options.operationDeadline.run(
-        invoke,
-        WEB_SESSION_OPERATION_LABEL,
-      );
-  const response = parseWhatsAppPrivateTransportEnvelope(
-    result.stdout,
-    createHash("sha256").update(runtime.store, "utf8").digest("hex"),
-  );
-  if ((result.exitCode === 0) !== response.ok) {
-    throw new Error("WhatsApp private transport exit status disagrees with proof state");
-  }
-  return response;
-}
-
-async function preflightPrivateTransport(
-  runtime: Awaited<ReturnType<typeof boundRuntime>>,
-  options: {
-    readonly dependencies?: WhatsAppWebRuntimeDependencies;
-    readonly operationDeadline?: WebSessionOperationDeadline;
-  },
-): Promise<WhatsAppPrivateTransportBinding> {
-  const first = await privateTransportCall(runtime, "status", 13_000, options);
-  if (first.ok && first.state === "idle") return first.binding;
-  if (first.ok && first.state === "submitted") {
-    const second = await privateTransportCall(runtime, "status", 13_000, options);
-    if (
-      !samePrivateTransportBinding(first.binding, second.binding)
-      || !second.ok
-      || second.state !== "idle"
-    ) throw new Error("WhatsApp private transport did not settle to one bound idle lane");
-    return second.binding;
-  }
-  throw new Error(
-    `WhatsApp private transport lane is ${first.state}${
-      first.reason === null ? "" : ` (${first.reason})`
-    }`,
-  );
 }
 
 async function authStatus(
@@ -1923,230 +1939,11 @@ async function executeLocalProjection(
   };
 }
 
-function dispatchEvent(
-  action: string,
-  started: number,
-  verified: number,
-): WebSessionDispatchEvent {
-  return {
-    id: action,
-    index: 1,
-    progress: { planned: 1, started, verified },
-  };
-}
-
-/**
- * Full response/readback accounting for the future mutation transport.
- *
- * This function is intentionally unreachable while every mutation contract is
- * capture-required. Text send has a checked stdin-only no-retry transport
- * candidate below; the registered contract still lacks its controlled live
- * freshness and reconciliation qualification. Other mutations retain their
- * original reviewed planners without an executable private transport.
- */
-async function executeMutation(
-  runtime: Awaited<ReturnType<typeof boundRuntime>>,
-  action: WhatsAppWritePlan["action"],
-  recipe: WebSessionRecipe,
-  input: OperationInput,
-  options: {
-    readonly fileResolver?: BrowserFileResolver;
-    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
-    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
-    readonly dependencies?: WhatsAppWebRuntimeDependencies;
-    readonly operationDeadline?: WebSessionOperationDeadline;
-  },
-): Promise<WebSessionExecution> {
-  if (action === "messaging.send") {
-    return executeWhatsAppPrivateTextSend(runtime, recipe, input, options);
-  }
-  const plan = planWhatsAppWriteCommand(
-    action,
-    input,
-    undefined,
-  );
-  let started = 0;
-  let verified = 0;
-  try {
-    await options.beforeDispatch?.(dispatchEvent(recipe.action, 0, 0));
-    const dispatchTimeoutMs = remainingTimeoutMs(
-      recipe.timeoutMs,
-      options.operationDeadline,
-    );
-    const response = await checkedRun(
-      runtime.binary,
-      writeArguments(runtime.store, dispatchTimeoutMs, plan.argv),
-      {
-        timeoutMs: dispatchTimeoutMs,
-        maxOutputBytes: recipe.maxOutputBytes,
-        readOnly: false,
-        onSpawn: () => {
-          started = 1;
-        },
-        ...(options.dependencies === undefined
-          ? {}
-          : { dependencies: options.dependencies }),
-        ...(options.operationDeadline === undefined
-          ? {}
-          : { operationDeadline: options.operationDeadline }),
-      },
-    );
-    if (started !== 1) {
-      throw new Error("WhatsApp protocol runner omitted dispatch accounting");
-    }
-    const receipt = parseWhatsAppWriteEnvelope(plan, response);
-    const readbackTimeoutMs = remainingTimeoutMs(
-      recipe.timeoutMs,
-      options.operationDeadline,
-    );
-    const readback = await checkedRun(
-      runtime.binary,
-      readOnlyArguments(runtime.store, readbackTimeoutMs, [
-        "messages",
-        "show",
-        "--chat",
-        receipt.readbackChatJid,
-        "--id",
-        receipt.messageId,
-      ]),
-      {
-        timeoutMs: readbackTimeoutMs,
-        maxOutputBytes: recipe.maxOutputBytes,
-        readOnly: true,
-        ...(options.dependencies === undefined
-          ? {}
-          : { dependencies: options.dependencies }),
-        ...(options.operationDeadline === undefined
-          ? {}
-          : { operationDeadline: options.operationDeadline }),
-      },
-    );
-    const output = verifyWhatsAppWriteReadback(plan, receipt, readback);
-    verified = 1;
-    await options.afterDispatchVerified?.(dispatchEvent(recipe.action, 1, 1));
-    return {
-      status: "succeeded",
-      output,
-      finalUrl: WHATSAPP_ORIGIN,
-      dispatchStarted: true,
-      dispatch: { planned: 1, started, verified },
-    };
-  } catch {
-    return {
-      status: started > 0 ? "indeterminate" : "failed",
-      output: null,
-      finalUrl: WHATSAPP_ORIGIN,
-      dispatchStarted: started > 0,
-      dispatch: { planned: 1, started, verified },
-      error: started > 0
-        ? "WhatsApp may have changed the requested state but exact readback was not verified; reconcile before retrying"
-        : "WhatsApp linked-device operation failed before dispatch",
-    };
-  }
-}
-
-/**
- * Execute one qualified text-only private transport attempt. The public
- * operation remains capture-required until repository observation gates are
- * satisfied, but this provider-owned path is complete and directly testable.
- */
-export async function executeWhatsAppPrivateTextSend(
-  runtime: Awaited<ReturnType<typeof boundRuntime>>,
-  recipe: WebSessionRecipe,
-  input: OperationInput,
-  options: {
-    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
-    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
-    readonly dependencies?: WhatsAppWebRuntimeDependencies;
-    readonly operationDeadline?: WebSessionOperationDeadline;
-  } = {},
-): Promise<WebSessionExecution> {
-  if (
-    recipe.site !== "whatsapp"
-    || recipe.action !== "messaging.send"
-    || recipe.contractVersion !== 1
-  ) throw new Error("WhatsApp private text transport requires messaging.send v1");
-  let started = 0;
-  let verified = 0;
-  try {
-    await options.beforeDispatch?.(dispatchEvent(recipe.action, 0, 0));
-    const preflightBinding = await preflightPrivateTransport(runtime, {
-      ...(options.dependencies === undefined
-        ? {}
-        : { dependencies: options.dependencies }),
-      ...(options.operationDeadline === undefined
-        ? {}
-        : { operationDeadline: options.operationDeadline }),
-    });
-    const availableMs = remainingTimeoutMs(
-      recipe.timeoutMs,
-      options.operationDeadline,
-    );
-    if (availableMs < 3_100) {
-      throw new Error("WhatsApp private send lacks a safe response budget");
-    }
-    const plan = planWhatsAppPrivateTextSend(
-      input,
-      Math.min(45_000, availableMs - 3_000),
-    );
-    const response = await privateTransportCall(
-      runtime,
-      "send",
-      plan.timeoutMs + 2_500,
-      {
-        stdin: plan.stdin,
-        onSpawn: () => {
-          started = 1;
-        },
-        ...(options.dependencies === undefined
-          ? {}
-          : { dependencies: options.dependencies }),
-        ...(options.operationDeadline === undefined
-          ? {}
-          : { operationDeadline: options.operationDeadline }),
-      },
-    );
-    if (started !== 1) {
-      throw new Error("WhatsApp private transport runner omitted dispatch accounting");
-    }
-    if (!samePrivateTransportBinding(preflightBinding, response.binding)) {
-      throw new Error("WhatsApp private transport daemon changed after preflight");
-    }
-    const output = submittedWhatsAppPrivateOutput(response, plan);
-    options.operationDeadline?.throwIfUnavailable(
-      WEB_SESSION_OPERATION_LABEL,
-    );
-    verified = 1;
-    await options.afterDispatchVerified?.(dispatchEvent(recipe.action, 1, 1));
-    return {
-      status: "succeeded",
-      output,
-      finalUrl: WHATSAPP_ORIGIN,
-      dispatchStarted: true,
-      dispatch: { planned: 1, started, verified },
-    };
-  } catch {
-    return {
-      status: started > 0 ? "indeterminate" : "failed",
-      output: null,
-      finalUrl: WHATSAPP_ORIGIN,
-      dispatchStarted: started > 0,
-      dispatch: { planned: 1, started, verified },
-      error: started > 0
-        ? "WhatsApp private send may have been submitted; the route lane must be reconciled by its authenticated status barrier before any retry"
-        : "WhatsApp private send failed its checked preflight before dispatch",
-    };
-  }
-}
-
 export async function executeWhatsAppWebOperation(
   recipe: WebSessionRecipe,
   input: OperationInput,
   auth: WrenchAuth,
   options: {
-    readonly fileResolver?: BrowserFileResolver;
-    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
-    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
     readonly dependencies?: WhatsAppWebRuntimeDependencies;
     readonly environment?: Readonly<Record<string, string | undefined>>;
     readonly operationDeadline?: WebSessionOperationDeadline;
@@ -2170,12 +1967,9 @@ export async function executeWhatsAppWebOperation(
     || recipe.action === "messaging.list"
     || recipe.action === "messaging.read"
     || recipe.action === "media.read";
-  const writeAction = isWhatsAppWriteAction(recipe.action)
-    ? recipe.action
-    : undefined;
-  if (!localProjection && writeAction === undefined) {
+  if (!localProjection) {
     throw new Error(
-      `WhatsApp linked-device operation ${recipe.action} has no reviewed write plan`,
+      `WhatsApp linked-device operation ${recipe.action} has no executable local projection`,
     );
   }
   options.operationDeadline?.throwIfUnavailable(
@@ -2219,10 +2013,7 @@ export async function executeWhatsAppWebOperation(
       options.operationDeadline,
     );
   }
-  if (writeAction === undefined) {
-    throw new Error("WhatsApp write-plan classification changed during execution");
-  }
-  return executeMutation(runtime, writeAction, recipe, input, options);
+  throw new Error("WhatsApp local projection classification changed during execution");
 }
 
 export type WhatsAppPairingPlan = {

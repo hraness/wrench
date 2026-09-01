@@ -237,7 +237,6 @@ function runner(
 ): NonNullable<WhatsAppWebRuntimeDependencies["run"]> {
   return (invocation) => {
     calls.push(invocation);
-    invocation.onSpawn?.();
     const value = response(invocation);
     return Promise.resolve({
       exitCode: 0,
@@ -373,7 +372,7 @@ describe("WhatsApp linked-device auth storage", () => {
         phone: "+15551234567",
         dependencies: {
           binaryPath: "/fixture/wacli",
-          run: runner(calls, () => "0.13.0\n"),
+          run: runner(calls, () => "0.15.0\n"),
         },
       });
       expect(lstatSync(path).mode & 0o777).toBe(0o700);
@@ -417,7 +416,7 @@ describe("WhatsApp linked-device auth storage", () => {
           run: runner(calls, (invocation) => {
             if (invocation.arguments[0] === "version") {
               events.push("read-only-version");
-              return "0.13.0\n";
+              return "0.15.0\n";
             }
             events.push("read-only-status");
             return success({
@@ -486,7 +485,7 @@ describe("WhatsApp linked-device auth storage", () => {
         pairWhatsAppAuth(auth(path), {
           dependencies: {
             binaryPath: "/fixture/wacli",
-            run: runner([], () => "0.13.0\n"),
+            run: runner([], () => "0.15.0\n"),
             runInteractive: () => {
               interactiveCalls += 1;
               return Promise.resolve(0);
@@ -584,7 +583,7 @@ describe("WhatsApp zero-network read plans", () => {
           binaryPath: "/fixture/wacli",
           run: runner(calls, (invocation) =>
             invocation.arguments[0] === "version"
-              ? "0.13.0\n"
+              ? "0.15.0\n"
               : {
                 success: true,
                 data: {
@@ -689,7 +688,7 @@ describe("WhatsApp zero-network read plans", () => {
               expect(invocation.signal).toBe(operationDeadline.signal);
               if (invocation.arguments[0] === "version") {
                 clock.advance(15);
-                return "0.13.0\n";
+                return "0.15.0\n";
               }
               if (invocation.arguments.includes("status")) {
                 clock.advance(25);
@@ -744,7 +743,7 @@ describe("WhatsApp zero-network read plans", () => {
                   throw new Error("expired operation launched a later child");
                 }
                 clock.advance(50);
-                return "0.13.0\n";
+                return "0.15.0\n";
               }),
             },
           },
@@ -781,7 +780,7 @@ describe("WhatsApp zero-network read plans", () => {
           [
             "#!/bin/sh",
             "if [ \"$1\" = \"version\" ]; then",
-            "  printf '0.13.0\\n'",
+            "  printf '0.15.0\\n'",
             "  exit 0",
             "fi",
             "/bin/sleep 120 &",
@@ -999,7 +998,7 @@ describe("WhatsApp zero-network read plans", () => {
                   projectionGeneration: {
                     messageStoreIdentity: request.messageStoreIdentity,
                     schemaFingerprint:
-                      "sha256:994c43a93c88aea9775e9cae94a31f190b158ae0a423a1b0ee0fda83107b4d6c",
+                      "sha256:994b5024bc2479a269866060ea14a06230532b5aba8365d31b1f94113df3bc57",
                   },
                   interactions: [{
                     rowid: "42",
@@ -1036,7 +1035,7 @@ describe("WhatsApp zero-network read plans", () => {
             ino: messageStore.ino.toString(),
           },
           schemaFingerprint:
-            "sha256:994c43a93c88aea9775e9cae94a31f190b158ae0a423a1b0ee0fda83107b4d6c",
+            "sha256:994b5024bc2479a269866060ea14a06230532b5aba8365d31b1f94113df3bc57",
         },
         interactions: [{
           rowid: "42",
@@ -1427,7 +1426,7 @@ describe("WhatsApp zero-network read plans", () => {
       const dependencies = {
         binaryPath: "/fixture/wacli",
         run: runner(calls, (invocation) => {
-          if (invocation.arguments[0] === "version") return "0.13.0\n";
+          if (invocation.arguments[0] === "version") return "0.15.0\n";
           if (invocation.arguments.includes("status")) {
             return success({
               authenticated: true,
@@ -1512,7 +1511,6 @@ describe("WhatsApp zero-network read plans", () => {
 
   test("all capture-required operations fail before binary, store, or dispatch", async () => {
     const calls: WacliInvocation[] = [];
-    let beforeDispatch = 0;
     for (const [action, input] of [
       ["reactions.set", {
         conversation_jid: CHAT_JID,
@@ -1545,10 +1543,6 @@ describe("WhatsApp zero-network read plans", () => {
           input,
           auth("/does/not/exist", "whatsapp:pn:15551234567"),
           {
-            beforeDispatch: () => {
-              beforeDispatch += 1;
-              return Promise.resolve();
-            },
             dependencies: {
               binaryPath: "/fixture/wacli",
               run: runner(calls, () => {
@@ -1561,7 +1555,6 @@ describe("WhatsApp zero-network read plans", () => {
       );
     }
     expect(calls).toEqual([]);
-    expect(beforeDispatch).toBe(0);
   });
 });
 
@@ -1575,7 +1568,7 @@ describe("WhatsApp explicit synchronization", () => {
       const plan = await planWhatsAppSyncOnce(auth(path), {
         dependencies: {
           binaryPath: "/fixture/wacli",
-          run: runner(calls, () => "0.13.0\n"),
+          run: runner(calls, () => "0.15.0\n"),
         },
       });
       expect(plan.emitsProtocolAcknowledgements).toBe(true);
@@ -1621,7 +1614,7 @@ describe("WhatsApp explicit synchronization", () => {
             run: runner(calls, (invocation) => {
               if (invocation.arguments[0] === "version") {
                 events.push("read-only-version");
-                return "0.13.0\n";
+                return "0.15.0\n";
               }
               if (invocation.arguments.includes("status")) {
                 events.push("read-only-status");
@@ -1676,7 +1669,7 @@ describe("WhatsApp explicit synchronization", () => {
             dependencies: {
               binaryPath: "/fixture/wacli",
               run: runner(calls, (invocation) => {
-                if (invocation.arguments[0] === "version") return "0.13.0\n";
+                if (invocation.arguments[0] === "version") return "0.15.0\n";
                 if (invocation.arguments.includes("status")) {
                   return success({
                     authenticated: true,

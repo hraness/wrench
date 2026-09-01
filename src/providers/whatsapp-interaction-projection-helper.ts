@@ -29,6 +29,18 @@ import {
   type WhatsAppInteractionProjectionResponse,
   type WhatsAppInteractionProjectionSuccess,
 } from "./whatsapp-interaction-projection-protocol";
+import {
+  WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_STDIN_BYTES,
+  WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_STDOUT_BYTES,
+  WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
+  WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
+  createWhatsAppMessageExportProjectionFailure,
+  parseWhatsAppMessageExportProjectionRequest,
+  type WhatsAppMessageExportProjectionItem,
+  type WhatsAppMessageExportProjectionRequest,
+  type WhatsAppMessageExportProjectionResponse,
+  type WhatsAppMessageExportProjectionSuccess,
+} from "./whatsapp-message-export-projection-protocol";
 
 const MESSAGE_DATABASE_NAME = "wacli.db";
 const IMMUTABLE_MESSAGE_DATABASE_URI = `file:${MESSAGE_DATABASE_NAME}?mode=ro&immutable=1`;
@@ -41,6 +53,11 @@ const MAX_MESSAGE_DATABASE_BYTES = 2n * 1024n * 1024n * 1024n;
 const SQLITE_CACHE_KIB = 4_096;
 const MAX_UNIX_SECONDS = 253_402_300_799n;
 const SYSTEM_SENTINEL_JID = "0@s.whatsapp.net";
+
+type BoundMessageStoreRequest = Pick<
+  WhatsAppInteractionProjectionRequest,
+  "accountSubject" | "storeIdentity" | "sessionIdentity" | "messageStoreIdentity"
+>;
 
 class HelperFailure extends Error {
   readonly code: WhatsAppInteractionProjectionErrorCode;
@@ -82,12 +99,12 @@ function sameSnapshot(left: BigIntStats, right: BigIntStats): boolean {
 
 function matchesIdentity(
   stats: BigIntStats,
-  identity: WhatsAppInteractionProjectionRequest["messageStoreIdentity"],
+  identity: BoundMessageStoreRequest["messageStoreIdentity"],
 ): boolean {
   return stats.dev.toString() === identity.dev && stats.ino.toString() === identity.ino;
 }
 
-function assertBoundCwd(request: WhatsAppInteractionProjectionRequest, initial?: BigIntStats): BigIntStats {
+function assertBoundCwd(request: BoundMessageStoreRequest, initial?: BigIntStats): BigIntStats {
   let cwd: string;
   let pathStats: BigIntStats;
   let dotStats: BigIntStats;
@@ -128,7 +145,7 @@ function assertNoMessageSidecars(): void {
 
 function assertMessageFile(
   stats: BigIntStats,
-  request: WhatsAppInteractionProjectionRequest,
+  request: BoundMessageStoreRequest,
 ): void {
   const uid = currentUid();
   if (
@@ -146,7 +163,7 @@ function assertMessageFile(
 
 function exactMessagePathSnapshot(
   initial: BigIntStats,
-  request: WhatsAppInteractionProjectionRequest,
+  request: BoundMessageStoreRequest,
 ): void {
   let pathStats: BigIntStats;
   try {
@@ -278,6 +295,8 @@ const MESSAGE_COLUMNS = Object.freeze([
   ["file_length", "INTEGER", 0n, null, 0n], ["local_path", "TEXT", 0n, null, 0n],
   ["downloaded_at", "INTEGER", 0n, null, 0n], ["media_unavailable_at", "INTEGER", 0n, null, 0n],
   ["revoked", "INTEGER", 1n, "0", 0n], ["deleted_for_me", "INTEGER", 1n, "0", 0n],
+  ["deleted_at", "INTEGER", 0n, null, 0n], ["deletion_reason", "TEXT", 0n, null, 0n],
+  ["payload_purged_at", "INTEGER", 0n, null, 0n],
   ["edited", "INTEGER", 1n, "0", 0n], ["edited_ts", "INTEGER", 1n, "0", 0n],
   ["buttons", "TEXT", 0n, null, 0n],
 ] as const);
@@ -402,7 +421,7 @@ function assertPinnedSchema(database: Database): void {
       WHERE schema = 'main' AND name IN ('messages', 'chats')
       LIMIT 3
     `).iterate(), 3);
-    for (const [name, count] of [["messages", 33n], ["chats", 9n]] as const) {
+    for (const [name, count] of [["messages", 36n], ["chats", 9n]] as const) {
       const matches = tables.filter((row) => row.name === name);
       if (matches.length === 1) {
         exactRowKeys(matches[0]!, ["schema", "name", "type", "ncol", "wr", "strict"]);
@@ -571,10 +590,249 @@ function projectInteractions(
   });
 }
 
-export function projectWhatsAppInteractionsFromBoundCwd(
-  requestValue: unknown,
-): WhatsAppInteractionProjectionSuccess {
-  const request = parseWhatsAppInteractionProjectionRequest(requestValue);
+function messageExportGeneration(
+  stats: BigIntStats,
+): WhatsAppMessageExportProjectionSuccess["projectionGeneration"] {
+  return Object.freeze({
+    messageStoreIdentity: Object.freeze({
+      dev: stats.dev.toString(),
+      ino: stats.ino.toString(),
+    }),
+    size: stats.size.toString(),
+    mtimeNs: stats.mtimeNs.toString(),
+    ctimeNs: stats.ctimeNs.toString(),
+    schemaFingerprint: WHATSAPP_MESSAGE_EXPORT_PROJECTION_SCHEMA_FINGERPRINT,
+  });
+}
+
+function sameMessageExportGeneration(
+  left: WhatsAppMessageExportProjectionSuccess["projectionGeneration"],
+  right: WhatsAppMessageExportProjectionSuccess["projectionGeneration"],
+): boolean {
+  return left.messageStoreIdentity.dev === right.messageStoreIdentity.dev
+    && left.messageStoreIdentity.ino === right.messageStoreIdentity.ino
+    && left.size === right.size
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs
+    && left.schemaFingerprint === right.schemaFingerprint;
+}
+
+function projectedText(
+  value: unknown,
+  maximumBytes: number,
+): string | null {
+  if (value === null || value === "") return null;
+  if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > maximumBytes) {
+    return fail("projection-invalid");
+  }
+  return value;
+}
+
+function projectedBoolean(value: unknown): boolean {
+  const parsed = sqliteBigInt(value);
+  if (parsed !== 0n && parsed !== 1n) return fail("projection-invalid");
+  return parsed === 1n;
+}
+
+function projectedUnixTimestamp(value: unknown, nullable: boolean): string | null {
+  if (nullable && (value === null || value === "" || value === 0 || value === 0n || value === "0")) {
+    return null;
+  }
+  const seconds = sqliteBigInt(value);
+  if (seconds < 0n || seconds > MAX_UNIX_SECONDS) return fail("projection-invalid");
+  return new Date(Number(seconds) * 1_000).toISOString();
+}
+
+function projectedFileLength(value: unknown): number | null {
+  if (value === null || value === "") return null;
+  const parsed = sqliteBigInt(value);
+  if (parsed < 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return fail("projection-invalid");
+  }
+  return Number(parsed);
+}
+
+function projectMessageExportItem(row: SqliteRow): WhatsAppMessageExportProjectionItem {
+  exactRowKeys(row, [
+    "rowid", "chat_jid", "chat_kind", "chat_name", "msg_id", "sender_jid", "sender_name",
+    "ts", "from_me", "text", "display_text", "quoted_msg_id", "quoted_sender_jid",
+    "reaction_to_id", "reaction_emoji", "media_type", "media_caption", "filename",
+    "mime_type", "file_length", "revoked", "deleted_for_me", "deleted_at",
+    "payload_purged_at", "edited", "edited_ts",
+  ]);
+  const rowid = sqliteBigInt(row.rowid);
+  if (
+    rowid < 1n
+    || (row.chat_kind !== "dm" && row.chat_kind !== "group")
+    || typeof row.msg_id !== "string"
+    || !/^[A-Za-z0-9._~:-]{1,256}$/u.test(row.msg_id)
+  ) return fail("projection-invalid");
+  const timestamp = projectedUnixTimestamp(row.ts, false)! as string;
+  const editedFlag = projectedBoolean(row.edited);
+  const rawEditedAt = projectedUnixTimestamp(row.edited_ts, true);
+  const edited = editedFlag && rawEditedAt !== null && rawEditedAt >= timestamp;
+  const fileNameCandidate = projectedText(row.filename, 8 * 1024);
+  const fileName = fileNameCandidate !== null && (
+    fileNameCandidate === "."
+    || fileNameCandidate === ".."
+    || fileNameCandidate.includes("/")
+    || fileNameCandidate.includes("\\")
+  ) ? null : fileNameCandidate;
+  const senderJid = row.sender_jid === SYSTEM_SENTINEL_JID
+    ? null
+    : projectedJid(row.sender_jid, true);
+  const quotedSenderJid = row.quoted_sender_jid === SYSTEM_SENTINEL_JID
+    ? null
+    : projectedJid(row.quoted_sender_jid, true);
+  return Object.freeze({
+    rowid: rowid.toString(),
+    chatJid: projectedJid(row.chat_jid)! as string,
+    chatKind: row.chat_kind,
+    chatName: projectedText(row.chat_name, 8 * 1024),
+    messageId: row.msg_id,
+    senderJid,
+    senderName: projectedText(row.sender_name, 8 * 1024),
+    timestamp,
+    fromMe: projectedBoolean(row.from_me),
+    text: projectedText(row.text, 1024 * 1024),
+    displayText: projectedText(row.display_text, 1024 * 1024),
+    quotedMessageId: projectedText(row.quoted_msg_id, 256),
+    quotedSenderJid,
+    reactionToMessageId: projectedText(row.reaction_to_id, 256),
+    reactionEmoji: projectedText(row.reaction_emoji, 8 * 1024),
+    mediaType: projectedText(row.media_type, 256),
+    mediaCaption: projectedText(row.media_caption, 1024 * 1024),
+    fileName,
+    mimeType: projectedText(row.mime_type, 256),
+    fileLength: projectedFileLength(row.file_length),
+    revoked: projectedBoolean(row.revoked),
+    deletedForMe: projectedBoolean(row.deleted_for_me),
+    deletedAt: projectedUnixTimestamp(row.deleted_at, true),
+    payloadPurgedAt: projectedUnixTimestamp(row.payload_purged_at, true),
+    edited,
+    editedAt: edited ? rawEditedAt : null,
+  });
+}
+
+function messageExportAnchor(item: WhatsAppMessageExportProjectionItem): string {
+  return createHash("sha256").update(JSON.stringify(item)).digest("hex");
+}
+
+const MESSAGE_EXPORT_FILTER = `
+  c.kind IN ('dm', 'group')
+  AND m.chat_jid NOT LIKE '%@broadcast'
+  AND m.chat_jid NOT LIKE '%@newsletter'
+  AND (
+    m.chat_jid LIKE '%@s.whatsapp.net'
+    OR m.chat_jid LIKE '%@lid'
+    OR m.chat_jid LIKE '%@g.us'
+  )
+`;
+
+const MESSAGE_EXPORT_COLUMNS = `
+  CAST(m.rowid AS TEXT) AS rowid,
+  m.chat_jid,
+  c.kind AS chat_kind,
+  COALESCE(m.chat_name, c.name) AS chat_name,
+  m.msg_id,
+  m.sender_jid,
+  m.sender_name,
+  CAST(m.ts AS TEXT) AS ts,
+  CAST(m.from_me AS TEXT) AS from_me,
+  m.text,
+  m.display_text,
+  m.quoted_msg_id,
+  m.quoted_sender_jid,
+  m.reaction_to_id,
+  m.reaction_emoji,
+  m.media_type,
+  m.media_caption,
+  m.filename,
+  m.mime_type,
+  CAST(m.file_length AS TEXT) AS file_length,
+  CAST(m.revoked AS TEXT) AS revoked,
+  CAST(m.deleted_for_me AS TEXT) AS deleted_for_me,
+  CAST(m.deleted_at AS TEXT) AS deleted_at,
+  CAST(m.payload_purged_at AS TEXT) AS payload_purged_at,
+  CAST(m.edited AS TEXT) AS edited,
+  CAST(m.edited_ts AS TEXT) AS edited_ts
+`;
+
+function assertMessageExportCursorAnchor(
+  database: Database,
+  request: WhatsAppMessageExportProjectionRequest,
+): void {
+  if (request.cursor === "0") return;
+  let projected: readonly SqliteRow[];
+  try {
+    projected = rows(database.query(`
+      SELECT ${MESSAGE_EXPORT_COLUMNS}
+      FROM messages m
+      JOIN chats c ON c.jid = m.chat_jid
+      WHERE m.rowid = ?1 AND ${MESSAGE_EXPORT_FILTER}
+      LIMIT 2
+    `).iterate(BigInt(request.cursor)), 2, "projection-invalid");
+  } catch (error) {
+    if (error instanceof HelperFailure) throw error;
+    return fail("projection-invalid");
+  }
+  if (
+    projected.length !== 1
+    || messageExportAnchor(projectMessageExportItem(projected[0]!)) !== request.cursorAnchor
+  ) return fail("projection-invalid");
+}
+
+function projectMessageExport(
+  database: Database,
+  request: WhatsAppMessageExportProjectionRequest,
+  fileStats: BigIntStats,
+): WhatsAppMessageExportProjectionSuccess {
+  const projectionGeneration = messageExportGeneration(fileStats);
+  if (
+    request.expectedGeneration !== null
+    && !sameMessageExportGeneration(projectionGeneration, request.expectedGeneration)
+  ) return fail("generation-mismatch");
+  assertMessageExportCursorAnchor(database, request);
+  let projectedRows: readonly SqliteRow[];
+  try {
+    projectedRows = rows(database.query(`
+      SELECT ${MESSAGE_EXPORT_COLUMNS}
+      FROM messages m
+      JOIN chats c ON c.jid = m.chat_jid
+      WHERE m.rowid > ?1 AND ${MESSAGE_EXPORT_FILTER}
+      ORDER BY m.rowid ASC
+      LIMIT ?2
+    `).iterate(BigInt(request.cursor), request.limit + 1), request.limit + 1, "projection-invalid");
+  } catch (error) {
+    if (error instanceof HelperFailure) throw error;
+    return fail("projection-invalid");
+  }
+  const projected = projectedRows.map(projectMessageExportItem);
+  for (let index = 0; index < projected.length; index += 1) {
+    const previous = index === 0 ? request.cursor : projected[index - 1]!.rowid;
+    if (BigInt(projected[index]!.rowid) <= BigInt(previous)) return fail("projection-invalid");
+  }
+  const hasMore = projected.length > request.limit;
+  const messages = Object.freeze(projected.slice(0, request.limit));
+  const last = messages.at(-1);
+  const checkpoint = last === undefined
+    ? Object.freeze({ cursor: request.cursor, anchor: request.cursorAnchor })
+    : Object.freeze({ cursor: last.rowid, anchor: messageExportAnchor(last) });
+  return Object.freeze({
+    schemaVersion: WHATSAPP_MESSAGE_EXPORT_PROJECTION_PROTOCOL_VERSION,
+    status: "succeeded",
+    projectionGeneration,
+    messages,
+    nextCursor: hasMore ? last?.rowid ?? null : null,
+    localInsertPageComplete: !hasMore,
+    checkpoint,
+  });
+}
+
+function projectBoundWhatsAppMessageStore<Result>(
+  request: BoundMessageStoreRequest,
+  projection: (database: Database, fileStats: BigIntStats) => Result,
+): Result {
   const initialCwd = assertBoundCwd(request);
   try {
     projectWhatsAppContactsFromBoundCwd({
@@ -602,7 +860,7 @@ export function projectWhatsAppInteractionsFromBoundCwd(
   }
   let initialFile: BigIntStats | undefined;
   let database: Database | undefined;
-  let result: WhatsAppInteractionProjectionSuccess | undefined;
+  let result: Result | undefined;
   let failure: unknown;
   try {
     initialFile = fstatSync(descriptor, { bigint: true });
@@ -623,8 +881,7 @@ export function projectWhatsAppInteractionsFromBoundCwd(
     configureDatabase(database);
     assertIntegrity(database);
     assertPinnedSchema(database);
-    assertCursorAnchor(database, request);
-    result = projectInteractions(database, request);
+    result = projection(database, initialFile);
   } catch (error) {
     failure = error;
   } finally {
@@ -658,6 +915,26 @@ export function projectWhatsAppInteractionsFromBoundCwd(
   return result;
 }
 
+export function projectWhatsAppInteractionsFromBoundCwd(
+  requestValue: unknown,
+): WhatsAppInteractionProjectionSuccess {
+  const request = parseWhatsAppInteractionProjectionRequest(requestValue);
+  return projectBoundWhatsAppMessageStore(request, (database) => {
+    assertCursorAnchor(database, request);
+    return projectInteractions(database, request);
+  });
+}
+
+export function projectWhatsAppMessageExportFromBoundCwd(
+  requestValue: unknown,
+): WhatsAppMessageExportProjectionSuccess {
+  const request = parseWhatsAppMessageExportProjectionRequest(requestValue);
+  return projectBoundWhatsAppMessageStore(
+    request,
+    (database, fileStats) => projectMessageExport(database, request, fileStats),
+  );
+}
+
 async function readBoundedStdin(): Promise<unknown> {
   const reader = Bun.stdin.stream().getReader();
   const chunks: Uint8Array[] = [];
@@ -667,7 +944,10 @@ async function readBoundedStdin(): Promise<unknown> {
       const item = await reader.read();
       if (item.done) break;
       length += item.value.byteLength;
-      if (length > WHATSAPP_INTERACTION_PROJECTION_MAX_STDIN_BYTES) {
+      if (length > Math.max(
+        WHATSAPP_INTERACTION_PROJECTION_MAX_STDIN_BYTES,
+        WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_STDIN_BYTES,
+      )) {
         return fail("request-invalid");
       }
       chunks.push(item.value);
@@ -688,12 +968,36 @@ async function readBoundedStdin(): Promise<unknown> {
 }
 
 export async function runWhatsAppInteractionProjectionHelper(): Promise<
-  WhatsAppInteractionProjectionResponse
+  WhatsAppInteractionProjectionResponse | WhatsAppMessageExportProjectionResponse
 > {
-  let request: unknown;
+  let requestValue: unknown;
   try {
     if (process.argv.length !== 2) fail("request-invalid");
-    request = parseWhatsAppInteractionProjectionRequest(await readBoundedStdin());
+    requestValue = await readBoundedStdin();
+  } catch {
+    return createWhatsAppInteractionProjectionFailure("request-invalid");
+  }
+  const messageExport = typeof requestValue === "object"
+    && requestValue !== null
+    && !Array.isArray(requestValue)
+    && "operation" in requestValue
+    && requestValue.operation === "message-like-me.export";
+  if (messageExport) {
+    let request: WhatsAppMessageExportProjectionRequest;
+    try {
+      request = parseWhatsAppMessageExportProjectionRequest(requestValue);
+    } catch {
+      return createWhatsAppMessageExportProjectionFailure("request-invalid");
+    }
+    try {
+      return projectWhatsAppMessageExportFromBoundCwd(request);
+    } catch (error) {
+      return createWhatsAppMessageExportProjectionFailure(errorCode(error));
+    }
+  }
+  let request: WhatsAppInteractionProjectionRequest;
+  try {
+    request = parseWhatsAppInteractionProjectionRequest(requestValue);
   } catch {
     return createWhatsAppInteractionProjectionFailure("request-invalid");
   }
@@ -707,8 +1011,11 @@ export async function runWhatsAppInteractionProjectionHelper(): Promise<
 async function main(): Promise<void> {
   let response = await runWhatsAppInteractionProjectionHelper();
   let output = `${JSON.stringify(response)}\n`;
-  if (Buffer.byteLength(output, "utf8") > WHATSAPP_INTERACTION_PROJECTION_MAX_STDOUT_BYTES) {
-    response = createWhatsAppInteractionProjectionFailure("output-too-large");
+  if (Buffer.byteLength(output, "utf8") > Math.max(
+    WHATSAPP_INTERACTION_PROJECTION_MAX_STDOUT_BYTES,
+    WHATSAPP_MESSAGE_EXPORT_PROJECTION_MAX_STDOUT_BYTES,
+  )) {
+    response = createWhatsAppMessageExportProjectionFailure("output-too-large");
     output = `${JSON.stringify(response)}\n`;
   }
   await Bun.write(Bun.stdout, output);

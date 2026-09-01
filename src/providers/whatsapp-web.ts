@@ -11,20 +11,29 @@ import type { OperationInput } from "../model";
 
 export const WHATSAPP_PROTOCOL_PIN = Object.freeze({
   implementation: "github.com/openclaw/wacli",
-  version: "0.13.0",
-  commit: "1e15f646d23598ef5db2bdb4659ac39cc5188ad2",
-  transport: "wrench-private-v1",
-  whatsmeowCommit: "85d99080dee8ebd10ca7021751fe432d880d3b76",
-  wacliPatchSha256:
-    "ffa7fb2a6100bfff1a4cfed300fb0f854d0d3254058d8e33d87073ad0c0bac9f",
-  whatsmeowPatchSha256:
-    "cbf6f0b72963b365ca4c81f86993cf8a77a7eec6ffcd973d13aa68fe7331fcdc",
-  protocolSha256:
-    "6032c414835e4370de96718d9cc5add08e7f9f59354217e3e46d73a97d3e2ba1",
+  version: "0.15.0",
+  tag: "v0.15.0",
+  commit: "a020de724180d31eccfa5241d45443402d62fb06",
+  transport: "official-release",
+  darwinArm64Archive:
+    "wacli_0.15.0_darwin_arm64.tar.gz",
+  darwinArm64ArchiveSha256:
+    "2b54f33d246e913a5c33525b4fc895a345363c2dcc673c70fa5f19cffb15d17d",
   darwinArm64BinarySha256:
-    "526eba2dce946afb6cefc852b9080245e0f03f79b5c0472879b17c145b24a667",
-  sourceManifest:
-    "src/vendor/whatsapp-private-transport/manifest.json",
+    "a900af4d0dfd10471bcdf74105b9f256d1a08574242a041df3e5985a548826aa",
+  signature: Object.freeze({
+    authority:
+      "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
+    identifier: "org.openclaw.wacli",
+    teamIdentifier: "FWJYW4S8P8",
+    designatedRequirement:
+      'designated => identifier "org.openclaw.wacli" and anchor apple generic and certificate leaf[subject.OU] = FWJYW4S8P8',
+    cdHash: "a67b5d50877d6a2c3386d969d24dfc991bcc6a85",
+    cdHashFull:
+      "a67b5d50877d6a2c3386d969d24dfc991bcc6a8571a3343afc82e8d6de32e486",
+    hardenedRuntime: true,
+    notarized: true,
+  }),
 } as const);
 
 export const WHATSAPP_WEB_OPERATION_NAMES = Object.freeze([
@@ -101,7 +110,7 @@ export const WHATSAPP_WEB_OPERATIONS = Object.freeze({
   "messaging.send": captureRequired(
     "write",
     "R3",
-    "the checked private no-retry text transport and generic action codec are installed but remain inactive until a controlled low-stakes live fixture and exact hash-bound reconciliation read are proven",
+    "the official read runtime exposes no Wrench-qualified mutation transport; sending remains unavailable until a separate process-private transport, controlled live fixture, and exact accepted-message reconciliation are proven",
   ),
   "content.edit": captureRequired(
     "write",
