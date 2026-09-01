@@ -433,6 +433,10 @@ function exportAdmissionDisposition(
     // proves that an unrecorded legacy helper cannot still be running.
     return claim.owner.bootId === currentBootId ? "indeterminate" : "recoverable";
   }
+  if (
+    claim.helperOwner !== null
+    && claim.helperOwner.bootId !== claim.owner.bootId
+  ) return "indeterminate";
   if (claim.phase === "cleanup-unsafe") {
     // cleanup-unsafe means the recorded helper is not a complete ownership
     // proof: a descendant or process-group member may have survived after the
@@ -442,10 +446,6 @@ function exportAdmissionDisposition(
   if (claim.phase === "parent-owned") return "recoverable";
   // Only a reboot proves that an unjoined helper, its streams, and its process
   // group cannot still retain private work after the supervising parent exits.
-  if (
-    claim.helperOwner !== null
-    && claim.helperOwner.bootId !== claim.owner.bootId
-  ) return "indeterminate";
   if (claim.owner.bootId !== currentBootId) return "recoverable";
   if (claim.helperOwner === null) return "indeterminate";
   const helper = inspectOwner(claim.helperOwner);

@@ -414,6 +414,34 @@ describe("Beeper Message Like Me export admission", () => {
     releaseBeeperMessageLikeMeExportAdmission(recovered);
   });
 
+  test("retains cleanup-unsafe ownership when parent and helper boot identities disagree", () => {
+    const fixture = recoveryFixture("export-admission-cleanup-unsafe-cross-boot-helper");
+    const admission = acquireBeeperMessageLikeMeExportAdmission({ environment: fixture.environment });
+    beginBeeperMessageLikeMeHelperLaunch(admission);
+    bindBeeperMessageLikeMeHelperOwner(admission, process.pid);
+    markBeeperMessageLikeMeHelperCleanupUnsafe(admission);
+    const helperOwner = admission.claim.helperOwner;
+    if (helperOwner === null) throw new Error("test fixture omitted the helper owner");
+    const parentBootId = helperOwner.bootId === "a".repeat(64)
+      ? "b".repeat(64)
+      : "a".repeat(64);
+    const incoherentClaim = Object.freeze({
+      ...admission.claim,
+      owner: Object.freeze({ ...admission.claim.owner, bootId: parentBootId }),
+    });
+    const retained = `${canonicalJson(incoherentClaim)}\n`;
+    writeFileSync(admission.claimPath, retained, { mode: 0o600 });
+
+    expect(() => acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: (candidate) => candidate.bootId === helperOwner.bootId
+        ? "exact-live-owner"
+        : "different-or-dead",
+      currentBootIdForTest: helperOwner.bootId,
+    })).toThrow("prior export owner cannot be inspected safely");
+    expect(readFileSync(admission.claimPath, "utf8")).toBe(retained);
+  });
+
   test("admits exactly one of two synchronized processes", async () => {
     const fixture = recoveryFixture("export-admission-race");
     const barrier = join(fixture.root, "start");
