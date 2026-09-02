@@ -14,6 +14,7 @@ import {
 import {
   MAX_PACKAGE_TAR_BYTES,
   MAX_PACKED_BYTES,
+  MAX_PACKED_ENTRIES,
   MAX_PACKED_FILES,
   MAX_UNPACKED_BYTES,
   packageArtifactBudget,
@@ -853,12 +854,25 @@ describe("npm publication contract", () => {
 
     expect(MAX_PACKAGE_TAR_BYTES).toBe(
       Math.ceil(
-        (MAX_UNPACKED_BYTES + MAX_PACKED_FILES * 1_024 + 1_024) / 10_240,
-      ) * 10_240,
+        (MAX_UNPACKED_BYTES + MAX_PACKED_ENTRIES * 1_023 + 1_024) / 512,
+      ) * 512,
     );
-    expect(MAX_PACKAGE_TAR_BYTES).toBe(12_492_800);
+    expect(MAX_PACKAGE_TAR_BYTES).toBe(12_491_776);
+    expect(MAX_PACKAGE_TAR_BYTES % 512).toBe(0);
     expect(artifact).toContain("maxOutputLength: MAX_PACKAGE_TAR_BYTES");
     expect(artifact).not.toContain("const maximumTarBytes");
+  });
+
+  test("enforces the derived package decompression ceiling", () => {
+    const atCeiling = gzipSync(Buffer.alloc(MAX_PACKAGE_TAR_BYTES));
+    const overCeiling = gzipSync(Buffer.alloc(MAX_PACKAGE_TAR_BYTES + 512));
+
+    expect(
+      gunzipSync(atCeiling, { maxOutputLength: MAX_PACKAGE_TAR_BYTES }).byteLength,
+    ).toBe(MAX_PACKAGE_TAR_BYTES);
+    expect(() =>
+      gunzipSync(overCeiling, { maxOutputLength: MAX_PACKAGE_TAR_BYTES })
+    ).toThrow();
   });
 
   test("keeps both complete CI checks within the reviewed wall-time budget", async () => {
