@@ -33,9 +33,9 @@ coordinate that completed both checks.
   `GET` routes. Preserve opaque older/newer cursors across bounded pages, reject
   replay or coordinate drift, and never call the separate mark-read route.
 - Let Beeper message search paginate an exact account/chat/date-filtered local
-  index without query text. Keep the prior v2.1.0 and v2.0.0 adapter manifests
-  as exact upgrade baselines, and retain the local-materialization caveat rather
-  than claiming complete remote provider history.
+  index without query text. Keep the prior v2.2.0, v2.1.0, and v2.0.0 adapter
+  manifests as exact upgrade baselines, and retain the local-materialization
+  caveat rather than claiming complete remote provider history.
 - Accept one `x-web` `posts.publish` body up to the reviewed CreateTweet
   25000-unit bound without truncation. Bind long-form text from `note_tweet`
   when CreateTweet returns a short `full_text` preview. Thread and reply item
