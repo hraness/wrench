@@ -7,6 +7,12 @@ coordinate that completed both checks.
 
 ## Unreleased
 
+## 0.16.3 - 2026-09-01
+
+- Redesign the release-bound product site around a result-first hero, a
+  three-step proof, a capability fact grid, a verified install block, and
+  explicit CLI, SDK, and Agent Skill paths while retaining canonical metadata
+  and compact-layout coverage.
 - Route Beeper account listing, chat search, exact-chat reads, message history,
   and filtered message search through fixed authenticated Desktop loopback
   `GET` routes. Preserve opaque older/newer cursors across bounded pages, reject
@@ -19,6 +25,8 @@ coordinate that completed both checks.
   25000-unit bound without truncation. Bind long-form text from `note_tweet`
   when CreateTweet returns a short `full_text` preview. Thread and reply item
   caps stay 280.
+- Refresh the reviewed X UserTweets and SearchTimeline operation coordinates
+  from current authenticated bundle evidence.
 - Recover an orphaned same-boot browser session through a durable doctor lease
   bound to its exact daemon start identity, launch, CDP endpoint, and private
   root generations. Prepared, launch-intent, quiescent, and per-root removal
