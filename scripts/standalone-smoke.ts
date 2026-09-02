@@ -7,6 +7,8 @@ import { isDeepStrictEqual } from "node:util";
 
 import { providerPluginRepositoryRoot } from "../src/provider-plugin";
 import { adapterManifestPath } from "../src/storage";
+import { packedPrivateSourceClientRuntimeProgram } from "./private-source-client-runtime-smoke";
+import { runWhatsAppMessageLikeMeConsumerAcceptance } from "./whatsapp-message-like-me-consumer-acceptance";
 
 type CommandResult = {
   readonly exitCode: number;
@@ -24,7 +26,7 @@ type InstalledClosurePackage = {
 
 const expectedClosureRuntimeDependencies = Object.freeze({
   "@hraness/kb": "0.17.1",
-  "@hraness/message-like-me": "github:hraness/message-like-me#v0.4.0",
+  "@hraness/message-like-me": "github:hraness/message-like-me#v0.7.0",
   "buffer-from": "1.1.2",
   "source-map": "0.6.1",
   "source-map-support": "0.5.21",
@@ -596,6 +598,7 @@ function isPublicArtifact(value: unknown): boolean {
 }
 
 try {
+  await runWhatsAppMessageLikeMeConsumerAcceptance();
   await exerciseCli({
     cliPath: cli,
     cwd: providerPluginRepositoryRoot,
@@ -645,6 +648,15 @@ try {
       "packed Wrench runtime dependencies",
       installedManifest.dependencies,
     );
+    const installedDependencyNames = Object.keys(installedDependencies).sort();
+    const expectedDependencyNames = Object.keys(
+      expectedClosureRuntimeDependencies,
+    ).sort();
+    if (!isDeepStrictEqual(installedDependencyNames, expectedDependencyNames)) {
+      throw new Error(
+        `packed Wrench runtime dependency names differ from the reviewed closure: ${JSON.stringify(installedDependencyNames)}`,
+      );
+    }
     for (
       const [name, spec] of Object.entries(
         expectedClosureRuntimeDependencies,
@@ -688,8 +700,16 @@ try {
         name: "@hraness/message-like-me",
         root: installedMessageLikeMeRoot,
         sha256:
-          "aa2c75471ba83b261d656023fc8186ffd413641a87428779da3c7e816be2c9b6",
-        version: "0.4.0",
+          "b4dbac79a20b83d72656fd363b8e9a651da1fb3e9a51d72a79cae3c30eafe93a",
+        version: "0.7.0",
+      }),
+      assertInstalledClosurePackage({
+        keyFile: "dist/message-bundle-v2.js",
+        name: "@hraness/message-like-me",
+        root: installedMessageLikeMeRoot,
+        sha256:
+          "aeab7249da34df33c4620b27b105fafdd19e9bfe74c92317ae61bf4d0291da21",
+        version: "0.7.0",
       }),
       assertInstalledClosurePackage({
         keyFile: "index.js",
@@ -758,6 +778,29 @@ try {
       consumer,
     );
     await runCommand(
+      "import packed Apple Photos contact-evidence client",
+      [
+        process.execPath,
+        "-e",
+        "import { exportApplePhotosContactEvidenceSync, parseApplePhotosContactEvidenceExportResult } from '@hraness/wrench/apple-photos'; if (![exportApplePhotosContactEvidenceSync, parseApplePhotosContactEvidenceExportResult].every((value) => typeof value === 'function')) process.exit(1);",
+      ],
+      consumer,
+    );
+    await runCommand(
+      "import packed WhatsApp Message Like Me client",
+      [
+        process.execPath,
+        "-e",
+        "import { exportWhatsAppMessageLikeMeSync, parseWhatsAppMessageLikeMeExportReceipt } from '@hraness/wrench/whatsapp'; if (![exportWhatsAppMessageLikeMeSync, parseWhatsAppMessageLikeMeExportReceipt].every((value) => typeof value === 'function')) process.exit(1);",
+      ],
+      consumer,
+    );
+    await runCommand(
+      "exercise packed private-source client runtime contracts",
+      [process.execPath, "--eval", packedPrivateSourceClientRuntimeProgram],
+      consumer,
+    );
+    await runCommand(
       "import packed omni client",
       [
         process.execPath,
@@ -817,6 +860,32 @@ try {
       ].join("\n"),
     );
     await writeFile(
+      join(consumer, "apple-photos-typecheck.ts"),
+      [
+        "import {",
+        "  exportApplePhotosContactEvidenceSync,",
+        "  parseApplePhotosContactEvidenceExportResult,",
+        "  type ApplePhotosContactEvidenceExportResult,",
+        "} from '@hraness/wrench/apple-photos';",
+        "const result: ApplePhotosContactEvidenceExportResult | undefined = undefined;",
+        "void [result, exportApplePhotosContactEvidenceSync, parseApplePhotosContactEvidenceExportResult];",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(consumer, "whatsapp-typecheck.ts"),
+      [
+        "import {",
+        "  exportWhatsAppMessageLikeMeSync,",
+        "  parseWhatsAppMessageLikeMeExportReceipt,",
+        "  type WhatsAppMessageLikeMeExportReceipt,",
+        "} from '@hraness/wrench/whatsapp';",
+        "const result: WhatsAppMessageLikeMeExportReceipt | undefined = undefined;",
+        "void [result, exportWhatsAppMessageLikeMeSync, parseWhatsAppMessageLikeMeExportReceipt];",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
       join(consumer, "omni-typecheck.ts"),
       [
         "import {",
@@ -857,7 +926,13 @@ try {
           skipLibCheck: false,
           types: [],
         },
-        include: ["client-typecheck.ts", "beeper-typecheck.ts", "omni-typecheck.ts"],
+        include: [
+          "client-typecheck.ts",
+          "beeper-typecheck.ts",
+          "apple-photos-typecheck.ts",
+          "whatsapp-typecheck.ts",
+          "omni-typecheck.ts",
+        ],
       }, null, 2)}\n`,
     );
     await runCommand(

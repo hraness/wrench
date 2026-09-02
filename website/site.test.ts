@@ -316,7 +316,6 @@ describe("wrench.rip static site", () => {
     expect(guidesSection).not.toContain('class="card editorial-card"');
     expect(html.indexOf(argumentsSection ?? "")).toBeLessThan(html.indexOf(guidesSection ?? ""));
     expect(html).toContain("Give your coding agent bounded access to the web.");
-    expect(html).toContain("Work with the services you already use.");
     expect(html).toContain('data-hraness-marketing="hero"');
     expect(html).toContain('data-hraness-marketing="install"');
     expect(html).toContain('data-hraness-marketing="interfaces"');

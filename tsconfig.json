@@ -21,6 +21,9 @@
       "@hraness/wrench/apple-photos": [
         "./src/apple-photos-client.ts"
       ],
+      "@hraness/wrench/whatsapp": [
+        "./src/whatsapp-client.ts"
+      ],
       "@hraness/wrench/omni": [
         "./src/omni-client.ts"
       ]

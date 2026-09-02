@@ -14,12 +14,20 @@ coordinate that completed both checks.
   and Puerto Rico MLS public-search blockers instead of shipping capture-required
   stubs.
 
-## 0.16.3 - 2026-09-01
+## 0.16.3 - 2026-09-02
 
 - Redesign the release-bound product site around a result-first hero, a
   three-step proof, a capability fact grid, a verified install block, and
   explicit CLI, SDK, and Agent Skill paths while retaining canonical metadata
   and compact-layout coverage.
+- Bind production promotion to the immutable npm and GitHub release, exact
+  current-main workflow source, a one-repository release App, an explicit
+  expected-old Git lease, and terminal Vercel outcome evidence. Keep the
+  established production ref protected against deletion, non-fast-forward
+  movement, and ordinary-writer updates.
+- Resolve annotated release tags through their exact peeled commits, retain Git
+  metadata in Vercel builds, exhaust paginated GitHub comparisons, and recover
+  website promotion without weakening exact source, tag, or provider identity.
 - Route Beeper account listing, chat search, exact-chat reads, message history,
   and filtered message search through fixed authenticated Desktop loopback
   `GET` routes. Preserve opaque older/newer cursors across bounded pages, reject
@@ -34,6 +42,9 @@ coordinate that completed both checks.
   caps stay 280.
 - Refresh the reviewed X UserTweets and SearchTimeline operation coordinates
   from current authenticated bundle evidence.
+- Export one bounded page of the signed-in X account's bookmarks, keyed by
+  `post_id`, while resolving the reviewed Bookmarks operation across overlapping
+  webpack maps.
 - Recover an orphaned same-boot browser session through a durable doctor lease
   bound to its exact daemon start identity, launch, CDP endpoint, and private
   root generations. Prepared, launch-intent, quiescent, and per-root removal
@@ -51,6 +62,20 @@ coordinate that completed both checks.
 - Move automatic main-only npm staging out of GitHub deployment review. npm
   still requires separate human inspection and two-factor approval before the
   staged version becomes public.
+- Add bounded Apple Photos contact evidence through a detached private worker.
+  The worker captures full Photos and Contacts SQLite databases with `VACUUM
+  INTO`, so transient copies can contain unselected columns and raw blobs even
+  though returned JSON excludes them. Wrench never opens, copies, or asks
+  Photos to materialize referenced photo or video asset files.
+- Add a native, read-only WhatsApp Message Like Me schema-2 export from one
+  existing Wacli 0.15.0 local store. The seven-file private bundle excludes
+  proven PN/LID self chats and reactions, reports incomplete local-history and
+  `reaction-state-unproven` evidence when applicable, and cannot pair, sync, or
+  send.
+- Publish dedicated Apple Photos and WhatsApp SDK entrypoints and bind the
+  WhatsApp consumer to immutable Message Like Me v0.7.0 contract bytes.
+  Runtime Wacli admission verifies the official release, exact SHA-256, and
+  offline code signature; the installer separately repeats online notarization.
 
 ## 0.16.2 - 2026-08-28
 
