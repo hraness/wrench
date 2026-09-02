@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 
-import { packageArtifactBudget } from "./package-budget.js";
+import {
+  MAX_PACKAGE_TAR_BYTES,
+  packageArtifactBudget,
+} from "./package-budget.js";
 
 const blockSize = 512;
 const packagePrefix = "package/";
-const maximumTarBytes = 12_000_000;
 
 const requiredPaths = Object.freeze([
   "CHANGELOG.md",
@@ -203,7 +205,7 @@ export async function inspectPackageArtifact(
 
   let tar: Buffer;
   try {
-    tar = gunzipSync(compressed, { maxOutputLength: maximumTarBytes });
+    tar = gunzipSync(compressed, { maxOutputLength: MAX_PACKAGE_TAR_BYTES });
   } catch (error) {
     throw new Error("Package tarball could not be safely decompressed", { cause: error });
   }

@@ -12,6 +12,7 @@ import {
   type PackageArtifactInventory,
 } from "./package-artifact.js";
 import {
+  MAX_PACKAGE_TAR_BYTES,
   MAX_PACKED_BYTES,
   MAX_PACKED_FILES,
   MAX_UNPACKED_BYTES,
@@ -847,6 +848,19 @@ async function providerReceipts(mode: "advanced" | "already-exact"): Promise<Rea
 }
 
 describe("npm publication contract", () => {
+  test("derives the tar expansion ceiling from the reviewed package budget", async () => {
+    const artifact = await readFile(packageArtifactUrl, "utf8");
+
+    expect(MAX_PACKAGE_TAR_BYTES).toBe(
+      Math.ceil(
+        (MAX_UNPACKED_BYTES + MAX_PACKED_FILES * 1_024 + 1_024) / 10_240,
+      ) * 10_240,
+    );
+    expect(MAX_PACKAGE_TAR_BYTES).toBe(12_492_800);
+    expect(artifact).toContain("maxOutputLength: MAX_PACKAGE_TAR_BYTES");
+    expect(artifact).not.toContain("const maximumTarBytes");
+  });
+
   test("keeps both complete CI checks within the reviewed wall-time budget", async () => {
     const workflow = await readFile(ciWorkflowUrl, "utf8");
     const checkStart = workflow.indexOf("\n  check:\n");

@@ -7,6 +7,21 @@ export const MAX_PACKED_BYTES = 2_180_000;
 export const MAX_PACKED_FILES = 455;
 export const MAX_UNPACKED_BYTES = 12_025_000;
 
+const TAR_ENTRY_ALLOWANCE_BYTES = 1_024;
+const TAR_TRAILER_BYTES = 1_024;
+const TAR_RECORD_BYTES = 10_240;
+
+// Each reviewed tar entry needs one 512-byte header plus at most 511 bytes of
+// payload padding. Reserve one full KiB per admitted entry, the required
+// two-block trailer, and npm's final 20-block record alignment.
+export const MAX_PACKAGE_TAR_BYTES = Math.ceil(
+  (
+    MAX_UNPACKED_BYTES
+    + MAX_PACKED_FILES * TAR_ENTRY_ALLOWANCE_BYTES
+    + TAR_TRAILER_BYTES
+  ) / TAR_RECORD_BYTES,
+) * TAR_RECORD_BYTES;
+
 export const packageArtifactBudget = Object.freeze({
   entryCount: Object.freeze({ min: 350, max: MAX_PACKED_FILES }),
   fileCount: Object.freeze({ min: 350, max: MAX_PACKED_FILES }),
