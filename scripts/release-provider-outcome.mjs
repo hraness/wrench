@@ -6,11 +6,14 @@ import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 
-import { withReleaseAppTokenFromEnvironment } from "./release-app-token.mjs";
+import {
+  RELEASE_APP_REVOCATION_OBSERVATION_OFFSETS_MILLISECONDS,
+  withReleaseAppTokenFromEnvironment,
+} from "./release-app-token.mjs";
 import { advanceWebsiteProductionRefFromEnvironment } from "./release-ref-writer.mjs";
 
 const BASELINE_SCHEMA = "wrench-provider-baseline-v2";
-const PROMOTION_SCHEMA = "wrench-provider-promotion-v1";
+const PROMOTION_SCHEMA = "wrench-provider-promotion-v2";
 const PRODUCTION_REF = "refs/heads/website-production";
 const PAGE_SIZE = 100;
 const MAX_ITEMS = 500;
@@ -1370,6 +1373,34 @@ function baselineReceiptValue(receipt) {
   });
 }
 
+function parseReleaseAppRevocationReceipt(value) {
+  const receipt = expectRecord(value, "promotion receipt releaseAppRevocation");
+  expectExactKeys(receipt, [
+    "converged",
+    "observationCount",
+    "propagationObserved",
+    "stableDenials",
+  ], "promotion receipt releaseAppRevocation");
+  if (
+    receipt.converged !== true ||
+    !Number.isSafeInteger(receipt.observationCount) ||
+    receipt.observationCount < 2 ||
+    receipt.observationCount > RELEASE_APP_REVOCATION_OBSERVATION_OFFSETS_MILLISECONDS.length ||
+    typeof receipt.propagationObserved !== "boolean" ||
+    (receipt.propagationObserved === false && receipt.observationCount !== 2) ||
+    (receipt.propagationObserved === true && receipt.observationCount < 3) ||
+    receipt.stableDenials !== 2
+  ) {
+    fail("promotion receipt releaseAppRevocation is malformed");
+  }
+  return Object.freeze({
+    converged: true,
+    observationCount: receipt.observationCount,
+    propagationObserved: receipt.propagationObserved,
+    stableDenials: 2,
+  });
+}
+
 function parsePromotionReceipt(value) {
   const receipt = expectRecord(value, "promotion receipt");
   expectExactKeys(receipt, [
@@ -1378,6 +1409,7 @@ function parsePromotionReceipt(value) {
     "mode",
     "previousSha",
     "productionRef",
+    "releaseAppRevocation",
     "releaseId",
     "releasePublishedAt",
     "repository",
@@ -1390,6 +1422,15 @@ function parsePromotionReceipt(value) {
   }
   const mode = expectString(receipt.mode, "promotion receipt mode");
   if (mode !== "advanced" && mode !== "already-exact") fail("promotion receipt mode is unsupported");
+  const releaseAppRevocation = receipt.releaseAppRevocation === null
+    ? null
+    : parseReleaseAppRevocationReceipt(receipt.releaseAppRevocation);
+  if (
+    (mode === "advanced" && releaseAppRevocation === null) ||
+    (mode === "already-exact" && releaseAppRevocation !== null)
+  ) {
+    fail("promotion receipt releaseAppRevocation contradicts its mode");
+  }
   const baselineDigestValue = expectString(receipt.baselineDigest, "promotion receipt baselineDigest");
   if (!/^[0-9a-f]{64}$/u.test(baselineDigestValue)) fail("promotion receipt baselineDigest is invalid");
   const boundary = parseReceiptTimestamp(receipt.boundaryAt, "promotion receipt boundaryAt");
@@ -1401,6 +1442,7 @@ function parsePromotionReceipt(value) {
     mode,
     previousSha: expectSha(receipt.previousSha, "promotion receipt previousSha"),
     productionRef: PRODUCTION_REF,
+    releaseAppRevocation,
     releaseId: expectSafeId(receipt.releaseId, "promotion receipt releaseId"),
     releasePublishedAt: published.timestamp,
     releasePublishedMilliseconds: published.milliseconds,
@@ -1418,6 +1460,7 @@ function promotionReceiptValue(receipt) {
     mode: receipt.mode,
     previousSha: receipt.previousSha,
     productionRef: receipt.productionRef,
+    releaseAppRevocation: receipt.releaseAppRevocation,
     releaseId: receipt.releaseId,
     releasePublishedAt: receipt.releasePublishedAt,
     repository: receipt.repository,
@@ -1501,13 +1544,16 @@ export async function promoteWebsiteProduction({
   }
 
   let mode;
+  let releaseAppRevocation = null;
   if (prePatchRef.sha === sha) {
     mode = "already-exact";
   } else {
     mode = "advanced";
     await readFastForwardComparison(api, coordinate, prePatchRef.sha, sha);
     await revalidateWorkflowSource(api, coordinate, workflowSource);
-    await api.advanceRef(coordinate, prePatchRef.sha, sha, tag);
+    releaseAppRevocation = parseReleaseAppRevocationReceipt(
+      await api.advanceRef(coordinate, prePatchRef.sha, sha, tag),
+    );
   }
 
   const promotedSha = await readProductionRef(api, coordinate);
@@ -1519,6 +1565,7 @@ export async function promoteWebsiteProduction({
     mode,
     previousSha: prePatchRef.sha,
     productionRef: PRODUCTION_REF,
+    releaseAppRevocation,
     releaseId: release.id,
     releasePublishedAt: release.publishedAt,
     repository: coordinate,
@@ -2108,6 +2155,7 @@ class GitHubApi {
   }
 
   async advanceRef(repository, expectedOldSha, verifiedSha, verifiedTag) {
+    let releaseAppRevocation;
     await withReleaseAppTokenFromEnvironment(this.#environment, async (token) => {
       advanceWebsiteProductionRefFromEnvironment({
         environment: Object.freeze({ WRENCH_RELEASE_APP_TOKEN: token }),
@@ -2116,7 +2164,14 @@ class GitHubApi {
         verifiedSha,
         verifiedTag,
       });
+    }, async (receipt) => {
+      if (releaseAppRevocation !== undefined) {
+        fail("release App revocation receipt was emitted more than once");
+      }
+      releaseAppRevocation = parseReleaseAppRevocationReceipt(receipt);
     });
+    if (releaseAppRevocation === undefined) fail("release App revocation receipt is missing");
+    return releaseAppRevocation;
   }
 }
 

@@ -425,7 +425,10 @@ nonconvergence failure even when charged latency reduces the number of reads.
 The sanitized receipt sets `propagationObserved=false` only when the first two
 observations are the required 401 pair and no authorized 200 was observed. It
 sets `propagationObserved=true` only when at least one exact authorized 200
-precedes the final two stable 401 observations.
+precedes the final two stable 401 observations. An advanced
+`wrench-provider-promotion-v2` receipt must retain that exact bounded object as
+`releaseAppRevocation`; the no-write `already-exact` path must instead bind the
+field to `null` and never mint a token.
 This operational ceiling is a
 Wrench fail-closed policy, not a GitHub revocation-propagation SLA. No action is
 retried, and operation and revocation failures are both retained when they

@@ -238,6 +238,12 @@ const providerAmbiguousTagCommitEndpoints = Object.freeze([
 const providerReleasePublishedAt = "2026-08-29T14:00:00Z";
 const providerBaselineServerDate = "2026-08-29T15:00:00.000Z";
 const providerPromotionServerDate = "2026-08-29T15:01:00.000Z";
+const providerReleaseAppRevocation = Object.freeze({
+  converged: true,
+  observationCount: 3,
+  propagationObserved: true,
+  stableDenials: 2,
+});
 const providerAuthority = Object.freeze({
   repository: providerRepository,
   verifiedSha: providerVerifiedSha,
@@ -744,7 +750,7 @@ class ProviderApiFixture {
     expectedOldSha: string,
     verifiedSha: string,
     verifiedTag: string,
-  ): Promise<void> {
+  ): Promise<ProviderJson> {
     this.calls.push(`GIT CAS ${repository} ${expectedOldSha} ${verifiedSha} ${verifiedTag}`);
     expect(repository).toBe(providerRepository);
     expect(expectedOldSha).toBe(providerPreviousSha);
@@ -752,6 +758,7 @@ class ProviderApiFixture {
     expect(verifiedTag).toBe(providerTag);
     if (this.patchError !== undefined) throw this.patchError;
     this.refSha = providerVerifiedSha;
+    return providerReleaseAppRevocation;
   }
 }
 
@@ -3942,7 +3949,7 @@ fi
         deferredPromotionEvents.push("advance-pending");
         await deferredAdvance;
         deferredPromotionEvents.push("advance-settled");
-        await originalDeferredAdvance(...args);
+        return originalDeferredAdvance(...args);
       },
     });
     let deferredPromotionSettled = false;
@@ -4003,12 +4010,15 @@ fi
     const productionAdvanceStart = providerSource.indexOf("async advanceRef(repository");
     const productionAdvanceEnd = providerSource.indexOf("\n  }\n}", productionAdvanceStart);
     const productionAdvanceSource = providerSource.slice(productionAdvanceStart, productionAdvanceEnd);
-    expect(providerSource.match(
-      /^import \{ withReleaseAppTokenFromEnvironment \} from "\.\/release-app-token\.mjs";$/gmu,
-    ) ?? []).toHaveLength(1);
+    expect(providerSource.match(/from "\.\/release-app-token\.mjs";/gu) ?? []).toHaveLength(1);
+    expect(providerSource).toContain(
+      "RELEASE_APP_REVOCATION_OBSERVATION_OFFSETS_MILLISECONDS",
+    );
+    expect(providerSource).toContain("withReleaseAppTokenFromEnvironment");
     expect(providerSource.match(/await withReleaseAppTokenFromEnvironment\(/gu) ?? [])
       .toHaveLength(1);
     expect(productionAdvanceSource.trimEnd()).toBe(`async advanceRef(repository, expectedOldSha, verifiedSha, verifiedTag) {
+    let releaseAppRevocation;
     await withReleaseAppTokenFromEnvironment(this.#environment, async (token) => {
       advanceWebsiteProductionRefFromEnvironment({
         environment: Object.freeze({ WRENCH_RELEASE_APP_TOKEN: token }),
@@ -4017,7 +4027,14 @@ fi
         verifiedSha,
         verifiedTag,
       });
-    });`);
+    }, async (receipt) => {
+      if (releaseAppRevocation !== undefined) {
+        fail("release App revocation receipt was emitted more than once");
+      }
+      releaseAppRevocation = parseReleaseAppRevocationReceipt(receipt);
+    });
+    if (releaseAppRevocation === undefined) fail("release App revocation receipt is missing");
+    return releaseAppRevocation;`);
 
     for (const overrides of [
       { GITHUB_API_URL: "https://github.example.invalid" },
@@ -4650,7 +4667,11 @@ fi
     }
 
     const advanced = await providerReceipts("advanced");
-    expect((advanced.promotion as Readonly<Record<string, unknown>>).mode).toBe("advanced");
+    expect(advanced.promotion).toMatchObject({
+      mode: "advanced",
+      releaseAppRevocation: providerReleaseAppRevocation,
+      schema: "wrench-provider-promotion-v2",
+    });
     expect(advanced.promotionCalls.filter((call) => call.includes("/commits/"))).toEqual([
       `GET ${providerTagCommitEndpoint}`,
     ]);
@@ -4662,7 +4683,11 @@ fi
     ]);
     expect(advanced.promotionCalls.some((call) => call.includes("/deployments"))).toBe(false);
     const recovered = await providerReceipts("already-exact");
-    expect((recovered.promotion as Readonly<Record<string, unknown>>).mode).toBe("already-exact");
+    expect(recovered.promotion).toMatchObject({
+      mode: "already-exact",
+      releaseAppRevocation: null,
+      schema: "wrench-provider-promotion-v2",
+    });
     expect(recovered.promotionCalls.filter((call) => call.includes("/commits/"))).toEqual([
       `GET ${providerTagCommitEndpoint}`,
     ]);
@@ -5789,7 +5814,40 @@ fi
       pollIntervalMilliseconds: 0,
       promotionReceipt: wrongMode,
       sleep: async () => {},
-    })).rejects.toThrow("mode contradicts");
+    })).rejects.toThrow("releaseAppRevocation contradicts its mode");
+    const missingRevocation = {
+      ...(promotion as Readonly<Record<string, ProviderJson>>),
+    } as Record<string, ProviderJson>;
+    delete missingRevocation.releaseAppRevocation;
+    await expect(waitForProviderOutcome({
+      api: new ProviderApiFixture(),
+      baselineReceipt: baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: missingRevocation,
+      sleep: async () => {},
+    })).rejects.toThrow("promotion receipt has an unexpected shape");
+    for (const releaseAppRevocation of [
+      null,
+      { ...providerReleaseAppRevocation, converged: false },
+      { ...providerReleaseAppRevocation, observationCount: 2 },
+      { ...providerReleaseAppRevocation, observationCount: 11 },
+      { ...providerReleaseAppRevocation, propagationObserved: false },
+      { ...providerReleaseAppRevocation, stableDenials: 1 },
+      { ...providerReleaseAppRevocation, extra: true },
+    ] as const) {
+      await expect(waitForProviderOutcome({
+        api: new ProviderApiFixture(),
+        baselineReceipt: baseline,
+        maxPolls: 1,
+        pollIntervalMilliseconds: 0,
+        promotionReceipt: {
+          ...(promotion as Readonly<Record<string, ProviderJson>>),
+          releaseAppRevocation,
+        },
+        sleep: async () => {},
+      })).rejects.toThrow("promotion receipt releaseAppRevocation");
+    }
     const invalidReleaseId = {
       ...(promotion as Readonly<Record<string, ProviderJson>>),
       releaseId: 0,
@@ -6375,6 +6433,9 @@ fi
       "Request,\nbody, and sleep latency are charged to the same window",
       "missed absolute slot\nis skipped instead of triggering a burst",
       "every observation that can\nstart before the deadline remains authorized",
+      "`wrench-provider-promotion-v2` receipt must retain that exact bounded object",
+      "`releaseAppRevocation`",
+      "no-write `already-exact` path must instead bind the\nfield to `null`",
       "Wrench fail-closed policy, not a GitHub revocation-propagation SLA",
       "No action is\nretried",
       "exact production-ref post-read begins only after convergence",
@@ -6477,6 +6538,8 @@ fi
     expect(agents).toContain("canonical GitHub `Date` headers strictly before the minted `expires_at`");
     expect(agents).toContain("`propagationObserved=false` means the first two probes were the stable 401 pair");
     expect(agents).toContain("`propagationObserved=true` means at least one exact 200 preceded the final two stable 401s");
+    expect(agents).toContain("`releaseAppRevocation` in every advanced `wrench-provider-promotion-v2` receipt");
+    expect(agents).toContain("bind `null` on the separate no-write `already-exact` path");
     expect(agents).not.toContain("provisional source and initial App registration");
     expect(agents).not.toContain("contents-only writer");
     expect(agents).toContain("Require bounded read-only jobs");
