@@ -2237,6 +2237,27 @@ fi
 }`);
     expect(releaseAppTokenSource.match(/^    revoke: revokeWithFetch,$/gmu) ?? [])
       .toHaveLength(1);
+    const revocationImplementationStart = releaseAppTokenSource.indexOf(
+      "function revocationIndeterminate",
+    );
+    const revocationImplementationEnd = releaseAppTokenSource.indexOf(
+      "\nasync function revokeWithFetch",
+      revocationImplementationStart,
+    );
+    expect(revocationImplementationStart).toBeGreaterThan(0);
+    expect(revocationImplementationEnd).toBeGreaterThan(revocationImplementationStart);
+    const revocationImplementationSource = releaseAppTokenSource.slice(
+      revocationImplementationStart,
+      revocationImplementationEnd,
+    );
+    expect(createHash("sha256").update(revocationImplementationSource).digest("hex")).toBe(
+      "75fe2bb5cc946297507f0a1ffdc7736fe27793ddb9c4b6a69e915927c5c37681",
+    );
+    expect(revocationImplementationSource.match(/input\.fetchImplementation/gu) ?? [])
+      .toHaveLength(3);
+    expect(revocationImplementationSource).toContain(
+      "const fetchImplementation = input.fetchImplementation ?? fetch;",
+    );
 
     const { privateKey, publicKey } = generateKeyPairSync("rsa", {
       modulusLength: 2048,
@@ -2448,6 +2469,7 @@ fi
       const callTimes: number[] = [];
       let cancelledBodies = 0;
       const sourceChunks: Uint8Array[] = [];
+      const sleepCalls: number[] = [];
       const timeouts: number[] = [];
       const encoder = new TextEncoder();
       const defaultDate = "Sun, 30 Aug 2026 01:00:01 GMT";
@@ -2621,6 +2643,7 @@ fi
         },
         observationCount() { return observationIndex; },
         async sleep(milliseconds: number) {
+          sleepCalls.push(milliseconds);
           if (overrides.sleepMode === "reject") throw new Error(`sleep leaked ${token}`);
           if (overrides.sleepMode === "frozen") return;
           if (overrides.sleepMode === "regress") {
@@ -2636,6 +2659,7 @@ fi
             : milliseconds;
         },
         sourceChunks,
+        sleepCalls,
         timeouts,
       });
     }
@@ -2932,7 +2956,7 @@ fi
       1_000,
     ]);
 
-    for (const authoritativeBegin of [251, 252, 30_001, 30_002] as const) {
+    for (const authoritativeBegin of [250, 251, 30_000, 30_001] as const) {
       const closedBoundary = createRevocationHarness(stableDenials, {
         nowSamples: [0, 1, 2, authoritativeBegin, 30_002],
       });
@@ -2947,6 +2971,7 @@ fi
       })).rejects.toThrow("did not converge within the bounded operational window");
       expect(closedBoundary.calls).toEqual(["DELETE /installation/token"]);
       expect(closedBoundary.observationCount()).toBe(0);
+      expect(closedBoundary.sleepCalls).toEqual([]);
       expect(closedBoundary.timeouts).toEqual([10_000]);
     }
 
