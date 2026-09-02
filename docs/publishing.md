@@ -397,9 +397,34 @@ with the explicit compare-and-swap lease
 `--force-with-lease=refs/heads/website-production:<expected-old>`. The push has
 one exact source-to-destination refspec, no followed tags, no hooks, no persisted
 Git configuration or checkout credential, no interactive prompt, and a
-60-second cap on each Git process. The App token is revoked before the exact production-ref post-read;
-operation and revocation failures are both retained when they coincide. Every
-read-only `gh api` child receives `GH_TOKEN` but has every
+60-second cap on each Git process.
+
+After the operation, the shared helper sends exactly one nonredirecting
+`DELETE /installation/token` request and requires an HTTP 204 with absent or
+canonical-zero `Content-Length` and zero body bytes.
+The monotonic completion of that response anchors a separate 30-second
+half-open request-start window `[start, deadline)`. A response that completes
+exactly at the deadline remains eligible; a later completion fails. The helper
+may make at most ten reads of the token's exact `/installation/repositories`
+endpoint at absolute offsets 0, 250,
+500, 1,000, 2,000, 4,000, 8,000, 16,000, 24,000, and 29,000 milliseconds. Each
+read is admitted and timed from one authoritative request-begin clock sample,
+then capped at the lesser of ten seconds and that sample's remaining window.
+Request,
+body, and sleep latency are charged to the same window. A missed absolute slot
+is skipped instead of triggering a burst or sliding later observations. An HTTP
+200 before denial must still name the exact singleton selected Wrench
+repository. Acceptance requires HTTP 401 on two distinct scheduled reads; a
+later 200 after a 401, only one 401, any other status, a redirect, malformed or
+oversized authority data, transport or sleep failure, clock drift, or deadline
+inconsistency is indeterminate and fails closed. If every observation that can
+start before the deadline remains authorized, the result is a distinct
+nonconvergence failure even when charged latency reduces the number of reads.
+This operational ceiling is a
+Wrench fail-closed policy, not a GitHub revocation-propagation SLA. No action is
+retried, and operation and revocation failures are both retained when they
+coincide. The exact production-ref post-read begins only after convergence.
+Every read-only `gh api` child receives `GH_TOKEN` but has every
 `WRENCH_RELEASE_APP_*` value removed from its environment. A missing branch,
 moved tag, concurrent ref update, divergence, rollback, server-time regression,
 source drift, token-scope drift, push rejection, revocation failure, or post-read
@@ -463,9 +488,10 @@ worst missing-Release path uses 16 calls, including all five bounded release
 pages plus the empty sentinel page. The immutable Release and downstream
 promotion workflows together use at most 278 REST calls, leaving 722 calls
 under the repository `GITHUB_TOKEN` limit of 1,000 REST requests per hour. The
-promotion helper itself uses at most 13 read-only REST
-calls; its leased Git push and four App-authentication requests do not consume
-that `GITHUB_TOKEN` budget. Five
+promotion helper itself uses at most 13 read-only REST calls; its leased Git
+push and at most fourteen App REST requests do not consume that `GITHUB_TOKEN`
+budget. Those App requests are the three setup and mint calls, one DELETE, and
+at most ten convergence probes. Git authentication is outside that REST bound. Five
 bounded GraphQL pages across two baseline reads, 20 observations, and two
 confirmations make at most 120 requests. Each response must cost no more than
 two points, for a 240-point ceiling and 760 points of headroom under the

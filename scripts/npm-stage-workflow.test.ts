@@ -24,7 +24,9 @@ import {
   parseReleaseAppIdentity,
   parseReleaseAppInstallation,
   parseReleaseAppTokenResponse,
+  RELEASE_APP_REVOCATION_OBSERVATION_OFFSETS_MILLISECONDS,
   releaseAppTokenRequestBody,
+  revokeReleaseAppTokenWithConvergence,
   WRENCH_REPOSITORY_ID,
   withReleaseAppToken,
 } from "./release-app-token.mjs";
@@ -2275,6 +2277,12 @@ fi
       repository_selection: "selected",
       token,
     };
+    const immediateRevocationReceipt = Object.freeze({
+      converged: true,
+      observationCount: 2,
+      propagationObserved: false,
+      stableDenials: 2,
+    });
     expect(() => parseReleaseAppIdentity(appIdentity, configuration)).not.toThrow();
     expect(() => parseReleaseAppInstallation(installation, configuration)).not.toThrow();
     for (const permissions of [
@@ -2340,6 +2348,7 @@ fi
       },
       async revoke(input: Readonly<{ token: string }>) {
         events.push(`revoke:${input.token}`);
+        return immediateRevocationReceipt;
       },
     }, async (value: string, receipt: Readonly<{ repositoryId: number }>) => {
       events.push(`operate:${value}`);
@@ -2356,6 +2365,977 @@ fi
       `revoke:${token}`,
     ]);
 
+    const repositoryBody = Object.freeze({
+      repositories: [{
+        full_name: providerRepository,
+        id: WRENCH_REPOSITORY_ID,
+        name: "wrench",
+        owner: { login: "hraness" },
+      }],
+      repository_selection: "selected",
+      total_count: 1,
+    });
+    type RevocationObservation = Readonly<{
+      body?: "binary" | "empty" | "invalid-json" | "json" | "overflow" | "pending" | "text" | "wrong-repo";
+      bodyText?: string;
+      bodyLatencyMilliseconds?: number;
+      contentLength?: string;
+      date?: string;
+      fetchLatencyMilliseconds?: number;
+      location?: string;
+      networkFailure?: "abort" | "pending" | true;
+      redirected?: boolean;
+      requestId?: string;
+      status: number;
+    }>;
+    const observation = (
+      status: number,
+      overrides: Omit<RevocationObservation, "status"> = {},
+    ): RevocationObservation => Object.freeze({ status, ...overrides });
+    const stableDenials = [observation(401, { body: "empty" }), observation(401, { body: "json" })];
+
+    function createRevocationHarness(
+      observations: readonly RevocationObservation[],
+      overrides: Readonly<{
+        deleteObservation?: RevocationObservation;
+        initialClock?: number;
+        nowSamples?: readonly number[];
+        sleepMode?: "frozen" | "overflow" | "partial" | "regress" | "reject";
+      }> = {},
+    ) {
+      let clock = overrides.initialClock ?? 0;
+      let nowSampleIndex = 0;
+      let deleted = false;
+      let observationIndex = 0;
+      const calls: string[] = [];
+      const callTimes: number[] = [];
+      let cancelledBodies = 0;
+      const sourceChunks: Uint8Array[] = [];
+      const timeouts: number[] = [];
+      const encoder = new TextEncoder();
+      const defaultDate = "Sun, 30 Aug 2026 01:00:01 GMT";
+      const responseFor = async (item: RevocationObservation, signal?: AbortSignal | null): Promise<Response> => {
+        if (item.networkFailure === "abort") {
+          throw new DOMException(`aborted ${token}`, "AbortError");
+        }
+        if (item.networkFailure === "pending") {
+          await new Promise<never>((_resolve, reject) => {
+            const abort = () => reject(new DOMException(`aborted ${token}`, "AbortError"));
+            if (signal?.aborted === true) abort();
+            else signal?.addEventListener("abort", abort, { once: true });
+          });
+        }
+        if (item.networkFailure === true) {
+          throw new Error(`network leaked ${token}`);
+        }
+        clock += item.fetchLatencyMilliseconds ?? 1;
+        let bytes: Uint8Array;
+        switch (item.body) {
+          case "empty":
+            bytes = new Uint8Array();
+            break;
+          case "text":
+            bytes = encoder.encode(item.bodyText ?? "denied");
+            break;
+          case "binary":
+            bytes = new Uint8Array([0xff, 0xfe, 0xfd]);
+            break;
+          case "invalid-json":
+            bytes = encoder.encode("{");
+            break;
+          case "overflow":
+            bytes = encoder.encode("bounded");
+            break;
+          case "pending":
+            bytes = new Uint8Array();
+            break;
+          case "json":
+            bytes = encoder.encode(JSON.stringify({ message: "Bad credentials" }));
+            break;
+          case "wrong-repo":
+            bytes = encoder.encode(JSON.stringify({
+              ...repositoryBody,
+              repositories: [{
+                ...repositoryBody.repositories[0],
+                full_name: "hraness/other",
+                id: 1,
+                name: "other",
+              }],
+            }));
+            break;
+          default:
+            bytes = item.status === 200
+              ? encoder.encode(JSON.stringify(repositoryBody))
+              : encoder.encode(JSON.stringify({ message: "Bad credentials" }));
+            break;
+        }
+        const headers: Record<string, string> = { Date: item.date ?? defaultDate };
+        if (item.contentLength !== undefined) headers["Content-Length"] = item.contentLength;
+        else if (item.body === "overflow") headers["Content-Length"] = String(1024 * 1024 + 1);
+        if (item.location !== undefined) headers.Location = item.location;
+        if (item.requestId !== undefined) headers["X-GitHub-Request-Id"] = item.requestId;
+        const hasForbidden204Body = item.status === 204 && item.body !== undefined && item.body !== "empty";
+        const body = item.status === 204 && !hasForbidden204Body ? null : new ReadableStream<Uint8Array>({
+          cancel() { cancelledBodies += 1; },
+          start(controller) {
+            clock += item.bodyLatencyMilliseconds ?? 0;
+            if (item.body === "pending") {
+              const abort = () => controller.error(new DOMException(`aborted ${token}`, "AbortError"));
+              if (signal?.aborted === true) abort();
+              else signal?.addEventListener("abort", abort, { once: true });
+              return;
+            }
+            if (bytes.byteLength > 0) {
+              sourceChunks.push(bytes);
+              controller.enqueue(bytes);
+            }
+            controller.close();
+          },
+        });
+        const result = new Response(body, {
+          headers,
+          status: hasForbidden204Body ? 200 : item.status,
+        });
+        if (hasForbidden204Body) Object.defineProperty(result, "status", { value: 204 });
+        if (item.redirected === true) {
+          Object.defineProperty(result, "redirected", { value: true });
+        }
+        return result;
+      };
+      const fetchImplementation = async (request: URL | RequestInfo, init?: RequestInit) => {
+        const url = new URL(String(request));
+        const method = init?.method ?? "GET";
+        const authorization = (init?.headers as Readonly<Record<string, string>> | undefined)
+          ?.Authorization;
+        expect(authorization).toBe(`Bearer ${token}`);
+        expect(init?.redirect).toBe("error");
+        calls.push(`${method} ${url.pathname}`);
+        callTimes.push(clock);
+        if (url.pathname === "/installation/token") {
+          expect(method).toBe("DELETE");
+          expect(deleted).toBe(false);
+          deleted = true;
+          return responseFor(
+            overrides.deleteObservation ?? observation(204, { body: "empty" }),
+            init?.signal,
+          );
+        }
+        expect(url.pathname).toBe("/installation/repositories");
+        expect(method).toBe("GET");
+        expect(deleted).toBe(true);
+        const item = observations[observationIndex];
+        observationIndex += 1;
+        if (item === undefined) throw new Error("revocation fixture exhausted");
+        return responseFor(item, init?.signal);
+      };
+      return Object.freeze({
+        advanceClock(milliseconds: number) { clock += milliseconds; },
+        calls,
+        cancelledBodies() { return cancelledBodies; },
+        callTimes,
+        createTimeoutSignal(milliseconds: number) {
+          timeouts.push(milliseconds);
+          return new AbortController().signal;
+        },
+        fetchImplementation,
+        currentClock() { return clock; },
+        now() {
+          const sample = overrides.nowSamples?.[nowSampleIndex];
+          nowSampleIndex += 1;
+          if (sample !== undefined) clock = sample;
+          return clock;
+        },
+        observationCount() { return observationIndex; },
+        async sleep(milliseconds: number) {
+          if (overrides.sleepMode === "reject") throw new Error(`sleep leaked ${token}`);
+          if (overrides.sleepMode === "frozen") return;
+          if (overrides.sleepMode === "regress") {
+            clock -= 1;
+            return;
+          }
+          if (overrides.sleepMode === "overflow") {
+            clock = Number.MAX_SAFE_INTEGER + 1;
+            return;
+          }
+          clock += overrides.sleepMode === "partial"
+            ? Math.max(1, Math.floor(milliseconds / 2))
+            : milliseconds;
+        },
+        sourceChunks,
+        timeouts,
+      });
+    }
+
+    async function runRevocationCase(
+      observations: readonly RevocationObservation[],
+      overrides: Parameters<typeof createRevocationHarness>[1] = {},
+    ) {
+      const harness = createRevocationHarness(observations, overrides);
+      const receipt = await revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: harness.createTimeoutSignal,
+        expiresAt: response.expires_at,
+        fetchImplementation: harness.fetchImplementation,
+        now: harness.now,
+        sleep: harness.sleep,
+        token,
+      });
+      return Object.freeze({ harness, receipt });
+    }
+
+    expect(RELEASE_APP_REVOCATION_OBSERVATION_OFFSETS_MILLISECONDS).toEqual([
+      0,
+      250,
+      500,
+      1_000,
+      2_000,
+      4_000,
+      8_000,
+      16_000,
+      24_000,
+      29_000,
+    ]);
+    for (const bodies of [
+      ["empty", "text"],
+      ["json", "binary"],
+    ] as const) {
+      const direct = await runRevocationCase([
+        observation(401, { body: bodies[0] }),
+        observation(401, { body: bodies[1] }),
+      ]);
+      expect(direct.receipt).toEqual({
+        converged: true,
+        observationCount: 2,
+        propagationObserved: false,
+        stableDenials: 2,
+      });
+      expect(direct.harness.calls).toEqual([
+        "DELETE /installation/token",
+        "GET /installation/repositories",
+        "GET /installation/repositories",
+      ]);
+      expect(direct.harness.sourceChunks.every((chunk) =>
+        chunk.every((value) => value === 0))).toBe(true);
+    }
+    const canonicalEmptyDelete = await runRevocationCase(stableDenials, {
+      deleteObservation: observation(204, { body: "empty", contentLength: "0" }),
+    });
+    expect(canonicalEmptyDelete.receipt).toEqual(immediateRevocationReceipt);
+    expect(canonicalEmptyDelete.harness.calls).toEqual([
+      "DELETE /installation/token",
+      "GET /installation/repositories",
+      "GET /installation/repositories",
+    ]);
+
+    const propagated = await runRevocationCase([
+      observation(200),
+      observation(401, { body: "text" }),
+      observation(401, { body: "empty" }),
+    ], { sleepMode: "partial" });
+    expect(propagated.receipt).toEqual({
+      converged: true,
+      observationCount: 3,
+      propagationObserved: true,
+      stableDenials: 2,
+    });
+
+    const observedHarness = createRevocationHarness(stableDenials);
+    const observedEvents: string[] = [];
+    const observedResult = await withReleaseAppToken({
+      environment,
+      async inspect() { observedEvents.push("inspect"); return appIdentity; },
+      async inspectInstallation() { observedEvents.push("installation"); return installation; },
+      mask() { observedEvents.push("mask"); },
+      async mint() {
+        observedEvents.push("mint");
+        return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" };
+      },
+      nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+      async onRevoked(receipt: Readonly<Record<string, unknown>>) {
+        observedEvents.push(`observed:${JSON.stringify(receipt)}`);
+      },
+      async revoke(input: Readonly<{ apiUrl: URL; expiresAt: string; token: string }>) {
+        observedEvents.push("revoke:start");
+        const receipt = await revokeReleaseAppTokenWithConvergence({
+          ...input,
+          createTimeoutSignal: observedHarness.createTimeoutSignal,
+          fetchImplementation: observedHarness.fetchImplementation,
+          now: observedHarness.now,
+          sleep: observedHarness.sleep,
+        });
+        observedEvents.push("revoke:converged");
+        return receipt;
+      },
+    }, async () => {
+      observedEvents.push("operate");
+      return "advanced";
+    });
+    expect(observedResult).toBe("advanced");
+    expect(observedEvents).toEqual([
+      "inspect",
+      "installation",
+      "mint",
+      "mask",
+      "operate",
+      "revoke:start",
+      "revoke:converged",
+      'observed:{"converged":true,"observationCount":2,"propagationObserved":false,"stableDenials":2}',
+    ]);
+
+    const observerFailure = withReleaseAppToken({
+      environment,
+      async inspect() { return appIdentity; },
+      async inspectInstallation() { return installation; },
+      mask() {},
+      async mint() { return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" }; },
+      nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+      async onRevoked() { throw new Error("simulated sanitized observer failure"); },
+      async revoke() {
+        return {
+          converged: true,
+          observationCount: 2,
+          propagationObserved: false,
+          stableDenials: 2,
+        };
+      },
+    }, async () => {
+      throw new Error("simulated operation failure before observer");
+    });
+    try {
+      await observerFailure;
+      throw new Error("operation and observer unexpectedly succeeded");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors.map((item) => String(item))).toEqual([
+        "Error: simulated operation failure before observer",
+        "Error: simulated sanitized observer failure",
+      ]);
+    }
+
+    for (const invalidReceipt of [
+      undefined,
+      { ...immediateRevocationReceipt, observationCount: 3 },
+      { ...immediateRevocationReceipt, observationCount: 2, propagationObserved: true },
+      { ...immediateRevocationReceipt, observationCount: 11, propagationObserved: true },
+      { ...immediateRevocationReceipt, stableDenials: 1 },
+      { ...immediateRevocationReceipt, extra: true },
+    ] as const) {
+      let invalidObserverCalls = 0;
+      await expect(withReleaseAppToken({
+        environment,
+        async inspect() { return appIdentity; },
+        async inspectInstallation() { return installation; },
+        mask() {},
+        async mint() { return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" }; },
+        nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+        async onRevoked() { invalidObserverCalls += 1; },
+        async revoke() { return invalidReceipt; },
+      }, async () => "advanced")).rejects.toThrow("revocation receipt");
+      expect(invalidObserverCalls).toBe(0);
+    }
+    await expect(withReleaseAppToken({
+      environment,
+      async inspect() { return appIdentity; },
+      async inspectInstallation() { return installation; },
+      mask() {},
+      async mint() {
+        return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" };
+      },
+      nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+      async revoke() { return undefined; },
+    }, async () => "advanced")).rejects.toThrow("revocation receipt");
+
+    const deferredEvents: string[] = [];
+    let settleRevocation: ((value: typeof immediateRevocationReceipt) => void) | undefined;
+    const deferredRevocation = new Promise<typeof immediateRevocationReceipt>((resolve) => {
+      settleRevocation = resolve;
+    });
+    const deferredProductionFlow = (async () => {
+      await withReleaseAppToken({
+        environment,
+        async inspect() { return appIdentity; },
+        async inspectInstallation() { return installation; },
+        mask() {},
+        async mint() { return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" }; },
+        nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+        async onRevoked() { deferredEvents.push("revocation-receipt"); },
+        async revoke() {
+          deferredEvents.push("revocation-pending");
+          return deferredRevocation;
+        },
+      }, async () => {
+        deferredEvents.push("leased-write");
+      });
+      deferredEvents.push("post-ref-read");
+    })();
+    for (let attempt = 0; attempt < 16 && deferredEvents.length < 2; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(deferredEvents).toEqual(["leased-write", "revocation-pending"]);
+    settleRevocation?.(immediateRevocationReceipt);
+    await deferredProductionFlow;
+    expect(deferredEvents).toEqual([
+      "leased-write",
+      "revocation-pending",
+      "revocation-receipt",
+      "post-ref-read",
+    ]);
+
+    const deferredFailureEvents: string[] = [];
+    let rejectDeferredRevocation: ((reason: Error) => void) | undefined;
+    const deferredRevocationFailure = new Promise<typeof immediateRevocationReceipt>(
+      (_resolve, reject) => { rejectDeferredRevocation = reject; },
+    );
+    const deferredFailureFlow = (async () => {
+      await withReleaseAppToken({
+        environment,
+        async inspect() { return appIdentity; },
+        async inspectInstallation() { return installation; },
+        mask() {},
+        async mint() {
+          return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" };
+        },
+        nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+        async onRevoked() { deferredFailureEvents.push("revocation-receipt"); },
+        async revoke() {
+          deferredFailureEvents.push("revocation-pending");
+          return deferredRevocationFailure;
+        },
+      }, async () => { deferredFailureEvents.push("leased-write"); });
+      deferredFailureEvents.push("post-ref-read");
+    })();
+    for (let attempt = 0; attempt < 16 && deferredFailureEvents.length < 2; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(deferredFailureEvents).toEqual(["leased-write", "revocation-pending"]);
+    rejectDeferredRevocation?.(new Error("simulated deferred convergence failure"));
+    await expect(deferredFailureFlow).rejects.toThrow("simulated deferred convergence failure");
+    expect(deferredFailureEvents).toEqual(["leased-write", "revocation-pending"]);
+
+    const failedDeferredEvents: string[] = [];
+    await expect((async () => {
+      await withReleaseAppToken({
+        environment,
+        async inspect() { return appIdentity; },
+        async inspectInstallation() { return installation; },
+        mask() {},
+        async mint() { return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" }; },
+        nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+        async revoke() { throw new Error("simulated convergence failure"); },
+      }, async () => { failedDeferredEvents.push("leased-write"); });
+      failedDeferredEvents.push("post-ref-read");
+    })()).rejects.toThrow("simulated convergence failure");
+    expect(failedDeferredEvents).toEqual(["leased-write"]);
+
+    const persistentHarness = createRevocationHarness(
+      Array.from({ length: 10 }, () => observation(200)),
+    );
+    await expect(revokeReleaseAppTokenWithConvergence({
+      apiUrl: new URL("https://api.github.com/"),
+      createTimeoutSignal: persistentHarness.createTimeoutSignal,
+      expiresAt: response.expires_at,
+      fetchImplementation: persistentHarness.fetchImplementation,
+      now: persistentHarness.now,
+      sleep: persistentHarness.sleep,
+      token,
+    })).rejects.toThrow("did not converge within the bounded operational window");
+    expect(persistentHarness.observationCount()).toBe(10);
+    expect(persistentHarness.calls).toEqual([
+      "DELETE /installation/token",
+      ...Array.from({ length: 10 }, () => "GET /installation/repositories"),
+    ]);
+    expect(3 + persistentHarness.calls.length).toBe(14);
+    expect(persistentHarness.timeouts.slice(1)).toEqual([
+      10_000,
+      10_000,
+      10_000,
+      10_000,
+      10_000,
+      10_000,
+      10_000,
+      10_000,
+      6_000,
+      1_000,
+    ]);
+
+    for (const authoritativeBegin of [251, 252, 30_001, 30_002] as const) {
+      const closedBoundary = createRevocationHarness(stableDenials, {
+        nowSamples: [0, 1, 2, 2, authoritativeBegin, 30_002],
+      });
+      await expect(revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: closedBoundary.createTimeoutSignal,
+        expiresAt: response.expires_at,
+        fetchImplementation: closedBoundary.fetchImplementation,
+        now: closedBoundary.now,
+        sleep: closedBoundary.sleep,
+        token,
+      })).rejects.toThrow("did not converge within the bounded operational window");
+      expect(closedBoundary.calls).toEqual(["DELETE /installation/token"]);
+      expect(closedBoundary.observationCount()).toBe(0);
+      expect(closedBoundary.timeouts).toEqual([10_000]);
+    }
+
+    const boundaryTimeoutHarness = createRevocationHarness(
+      Array.from({ length: 10 }, () => observation(200)),
+    );
+    let finalSlotSamples = 0;
+    const boundaryTimeoutNow = () => {
+      if (
+        boundaryTimeoutHarness.observationCount() === 9 &&
+        boundaryTimeoutHarness.currentClock() === 29_001
+      ) {
+        finalSlotSamples += 1;
+        if (finalSlotSamples === 2) boundaryTimeoutHarness.advanceClock(500);
+      }
+      return boundaryTimeoutHarness.currentClock();
+    };
+    await expect(revokeReleaseAppTokenWithConvergence({
+      apiUrl: new URL("https://api.github.com/"),
+      createTimeoutSignal: boundaryTimeoutHarness.createTimeoutSignal,
+      expiresAt: response.expires_at,
+      fetchImplementation: boundaryTimeoutHarness.fetchImplementation,
+      now: boundaryTimeoutNow,
+      sleep: boundaryTimeoutHarness.sleep,
+      token,
+    })).rejects.toThrow("did not converge within the bounded operational window");
+    expect(boundaryTimeoutHarness.observationCount()).toBe(10);
+    expect(boundaryTimeoutHarness.callTimes.at(-1)).toBe(29_501);
+    expect(boundaryTimeoutHarness.timeouts.at(-1)).toBe(500);
+    expect(
+      (boundaryTimeoutHarness.callTimes.at(-1) ?? 0) +
+      (boundaryTimeoutHarness.timeouts.at(-1) ?? 0),
+    ).toBe(30_001);
+
+    const loneDenial = [
+      ...Array.from({ length: 9 }, () => observation(200)),
+      observation(401, { body: "empty" }),
+    ];
+    await expect(runRevocationCase(loneDenial)).rejects.toThrow("only one denial");
+    await expect(runRevocationCase([
+      observation(401, { body: "empty" }),
+      observation(200),
+    ])).rejects.toThrow("authorization returned after a denial");
+
+    const observationFailureCases: readonly Readonly<{
+      message: string;
+      observations: readonly RevocationObservation[];
+      overrides?: Parameters<typeof createRevocationHarness>[1];
+      sensitive?: readonly string[];
+    }>[] = [
+      {
+        message: "unexpected authorization state",
+        observations: [observation(403, {
+          body: "text",
+          bodyText: "observation-403-body-secret",
+          requestId: "observation-403-request-secret",
+        })],
+        sensitive: ["403", "observation-403-body-secret", "observation-403-request-secret"],
+      },
+      {
+        message: "unexpected authorization state",
+        observations: [observation(404, {
+          body: "text",
+          bodyText: "observation-404-body-secret",
+          requestId: "observation-404-request-secret",
+        })],
+        sensitive: ["404", "observation-404-body-secret", "observation-404-request-secret"],
+      },
+      {
+        message: "unexpected authorization state",
+        observations: [observation(429, {
+          body: "text",
+          bodyText: "observation-429-body-secret",
+          requestId: "observation-429-request-secret",
+        })],
+        sensitive: ["429", "observation-429-body-secret", "observation-429-request-secret"],
+      },
+      {
+        message: "unexpected authorization state",
+        observations: [observation(500, {
+          body: "text",
+          bodyText: "observation-500-body-secret",
+          requestId: "observation-500-request-secret",
+        })],
+        sensitive: ["500", "observation-500-body-secret", "observation-500-request-secret"],
+      },
+      {
+        message: "authorized revocation observation is malformed",
+        observations: [observation(200, { body: "wrong-repo" })],
+      },
+      {
+        message: "authorized revocation observation is malformed",
+        observations: [observation(200, { body: "binary" })],
+      },
+      {
+        message: "authorized revocation observation is malformed",
+        observations: [observation(200, { body: "overflow" })],
+      },
+      {
+        message: "redirected",
+        observations: [observation(200, {
+          body: "text",
+          bodyText: "observation-200-location-body-secret",
+          location: "https://observation-location-secret.invalid/",
+          requestId: "observation-200-location-request-secret",
+        })],
+        sensitive: [
+          "observation-200-location-body-secret",
+          "observation-200-location-request-secret",
+          "https://observation-location-secret.invalid/",
+        ],
+      },
+      {
+        message: "redirected",
+        observations: [observation(401, {
+          body: "json",
+          redirected: true,
+          requestId: "observation-401-redirect-request-secret",
+        })],
+        sensitive: ["Bad credentials", "observation-401-redirect-request-secret"],
+      },
+      {
+        message: "redirected",
+        observations: [observation(401, {
+          body: "text",
+          bodyText: "observation-401-location-body-secret",
+          location: "https://observation-401-location-secret.invalid/",
+          requestId: "observation-401-location-request-secret",
+        })],
+        sensitive: [
+          "observation-401-location-body-secret",
+          "observation-401-location-request-secret",
+          "https://observation-401-location-secret.invalid/",
+        ],
+      },
+      {
+        message: "transport failed",
+        observations: [observation(401, { networkFailure: true })],
+      },
+      {
+        message: "transport failed",
+        observations: [observation(401, { networkFailure: "abort" })],
+      },
+      {
+        message: "authorized revocation observation is malformed",
+        observations: [observation(200, { body: "invalid-json" })],
+      },
+      {
+        message: "denied revocation observation is malformed",
+        observations: [observation(401, { body: "overflow" })],
+      },
+      {
+        message: "sleep failed",
+        observations: [observation(200), ...stableDenials],
+        overrides: { sleepMode: "reject" },
+      },
+      {
+        message: "did not advance the clock",
+        observations: [observation(200), ...stableDenials],
+        overrides: { sleepMode: "frozen" },
+      },
+      {
+        message: "clock regressed",
+        observations: [observation(200), ...stableDenials],
+        overrides: { sleepMode: "regress" },
+      },
+      {
+        message: "clock is invalid",
+        observations: [observation(200), ...stableDenials],
+        overrides: { sleepMode: "overflow" },
+      },
+      {
+        message: "clock regressed",
+        observations: [
+          observation(401, { fetchLatencyMilliseconds: -1 }),
+          observation(401),
+        ],
+      },
+    ];
+    for (const failureCase of observationFailureCases) {
+      const failureHarness = createRevocationHarness(
+        failureCase.observations,
+        failureCase.overrides,
+      );
+      let caught: unknown;
+      try {
+        await revokeReleaseAppTokenWithConvergence({
+          apiUrl: new URL("https://api.github.com/"),
+          createTimeoutSignal: failureHarness.createTimeoutSignal,
+          expiresAt: response.expires_at,
+          fetchImplementation: failureHarness.fetchImplementation,
+          now: failureHarness.now,
+          sleep: failureHarness.sleep,
+          token,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(String(caught)).toContain(failureCase.message);
+      for (const sensitive of [
+        token,
+        "Bad credentials",
+        "/installation/repositories",
+        "/installation/token",
+        ...(failureCase.sensitive ?? []),
+      ]) {
+        expect(String(caught)).not.toContain(sensitive);
+      }
+      if (failureCase.observations.some((item) => item.body === "overflow")) {
+        expect(failureHarness.cancelledBodies()).toBe(1);
+      } else {
+        expect(failureHarness.sourceChunks.every((chunk) =>
+          chunk.every((value) => value === 0))).toBe(true);
+      }
+    }
+
+    for (const invalidDateObservation of [
+      observation(200, {
+        date: "invalid-authorized-date-secret",
+        requestId: "authorized-date-request-secret",
+      }),
+      observation(401, {
+        body: "text",
+        bodyText: "denied-date-body-secret",
+        date: "invalid-denied-date-secret",
+        requestId: "denied-date-request-secret",
+      }),
+    ] as const) {
+      const invalidDateHarness = createRevocationHarness([invalidDateObservation]);
+      let caught: unknown;
+      try {
+        await revokeReleaseAppTokenWithConvergence({
+          apiUrl: new URL("https://api.github.com/"),
+          createTimeoutSignal: invalidDateHarness.createTimeoutSignal,
+          expiresAt: response.expires_at,
+          fetchImplementation: invalidDateHarness.fetchImplementation,
+          now: invalidDateHarness.now,
+          sleep: invalidDateHarness.sleep,
+          token,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(String(caught)).toContain(
+        invalidDateObservation.status === 200
+          ? "authorized revocation observation is malformed"
+          : "denied revocation observation is malformed",
+      );
+      for (const sensitive of [
+        token,
+        String(invalidDateObservation.date),
+        String(invalidDateObservation.requestId),
+        invalidDateObservation.bodyText ?? "",
+        "/installation/repositories",
+      ].filter((value) => value.length > 0)) {
+        expect(String(caught)).not.toContain(sensitive);
+      }
+      expect(invalidDateHarness.sourceChunks.length).toBeGreaterThan(0);
+      expect(invalidDateHarness.sourceChunks.every((chunk) =>
+        chunk.every((value) => value === 0))).toBe(true);
+    }
+
+    const rejectedDeleteCases: readonly Readonly<{
+      observation: RevocationObservation;
+      sensitive?: readonly string[];
+    }>[] = [
+      {
+        observation: observation(403, {
+          body: "text",
+          bodyText: "delete-403-body-secret",
+          requestId: "delete-403-request-secret",
+        }),
+        sensitive: ["403", "delete-403-body-secret", "delete-403-request-secret"],
+      },
+      {
+        observation: observation(401, {
+          body: "json",
+          requestId: "delete-401-request-secret",
+        }),
+        sensitive: ["401", "Bad credentials", "delete-401-request-secret"],
+      },
+      {
+        observation: observation(204, {
+          body: "text",
+          bodyText: "delete-redirect-body-secret",
+          contentLength: "27",
+          location: "https://delete-location-secret.invalid/",
+          requestId: "delete-redirect-request-secret",
+        }),
+        sensitive: [
+          "delete-redirect-body-secret",
+          "delete-redirect-request-secret",
+          "https://delete-location-secret.invalid/",
+        ],
+      },
+      {
+        observation: observation(204, {
+          body: "text",
+          bodyText: "delete-nonempty-body-secret",
+          contentLength: "27",
+        }),
+        sensitive: ["delete-nonempty-body-secret"],
+      },
+      {
+        observation: observation(204, { body: "empty", contentLength: "1" }),
+      },
+      {
+        observation: observation(204, { body: "empty", contentLength: "00" }),
+      },
+      { observation: observation(204, { body: "overflow" }) },
+      { observation: observation(204, { body: "empty", networkFailure: true }) },
+    ];
+    for (const rejectedDeleteCase of rejectedDeleteCases) {
+      const deleteObservation = rejectedDeleteCase.observation;
+      const rejectedDelete = createRevocationHarness(stableDenials, { deleteObservation });
+      let caught: unknown;
+      try {
+        await revokeReleaseAppTokenWithConvergence({
+          apiUrl: new URL("https://api.github.com/"),
+          createTimeoutSignal: rejectedDelete.createTimeoutSignal,
+          expiresAt: response.expires_at,
+          fetchImplementation: rejectedDelete.fetchImplementation,
+          now: rejectedDelete.now,
+          sleep: rejectedDelete.sleep,
+          token,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(String(caught)).toContain("indeterminate");
+      for (const sensitive of [
+        token,
+        "Bad credentials",
+        "/installation/repositories",
+        "/installation/token",
+        ...(rejectedDeleteCase.sensitive ?? []),
+      ]) {
+        expect(String(caught)).not.toContain(sensitive);
+      }
+      expect(rejectedDelete.calls).toEqual(["DELETE /installation/token"]);
+      if (deleteObservation.body !== "overflow") {
+        expect(rejectedDelete.sourceChunks.every((chunk) =>
+          chunk.every((value) => value === 0))).toBe(true);
+      } else {
+        expect(rejectedDelete.cancelledBodies()).toBe(1);
+      }
+    }
+
+    for (const [observations, deleteObservation] of [
+      [stableDenials, observation(204, { body: "empty", networkFailure: "pending" })],
+      [stableDenials, observation(204, { body: "pending" })],
+      [[observation(401, { networkFailure: "pending" })], observation(204, { body: "empty" })],
+      [[observation(401, { body: "pending" })], observation(204, { body: "empty" })],
+    ] as const) {
+      const pendingHarness = createRevocationHarness(observations, { deleteObservation });
+      let caught: unknown;
+      try {
+        await revokeReleaseAppTokenWithConvergence({
+          apiUrl: new URL("https://api.github.com/"),
+          createTimeoutSignal: () => AbortSignal.timeout(1),
+          expiresAt: response.expires_at,
+          fetchImplementation: pendingHarness.fetchImplementation,
+          now: pendingHarness.now,
+          sleep: pendingHarness.sleep,
+          token,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(String(caught)).toContain("indeterminate");
+      expect(String(caught)).not.toContain(token);
+      expect(pendingHarness.calls.length).toBeLessThanOrEqual(2);
+    }
+
+    const missedSlots = await runRevocationCase([
+      observation(200, { fetchLatencyMilliseconds: 9_000 }),
+      observation(401, { body: "empty" }),
+      observation(401, { body: "text" }),
+    ]);
+    expect(missedSlots.receipt.observationCount).toBe(3);
+    expect(missedSlots.harness.callTimes.slice(1)).toEqual([1, 16_001, 24_001]);
+
+    for (const invalidClock of [Number.NaN, Number.POSITIVE_INFINITY, -1] as const) {
+      const clockHarness = createRevocationHarness(stableDenials, { initialClock: invalidClock });
+      await expect(revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: clockHarness.createTimeoutSignal,
+        expiresAt: response.expires_at,
+        fetchImplementation: clockHarness.fetchImplementation,
+        now: clockHarness.now,
+        sleep: clockHarness.sleep,
+        token,
+      })).rejects.toThrow("clock is invalid");
+      expect(clockHarness.calls).toHaveLength(0);
+    }
+    const throwingClock = createRevocationHarness(stableDenials);
+    await expect(revokeReleaseAppTokenWithConvergence({
+      apiUrl: new URL("https://api.github.com/"),
+      createTimeoutSignal: throwingClock.createTimeoutSignal,
+      expiresAt: response.expires_at,
+      fetchImplementation: throwingClock.fetchImplementation,
+      now() { throw new Error(`clock leaked ${token}`); },
+      sleep: throwingClock.sleep,
+      token,
+    })).rejects.toThrow("clock read failed");
+    expect(throwingClock.calls).toHaveLength(0);
+
+    const boundary = await runRevocationCase([
+      ...Array.from({ length: 8 }, () => observation(200)),
+      observation(401, { body: "text" }),
+      observation(401, { body: "empty", bodyLatencyMilliseconds: 1_000, fetchLatencyMilliseconds: 0 }),
+    ]);
+    expect(boundary.receipt).toEqual({
+      converged: true,
+      observationCount: 10,
+      propagationObserved: true,
+      stableDenials: 2,
+    });
+    await expect(runRevocationCase([
+      ...Array.from({ length: 8 }, () => observation(200)),
+      observation(401),
+      observation(401, { bodyLatencyMilliseconds: 1_001, fetchLatencyMilliseconds: 0 }),
+    ])).rejects.toThrow("completed outside its deadline");
+    await expect(runRevocationCase([
+      observation(401, { date: "Sun, 30 Aug 2026 02:00:00 GMT" }),
+      observation(401),
+    ])).rejects.toThrow("denied revocation observation is malformed");
+
+    for (const [expiresAt, deleteObservation] of [
+      ["malformed", observation(204, { body: "empty" })],
+      [response.expires_at, observation(204, { body: "empty", date: "malformed" })],
+    ] as const) {
+      const invalidAuthority = createRevocationHarness(stableDenials, { deleteObservation });
+      await expect(revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: invalidAuthority.createTimeoutSignal,
+        expiresAt,
+        fetchImplementation: invalidAuthority.fetchImplementation,
+        now: invalidAuthority.now,
+        sleep: invalidAuthority.sleep,
+        token,
+      })).rejects.toThrow("revocation authority time proof is malformed");
+      expect(invalidAuthority.calls).toEqual([
+        "DELETE /installation/token",
+        "GET /installation/repositories",
+        "GET /installation/repositories",
+      ]);
+    }
+
+    const impreciseDeadline = createRevocationHarness(stableDenials, {
+      initialClock: Number.MAX_SAFE_INTEGER - 30_000,
+    });
+    await expect(revokeReleaseAppTokenWithConvergence({
+      apiUrl: new URL("https://api.github.com/"),
+      createTimeoutSignal: impreciseDeadline.createTimeoutSignal,
+      expiresAt: response.expires_at,
+      fetchImplementation: impreciseDeadline.fetchImplementation,
+      now: impreciseDeadline.now,
+      sleep: impreciseDeadline.sleep,
+      token,
+    })).rejects.toThrow("outside the precise clock range");
+    expect(impreciseDeadline.calls).toEqual(["DELETE /installation/token"]);
+
     const revokedAfterFailure: string[] = [];
     await expect(withReleaseAppToken({
       environment,
@@ -2364,7 +3344,10 @@ fi
       mask() {},
       async mint() { return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" }; },
       nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
-      async revoke(input: Readonly<{ token: string }>) { revokedAfterFailure.push(input.token); },
+      async revoke(input: Readonly<{ token: string }>) {
+        revokedAfterFailure.push(input.token);
+        return immediateRevocationReceipt;
+      },
     }, async () => {
       throw new Error("simulated leased push failure");
     })).rejects.toThrow("simulated leased push failure");
@@ -2388,6 +3371,7 @@ fi
       nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
       async revoke(input: Readonly<{ token: string }>) {
         malformedTokenRevocations.push(input.token);
+        return immediateRevocationReceipt;
       },
     }, async () => "unreachable")).rejects.toThrow("permissions are not exactly");
     expect(malformedTokenRevocations).toEqual([token]);
@@ -2413,6 +3397,167 @@ fi
         "Error: simulated revoke failure",
       ]);
     }
+
+    const convergenceAggregateHarness = createRevocationHarness(
+      Array.from({ length: 10 }, () => observation(200)),
+    );
+    const convergenceAggregateSetupCalls: string[] = [];
+    let convergenceAggregateOperations = 0;
+    let convergenceAggregateMints = 0;
+    try {
+      await withReleaseAppToken({
+        environment,
+        async inspect() {
+          convergenceAggregateSetupCalls.push("GET /app");
+          return appIdentity;
+        },
+        async inspectInstallation() {
+          convergenceAggregateSetupCalls.push("GET /app/installations/12345");
+          return installation;
+        },
+        mask() {},
+        async mint() {
+          convergenceAggregateMints += 1;
+          convergenceAggregateSetupCalls.push("POST /app/installations/12345/access_tokens");
+          return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" };
+        },
+        nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+        async revoke(input: Readonly<{ apiUrl: URL; expiresAt: string; token: string }>) {
+          await revokeReleaseAppTokenWithConvergence({
+            ...input,
+            createTimeoutSignal: convergenceAggregateHarness.createTimeoutSignal,
+            fetchImplementation: convergenceAggregateHarness.fetchImplementation,
+            now: convergenceAggregateHarness.now,
+            sleep: convergenceAggregateHarness.sleep,
+          });
+        },
+      }, async () => {
+        convergenceAggregateOperations += 1;
+        throw new Error("simulated leased push failure before convergence");
+      });
+      throw new Error("combined operation and convergence unexpectedly succeeded");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors.map((item) => String(item))).toEqual([
+        "Error: simulated leased push failure before convergence",
+        "Error: release App token revocation did not converge within the bounded operational window",
+      ]);
+    }
+    expect(convergenceAggregateMints).toBe(1);
+    expect(convergenceAggregateOperations).toBe(1);
+    expect(convergenceAggregateSetupCalls).toEqual([
+      "GET /app",
+      "GET /app/installations/12345",
+      "POST /app/installations/12345/access_tokens",
+    ]);
+    expect(convergenceAggregateHarness.calls).toEqual([
+      "DELETE /installation/token",
+      ...Array.from({ length: 10 }, () => "GET /installation/repositories"),
+    ]);
+    expect([
+      ...convergenceAggregateSetupCalls,
+      ...convergenceAggregateHarness.calls,
+    ]).toHaveLength(14);
+    expect(convergenceAggregateHarness.calls.filter((call) =>
+      call === "DELETE /installation/token")).toHaveLength(1);
+
+    const deferredPromotionDeployment = providerDeployment(
+      10,
+      "2026-08-29T13:00:00Z",
+      { sha: providerPreviousSha },
+    );
+    const deferredPromotionBaselineApi = new ProviderApiFixture({
+      deployments: [[deferredPromotionDeployment]],
+      refSha: providerPreviousSha,
+      serverDates: [providerBaselineServerDate, providerBaselineServerDate],
+      statuses: terminalBaselineStatus(10, "2026-08-29T13:01:00Z"),
+    });
+    const deferredPromotionBaseline = await createProviderBaseline({
+      api: deferredPromotionBaselineApi,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+    });
+    const productionRefRead =
+      `GET /repos/${providerRepository}/git/ref/heads/website-production`;
+
+    const deferredPromotionApi = new ProviderApiFixture({
+      deployments: [[deferredPromotionDeployment]],
+      refSha: providerPreviousSha,
+      serverDates: [providerPromotionServerDate],
+      statuses: terminalBaselineStatus(10, "2026-08-29T13:01:00Z"),
+    });
+    const originalDeferredAdvance = deferredPromotionApi.advanceRef.bind(deferredPromotionApi);
+    const deferredPromotionEvents: string[] = [];
+    let settleDeferredAdvance: (() => void) | undefined;
+    const deferredAdvance = new Promise<void>((resolve) => { settleDeferredAdvance = resolve; });
+    Object.defineProperty(deferredPromotionApi, "advanceRef", {
+      value: async (...args: Parameters<ProviderApiFixture["advanceRef"]>) => {
+        deferredPromotionEvents.push("advance-pending");
+        await deferredAdvance;
+        deferredPromotionEvents.push("advance-settled");
+        await originalDeferredAdvance(...args);
+      },
+    });
+    let deferredPromotionSettled = false;
+    const deferredPromotionResult = promoteWebsiteProduction({
+      api: deferredPromotionApi,
+      baselineReceipt: deferredPromotionBaseline,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    }).finally(() => { deferredPromotionSettled = true; });
+    for (let attempt = 0; attempt < 32 && deferredPromotionEvents.length === 0; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(deferredPromotionEvents).toEqual(["advance-pending"]);
+    expect(deferredPromotionSettled).toBe(false);
+    expect(deferredPromotionApi.calls.filter((call) => call === productionRefRead)).toHaveLength(2);
+    settleDeferredAdvance?.();
+    await expect(deferredPromotionResult).resolves.toMatchObject({ mode: "advanced" });
+    expect(deferredPromotionEvents).toEqual(["advance-pending", "advance-settled"]);
+    expect(deferredPromotionApi.calls.filter((call) => call === productionRefRead)).toHaveLength(3);
+
+    const rejectedPromotionApi = new ProviderApiFixture({
+      deployments: [[deferredPromotionDeployment]],
+      refSha: providerPreviousSha,
+      serverDates: [providerPromotionServerDate],
+      statuses: terminalBaselineStatus(10, "2026-08-29T13:01:00Z"),
+    });
+    let rejectDeferredAdvance: ((reason: Error) => void) | undefined;
+    const rejectedAdvance = new Promise<void>((_resolve, reject) => {
+      rejectDeferredAdvance = reject;
+    });
+    Object.defineProperty(rejectedPromotionApi, "advanceRef", {
+      value: async () => rejectedAdvance,
+    });
+    const rejectedPromotion = promoteWebsiteProduction({
+      api: rejectedPromotionApi,
+      baselineReceipt: deferredPromotionBaseline,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    });
+    for (let attempt = 0; attempt < 32; attempt += 1) await Promise.resolve();
+    expect(rejectedPromotionApi.calls.filter((call) => call === productionRefRead)).toHaveLength(2);
+    rejectDeferredAdvance?.(new Error("simulated deferred writer failure"));
+    await expect(rejectedPromotion).rejects.toThrow("simulated deferred writer failure");
+    expect(rejectedPromotionApi.calls.filter((call) => call === productionRefRead)).toHaveLength(2);
+
+    const providerSource = await readFile(providerOutcomeHelperUrl, "utf8");
+    const promotionStart = providerSource.indexOf("export async function promoteWebsiteProduction");
+    const promotionEnd = providerSource.indexOf("\nexport ", promotionStart + 1);
+    const promotionSource = providerSource.slice(
+      promotionStart,
+      promotionEnd < 0 ? undefined : promotionEnd,
+    );
+    expect(promotionSource.indexOf("await api.advanceRef(")).toBeGreaterThan(0);
+    expect(promotionSource.indexOf("await api.advanceRef("))
+      .toBeLessThan(promotionSource.indexOf("const promotedSha = await readProductionRef("));
+    const productionAdvanceStart = providerSource.indexOf("async advanceRef(repository");
+    const productionAdvanceEnd = providerSource.indexOf("\n  }\n}", productionAdvanceStart);
+    const productionAdvanceSource = providerSource.slice(productionAdvanceStart, productionAdvanceEnd);
+    expect(productionAdvanceSource).toContain("await withReleaseAppTokenFromEnvironment");
+    expect(productionAdvanceSource).toContain("advanceWebsiteProductionRefFromEnvironment");
 
     for (const overrides of [
       { GITHUB_API_URL: "https://github.example.invalid" },
@@ -4764,7 +5909,15 @@ fi
       "first fetches only the verified tag through the fixed HTTPS",
       "peels that fetched object locally",
       "does not check out or execute\ntagged code",
-      "App token is revoked before the exact production-ref post-read",
+      "exactly one nonredirecting\n`DELETE /installation/token` request",
+      "half-open request-start window `[start, deadline)`",
+      "HTTP 401 on two distinct scheduled reads",
+      "Request,\nbody, and sleep latency are charged to the same window",
+      "missed absolute slot\nis skipped instead of triggering a burst",
+      "every observation that can\nstart before the deadline remains authorized",
+      "Wrench fail-closed policy, not a GitHub revocation-propagation SLA",
+      "No action is\nretried",
+      "exact production-ref post-read begins only after convergence",
       "every\n`WRENCH_RELEASE_APP_*` value removed",
       "workflow never creates, deletes, force-moves, or\nrecreates the branch",
       "exactly 20 observation slots anchored to that start at offsets zero through\n19 minutes",
@@ -4782,8 +5935,8 @@ fi
       "five bounded release\npages plus the empty sentinel page",
       "use at most 278 REST calls",
       "leaving 722 calls",
-      "promotion helper itself uses at most 13 read-only REST\ncalls",
-      "four App-authentication requests",
+      "promotion helper itself uses at most 13 read-only REST calls",
+      "at most fourteen App REST requests",
       "240-point ceiling and 760 points of headroom",
       "Read-only GitHub responses are capped at 8 MiB",
       "App\nidentity, installation, token, and revocation responses are streamed under a\n1 MiB cap",
@@ -4856,6 +6009,11 @@ fi
     expect(agents).toContain("Mirror the production lifecycle and App-only update rules exactly");
     expect(agents).toContain("separately reviewed temporary current-main source");
     expect(agents).toContain("Keep the production helper hard-bound to `website-production`");
+    expect(agents).toContain("exactly one empty-204 revocation request");
+    expect(agents).toContain("two stable authorization denials");
+    expect(agents).toContain("ten-slot, 30-second monotonic operational window before the exact ref post-read");
+    expect(agents).toContain("not a GitHub propagation SLA");
+    expect(agents).toContain("cap the App REST path at fourteen requests");
     expect(agents).not.toContain("provisional source and initial App registration");
     expect(agents).not.toContain("contents-only writer");
     expect(agents).toContain("Require bounded read-only jobs");
@@ -4908,7 +6066,10 @@ fi
     expect(websiteAgents).not.toContain("initial provisional permission configuration");
     expect(websiteAgents).not.toContain("provider window orchestration headroom");
     expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");
-    expect(websiteAgents).toContain("token revocation and exact ref readback");
+    expect(websiteAgents).toContain("exactly one empty-204 token revocation");
+    expect(websiteAgents).toContain("ten absolute offsets inside a 30-second half-open request-start window");
+    expect(websiteAgents).toContain("Two stable HTTP 401 observations must converge before the exact ref readback");
+    expect(websiteAgents).toContain("not a GitHub propagation SLA");
     expect(websiteAgents).toContain("initial success observation plus two stable");
     expect(websiteAgents).not.toContain("audit every retained Production deployment status");
     expect(websiteAgents).not.toContain("every baseline deployment's REST status history");
