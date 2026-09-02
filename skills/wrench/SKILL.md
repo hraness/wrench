@@ -11,7 +11,7 @@ description: >-
   capabilities; inspect or develop bounded provider contracts for X, LinkedIn,
   Bluesky, Substack Notes, Threads, TikTok, Instagram, and YouTube Shorts; save
   private native article drafts; operate reviewed Beeper messaging actions
-  through an exact pinned native CLI; and build or run typed provider plugins
+  across the pinned official CLI and fixed Desktop loopback operations; and build or run typed provider plugins
   from recorded browser-session APIs or versioned provider CLIs. Trigger for web capture,
   URL clipping, authenticated sites, social media posting or cross-posting,
   media download or archiving, transcription, email and messaging integrations,

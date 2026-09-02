@@ -36,6 +36,7 @@ const requiredPaths = Object.freeze([
   "src/index.ts",
   "src/local-cli-surface-contract.ts",
   "src/message-like-me-agentic-messaging.ts",
+  "src/messaging.ts",
   "src/providers/imessage-direct-install.ts",
   "src/provider-plugin-registry.ts",
   "src/whatsapp-message-like-me-cli.ts",

@@ -42,6 +42,7 @@ import {
   loadProviderCapabilityAttestation,
 } from "./provider-capability-attestation";
 import {
+  BEEPER_PRESENTATION_TRANSPORT_COUNTS,
   createBeeperPresentationFacts,
   createProviderDirectory,
   createWhatsAppPresentationFacts,
@@ -153,6 +154,9 @@ describe("wrench.rip static site", () => {
     );
     const npmPackageUrl = versionedNpmPackageUrl(packageIdentity);
     const skillInstallCommands = agentSkillInstallCommands(packageIdentity);
+    const beeperOperationCount =
+      BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount
+      + BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount;
     await buildWebsite({
       [WRENCH_MAILING_TURNSTILE_SITEKEY_ENV]: "1x00000000000000000000AA",
       NEXT_PUBLIC_POSTHOG_HOST: DEFAULT_POSTHOG_HOST,
@@ -383,7 +387,7 @@ describe("wrench.rip static site", () => {
     expect(llms).not.toContain(`${SITE_ORIGIN}/vms-cannot-contain-agents/`);
     expect(llms).toContain(`${SITE_ORIGIN}/providers/beeper/`);
     expect(llms).toContain(
-      "32 supported actions. Twenty-seven run through the pinned `@beeper/cli` 0.6.2 executable and five use fixed Desktop loopback reads.",
+      `${String(beeperOperationCount)} supported actions. ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount)} run through the pinned \`@beeper/cli\` 0.6.2 executable and ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount)} use fixed Desktop loopback reads.`,
     );
     expect(llms).toContain("Message mutations require preview and confirmation.");
     expect(llms).not.toContain("Message actions are previewed and confirmed.");
@@ -903,10 +907,10 @@ describe("wrench.rip static site", () => {
     expect(html.match(/class="provider-feature-copy"/gu)).toHaveLength(1);
     expect(providerCapabilities?.html.match(/class="provider-feature-copy"/gu)).toHaveLength(1);
     expect(html).toContain(
-      "32 reviewed actions: 27 through one pinned CLI and five fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.",
+      `${String(beeperOperationCount)} reviewed actions: ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount)} through one pinned CLI and ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount)} fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.`,
     );
     expect(providerCapabilities?.html).toContain(
-      "32 reviewed actions: 27 through one pinned CLI and five fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.",
+      `${String(beeperOperationCount)} reviewed actions: ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount)} through one pinned CLI and ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount)} fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.`,
     );
     expect(html).toContain(
       `<h2 id="providers-title">Reviewed operations across ${String(providerDirectory.providerCount)} supported services.</h2>`,
@@ -988,6 +992,14 @@ describe("wrench.rip static site", () => {
     expect(beeper?.html).toContain("pendingMessageID");
     expect(beeper?.html).toContain("proves submission to Desktop only, not network delivery");
     expect(beeper?.html).toContain("does not call the CLI or SDK and never retries");
+    expect(beeper?.html).toContain("A separately obtained exact read may be inspected");
+    expect(beeper?.html).toContain(
+      "Without an already accepted exact provider message identity, the run remains indeterminate and unretriable",
+    );
+    expect(beeper?.html).toContain("only that identity could make reconciliation categorical");
+    expect(beeper?.html).not.toContain(
+      "reconcile the same run from a separately obtained exact read",
+    );
     expect(beeper?.html).not.toContain("--wait");
     expect(beeper?.html).not.toContain("terminal returned message ID");
     expect(beeper?.html).toContain("Use Beeper directly when you want its first-party breadth");
@@ -997,7 +1009,9 @@ describe("wrench.rip static site", () => {
     );
     expect(beeper?.html).toContain('href="https://github.com/beeper/cli">official Beeper CLI</a>');
     expect(beeper?.html).toContain("exact executable and adapter-version pinning");
-    expect(beeper?.html).toContain("write previews, durable receipts, reconciliation, and no blind retry");
+    expect(beeper?.html).toContain(
+      "write previews, durable receipts, contract-specific reconciliation for generic CLI mutations, and no blind retry",
+    );
     expect(beeper?.html).toContain("encrypted snapshots");
     expect(beeper?.html).toContain("versioned Message Like Me and contact-interaction exports");
     expect(beeper?.html).toContain("It wraps only the actions listed for this release");

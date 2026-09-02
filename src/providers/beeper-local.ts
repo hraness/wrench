@@ -221,6 +221,39 @@ export function isBeeperLocalOperationContractVersion(
     || contractVersion === 3 && action === "messaging.read";
 }
 
+const BEEPER_DESKTOP_LOOPBACK_V2_OPERATIONS = Object.freeze([
+  "accounts.list",
+  "messaging.search",
+  "conversations.read",
+  "messaging.read",
+  "messaging.content.search",
+] as const satisfies readonly BeeperLocalOperationName[]);
+
+export type BeeperLocalOperationRuntimeTransport =
+  | "official-cli"
+  | "desktop-loopback";
+
+export function isBeeperDesktopLoopbackOperationContract(
+  action: BeeperLocalOperationName,
+  contractVersion: number,
+): boolean {
+  return contractVersion === 2
+    && BEEPER_DESKTOP_LOOPBACK_V2_OPERATIONS.includes(
+      action as typeof BEEPER_DESKTOP_LOOPBACK_V2_OPERATIONS[number],
+    )
+    || contractVersion === 3 && action === "messaging.read";
+}
+
+export const BEEPER_LOCAL_OPERATION_RUNTIME_TRANSPORTS = Object.freeze(
+  Object.fromEntries(BEEPER_LOCAL_OPERATION_NAMES.map((operation) => [
+    operation,
+    isBeeperDesktopLoopbackOperationContract(
+      operation,
+      BEEPER_LOCAL_OPERATION_CONTRACT_VERSIONS[operation],
+    ) ? "desktop-loopback" : "official-cli",
+  ])),
+) as Readonly<Record<BeeperLocalOperationName, BeeperLocalOperationRuntimeTransport>>;
+
 type BeeperLocalSurfaceInputType = "string" | "number" | "boolean" | "array" | "file";
 
 function beeperLocalSurfaceInputType(value: unknown): BeeperLocalSurfaceInputType {

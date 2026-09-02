@@ -49,6 +49,7 @@ import {
   BEEPER_LOCAL_OPERATIONS,
   BEEPER_ORIGIN,
   beeperCliArtifactForRuntime,
+  isBeeperDesktopLoopbackOperationContract,
   isBeeperLocalOperation,
   isBeeperLocalOperationContractVersion,
   parseBeeperOperationInput,
@@ -81,28 +82,6 @@ const MAX_MESSAGES = 200;
 const MAX_TEXT_BYTES = 1_048_576;
 const OPERATION_LABEL = "Beeper local CLI operation";
 const SUBJECT_PROBE_TIMEOUT_MS = 120_000;
-const BEEPER_DIRECT_READ_V2_OPERATIONS = Object.freeze([
-  "accounts.list",
-  "messaging.search",
-  "conversations.read",
-  "messaging.read",
-  "messaging.content.search",
-] as const satisfies readonly BeeperLocalOperationName[]);
-
-type BeeperDirectReadV2Operation =
-  (typeof BEEPER_DIRECT_READ_V2_OPERATIONS)[number];
-
-function isBeeperDirectReadRecipe(
-  action: BeeperLocalOperationName,
-  contractVersion: number,
-): boolean {
-  return contractVersion === 2
-    && BEEPER_DIRECT_READ_V2_OPERATIONS.includes(
-      action as BeeperDirectReadV2Operation,
-    )
-    || contractVersion === 3 && action === "messaging.read";
-}
-
 class BeeperLocalCleanupUnverifiedError extends Error {
   constructor() {
     super("Beeper local CLI cleanup could not be proven; retry remains unsafe");
@@ -2871,7 +2850,7 @@ export async function executeBeeperDirectReadOperation(
   if (
     recipe.surface !== "beeper"
     || !isBeeperLocalOperation(recipe.action)
-    || !isBeeperDirectReadRecipe(recipe.action, recipe.contractVersion)
+    || !isBeeperDesktopLoopbackOperationContract(recipe.action, recipe.contractVersion)
   ) throw new Error("Beeper Desktop direct read recipe is not installed");
   options.operationDeadline?.throwIfUnavailable("Beeper Desktop direct read");
   const input = parseBeeperOperationInputForContract(
@@ -5165,7 +5144,7 @@ export async function executeBeeperLocalOperation(
   options.operationDeadline?.throwIfUnavailable(OPERATION_LABEL);
   try {
     if (
-      isBeeperDirectReadRecipe(action, recipe.contractVersion)
+      isBeeperDesktopLoopbackOperationContract(action, recipe.contractVersion)
     ) {
       return await executeBeeperDirectReadOperation(
         recipe,

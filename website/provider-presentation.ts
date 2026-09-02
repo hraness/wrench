@@ -4,6 +4,7 @@ import {
   BEEPER_CLI_V062_SURFACE_CONTRACT,
   BEEPER_DESKTOP_API_PIN,
   BEEPER_LOCAL_OPERATION_NAMES,
+  BEEPER_LOCAL_OPERATION_RUNTIME_TRANSPORTS,
 } from "../src/providers/beeper-local";
 import { WHATSAPP_PROTOCOL_PIN } from "../src/providers/whatsapp-web";
 import type {
@@ -84,6 +85,7 @@ export type ProviderDirectory = Readonly<{
 export type BeeperPresentationFacts = Readonly<{
   adapterVersion: string;
   artifactTable: string;
+  cliBackedOperationCount: number;
   cliCommandCount: number;
   cliCommit: string;
   cliReleaseManifestSha256: string;
@@ -94,11 +96,17 @@ export type BeeperPresentationFacts = Readonly<{
   cliVersion: string;
   desktopApiCommit: string;
   desktopApiVersion: string;
+  desktopLoopbackOperationCount: number;
   observedOperationCount: number;
   pageDescription: string;
   pageTitle: string;
   semanticContractVersionLabel: string;
   semanticContractVersions: readonly number[];
+}>;
+
+export type BeeperPresentationTransportCounts = Readonly<{
+  cliBackedOperationCount: number;
+  desktopLoopbackOperationCount: number;
 }>;
 
 export type WhatsAppPresentationFacts = Readonly<{
@@ -112,9 +120,35 @@ export type WhatsAppPresentationFacts = Readonly<{
   wacliVersion: typeof WHATSAPP_PROTOCOL_PIN.version;
 }>;
 
+export const BEEPER_PRESENTATION_TRANSPORT_COUNTS = Object.freeze(
+  BEEPER_LOCAL_OPERATION_NAMES.reduce<BeeperPresentationTransportCounts>(
+    (counts, operation) => {
+      const transport = BEEPER_LOCAL_OPERATION_RUNTIME_TRANSPORTS[operation];
+      return transport === "desktop-loopback"
+        ? Object.freeze({
+          ...counts,
+          desktopLoopbackOperationCount: counts.desktopLoopbackOperationCount + 1,
+        })
+        : Object.freeze({
+          ...counts,
+          cliBackedOperationCount: counts.cliBackedOperationCount + 1,
+        });
+    },
+    Object.freeze({ cliBackedOperationCount: 0, desktopLoopbackOperationCount: 0 }),
+  ),
+);
+
+if (
+  BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount
+    + BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount
+  !== BEEPER_LOCAL_OPERATION_NAMES.length
+  || BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount < 1
+  || BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount < 1
+) throw new Error("Beeper presentation runtime transport classification is incomplete");
+
 export const BEEPER_PAGE_METADATA = Object.freeze({
   description:
-    `Use ${BEEPER_LOCAL_OPERATION_NAMES.length} supported Wrench actions with one connected Beeper Desktop account: 27 CLI-backed operations and five fixed Desktop loopback reads.`,
+    `Use ${BEEPER_LOCAL_OPERATION_NAMES.length} supported Wrench actions with one connected Beeper Desktop account: ${BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount} CLI-backed operations and ${BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount} fixed Desktop loopback reads.`,
   title:
     `Beeper support in Wrench: ${BEEPER_LOCAL_OPERATION_NAMES.length} supported actions`,
 } as const);
@@ -427,7 +461,7 @@ export function renderProviderOverviewCards(directory: ProviderDirectory): strin
     `<p class="provider-capabilities">${entry.capabilities.map(escapeHtml).join(" · ")}</p>`,
     `<p class="provider-transport">${entry.transports.map(transportLabel).join(" + ")}</p>`,
     entry.surfaceId === "beeper"
-      ? '<p class="provider-feature-copy">32 reviewed actions: 27 through one pinned CLI and five fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.</p>'
+      ? `<p class="provider-feature-copy">${String(BEEPER_LOCAL_OPERATION_NAMES.length)} reviewed actions: ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount)} through one pinned CLI and ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount)} fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.</p>`
       : "",
     "</article>",
   ].join("")).join("");
@@ -576,6 +610,7 @@ export function createBeeperPresentationFacts(
   return Object.freeze({
     adapterVersion: adapterIdentity.version,
     artifactTable: renderBeeperArtifactTable(),
+    cliBackedOperationCount: BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount,
     cliCommandCount: Object.keys(BEEPER_CLI_COMMAND_COVERAGE).length,
     cliCommit: BEEPER_CLI_PIN.commit,
     cliReleaseManifestSha256: BEEPER_CLI_PIN.releaseManifestSha256,
@@ -587,6 +622,8 @@ export function createBeeperPresentationFacts(
     cliVersion: BEEPER_CLI_PIN.version,
     desktopApiCommit: BEEPER_DESKTOP_API_PIN.commit,
     desktopApiVersion: BEEPER_DESKTOP_API_PIN.version,
+    desktopLoopbackOperationCount:
+      BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount,
     observedOperationCount: beeper.observedCount,
     pageDescription: BEEPER_PAGE_METADATA.description,
     pageTitle: BEEPER_PAGE_METADATA.title,

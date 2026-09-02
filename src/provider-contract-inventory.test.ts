@@ -265,7 +265,7 @@ describe("durable provider contract inventory", () => {
         rows: 322,
         sha256: predecessorDefaultInventorySha256,
         currentOnlyRows: 53,
-        currentOnlySha256: "96ca3906f6b7916d6c77122e80061e9db2d1f1bef82e2f676e10bd3ab976e37c",
+        currentOnlySha256: "65c204bc77b831ea75cd8514d7d083b128feb5e1fa995075476b4b0d5e4c8656",
         legacyRows: [
           322,
           322,

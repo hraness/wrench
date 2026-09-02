@@ -68,9 +68,11 @@ const releaseRefWriterHelperUrl = new URL("./release-ref-writer.mjs", import.met
 const providerOutcomeHelperUrl = new URL("./release-provider-outcome.mjs", import.meta.url);
 const manifestUrl = new URL("../package.json", import.meta.url);
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
+const standaloneSmokeUrl = new URL("./standalone-smoke.ts", import.meta.url);
 const packageArtifactUrl = new URL("./package-artifact.ts", import.meta.url);
 const packageBudgetUrl = new URL("./package-budget.ts", import.meta.url);
 const packageIdentityUrl = new URL("./npm-package-identity.ts", import.meta.url);
+const tsconfigUrl = new URL("../tsconfig.json", import.meta.url);
 const publishingGuideUrl = new URL("../docs/publishing.md", import.meta.url);
 const agentGuideUrl = new URL("../AGENTS.md", import.meta.url);
 const websiteAgentGuideUrl = new URL("../website/AGENTS.md", import.meta.url);
@@ -80,6 +82,33 @@ const changelogUrl = new URL("../CHANGELOG.md", import.meta.url);
 const skillInstallGuideUrl = new URL("../skills/wrench/references/install.md", import.meta.url);
 const npmRegistry = "https://registry.npmjs.org";
 const repository = fileURLToPath(new URL("../", import.meta.url));
+const publicExportKeys = Object.freeze([
+  ".",
+  "./client",
+  "./beeper",
+  "./apple-photos",
+  "./whatsapp",
+  "./omni",
+  "./messaging",
+]);
+const publicImportSpecifiers = Object.freeze([
+  "@hraness/wrench",
+  "@hraness/wrench/client",
+  "@hraness/wrench/beeper",
+  "@hraness/wrench/apple-photos",
+  "@hraness/wrench/whatsapp",
+  "@hraness/wrench/omni",
+  "@hraness/wrench/messaging",
+]);
+const publicDistEntrypoints = Object.freeze([
+  "dist/index.js",
+  "dist/client.js",
+  "dist/beeper-client.js",
+  "dist/apple-photos-client.js",
+  "dist/whatsapp-client.js",
+  "dist/omni-client.js",
+  "dist/messaging.js",
+]);
 
 function workflowStepScript(workflow: string, name: string): string {
   const stepMarker = `      - name: ${name}\n`;
@@ -857,7 +886,7 @@ describe("npm publication contract", () => {
         (MAX_UNPACKED_BYTES + MAX_PACKED_ENTRIES * 1_023 + 1_024) / 512,
       ) * 512,
     );
-    expect(MAX_PACKAGE_TAR_BYTES).toBe(12_491_776);
+    expect(MAX_PACKAGE_TAR_BYTES).toBe(12_387_840);
     expect(MAX_PACKAGE_TAR_BYTES % 512).toBe(0);
     expect(artifact).toContain("maxOutputLength: MAX_PACKAGE_TAR_BYTES");
     expect(artifact).not.toContain("const maximumTarBytes");
@@ -915,24 +944,28 @@ describe("npm publication contract", () => {
 
     expect(artifact).toContain('from "./package-budget.js"');
     expect(smoke).toContain('from "./package-budget.js"');
+    expect(budget).toContain("two npm 11.19.0 packs");
+    expect(budget).toContain("2,157,644 packed bytes");
+    expect(budget).toContain("11,909,660 unpacked bytes, and 451 files");
     expect(budget).toContain(
-      "packed the rebased v0.16.2 Beeper direct-read candidate",
+      "9091a5ed7367073df1dc255933cf49f077f31257d51f67b4b2af43958df531bc",
     );
-    expect(budget).toContain("11,320,511 unpacked bytes, and 437 files");
-    expect(budget).toContain("earlier v0.16.2 payload measured a 3,543-byte");
-    expect(budget).toContain("2,052,563 packed bytes");
-    expect(MAX_PACKED_BYTES).toBe(2_075_000);
-    expect(MAX_PACKED_FILES).toBe(450);
-    expect(MAX_UNPACKED_BYTES).toBe(11_425_000);
+    expect(budget).toContain("measured a 3,543-byte Linux/macOS gzip spread");
+    expect(budget).toContain("Keep 7,356 packed bytes");
+    expect(budget).toContain("15,340 unpacked bytes of bounded headroom");
+    expect(MAX_PACKED_BYTES).toBe(2_165_000);
+    expect(MAX_PACKED_ENTRIES).toBe(451);
+    expect(MAX_PACKED_FILES).toBe(451);
+    expect(MAX_UNPACKED_BYTES).toBe(11_925_000);
     expect(Object.isFrozen(packageArtifactBudget)).toBe(true);
     for (const range of Object.values(packageArtifactBudget)) {
       expect(Object.isFrozen(range)).toBe(true);
     }
     expect(packageArtifactBudget).toEqual({
-      entryCount: { min: 350, max: 450 },
-      fileCount: { min: 350, max: 450 },
-      packedBytes: { min: 1_600_000, max: 2_075_000 },
-      unpackedBytes: { min: 9_000_000, max: 11_425_000 },
+      entryCount: { min: 451, max: 451 },
+      fileCount: { min: 451, max: 451 },
+      packedBytes: { min: 1_600_000, max: 2_165_000 },
+      unpackedBytes: { min: 9_000_000, max: 11_925_000 },
     });
   });
 
@@ -947,15 +980,85 @@ describe("npm publication contract", () => {
     });
   });
 
-  test("keeps the reviewed package file inventory unique", async () => {
-    const value: unknown = JSON.parse(await readFile(manifestUrl, "utf8"));
+  test("keeps the exact seven public SDK entrypoints and required source inventory", async () => {
+    const [manifestSource, tsconfigSource, artifact, packageSmoke, standaloneSmoke]
+      = await Promise.all([
+        readFile(manifestUrl, "utf8"),
+        readFile(tsconfigUrl, "utf8"),
+        readFile(packageArtifactUrl, "utf8"),
+        readFile(packageSmokeUrl, "utf8"),
+        readFile(standaloneSmokeUrl, "utf8"),
+      ]);
+    const value: unknown = JSON.parse(manifestSource);
     expect(typeof value).toBe("object");
     expect(value).not.toBeNull();
-    const manifest = value as { readonly files?: unknown };
+    const manifest = value as { readonly exports?: unknown; readonly files?: unknown };
+    expect(typeof manifest.exports).toBe("object");
+    expect(manifest.exports).not.toBeNull();
+    expect(Object.keys(manifest.exports as object)).toEqual(publicExportKeys);
     expect(Array.isArray(manifest.files)).toBe(true);
     const files = manifest.files as readonly unknown[];
     expect(files.every((path) => typeof path === "string" && path.length > 0)).toBe(true);
     expect(new Set(files).size).toBe(files.length);
+    for (const requiredSource of [
+      "src/assets/adapters/beeper/wrench-web-adapter.v2.2.0.json",
+      "src/local-cli-surface-contract.ts",
+      "src/messaging.ts",
+    ] as const) {
+      expect(files).toContain(requiredSource);
+      expect(artifact).toContain(`"${requiredSource}"`);
+    }
+    const tsconfig: unknown = JSON.parse(tsconfigSource);
+    expect(
+      (tsconfig as {
+        readonly compilerOptions?: { readonly paths?: Record<string, unknown> };
+      }).compilerOptions?.paths,
+    ).toEqual({
+      "@hraness/wrench": ["./src/index.ts"],
+      "@hraness/wrench/client": ["./src/client.ts"],
+      "@hraness/wrench/beeper": ["./src/beeper-client.ts"],
+      "@hraness/wrench/apple-photos": ["./src/apple-photos-client.ts"],
+      "@hraness/wrench/whatsapp": ["./src/whatsapp-client.ts"],
+      "@hraness/wrench/omni": ["./src/omni-client.ts"],
+      "@hraness/wrench/messaging": ["./src/messaging.ts"],
+    });
+    for (const specifier of publicImportSpecifiers) {
+      expect(packageSmoke).toContain(`"${specifier}"`);
+      expect(standaloneSmoke).toContain(`"${specifier}"`);
+    }
+  });
+
+  test("keeps one truthful Wrench 0.16.3 changelog section", async () => {
+    const changelog = await readFile(changelogUrl, "utf8");
+    const unreleasedHeader = "## Unreleased\n";
+    const releaseHeader = "## 0.16.3 - 2026-09-02\n";
+    const unreleasedStart = changelog.indexOf(unreleasedHeader);
+    const releaseStart = changelog.indexOf(releaseHeader);
+
+    expect(changelog.match(/^## Unreleased$/gmu) ?? []).toHaveLength(1);
+    expect(changelog.match(/^## 0\.16\.3 - 2026-09-02$/gmu) ?? []).toHaveLength(1);
+    expect(unreleasedStart).toBeGreaterThan(-1);
+    expect(releaseStart).toBeGreaterThan(unreleasedStart);
+    expect(changelog.slice(unreleasedStart + unreleasedHeader.length, releaseStart).trim()).toBe("");
+
+    const nextReleaseStart = changelog.indexOf("\n## ", releaseStart + releaseHeader.length);
+    expect(nextReleaseStart).toBeGreaterThan(releaseStart);
+    const releaseSection = changelog.slice(releaseStart, nextReleaseStart);
+    for (const requiredFact of [
+      "Omarchy",
+      "production promotion",
+      "release App",
+      "Beeper",
+      "signed-in X account's bookmarks",
+      "Apple Photos",
+      "WhatsApp",
+    ] as const) {
+      expect(releaseSection).toContain(requiredFact);
+    }
+    expect(releaseSection.match(/\bX\b/gmu) ?? []).toHaveLength(1);
+    expect(releaseSection).not.toContain("CreateTweet");
+    expect(releaseSection).not.toContain("UserTweets");
+    expect(releaseSection).not.toContain("SearchTimeline");
   });
 
   test("separates read-only classification and verification from checkout-free terminal staging", async () => {
@@ -2256,13 +2359,7 @@ fi
     expect(publishScript).not.toContain("-f make_latest=true");
     expect(publishScript).not.toContain("gh release view");
     expect(publishScript).not.toContain("gh release create");
-    for (const checkedSurface of [
-      "dist/index.js",
-      "dist/client.js",
-      "dist/beeper-client.js",
-      "dist/omni-client.js",
-      "dist/messaging.js",
-    ] as const) {
+    for (const checkedSurface of publicDistEntrypoints) {
       expect(ciWorkflow).toContain(checkedSurface);
       expect(workflow).toContain(checkedSurface);
       expect(artifact).toContain(`"${checkedSurface}"`);

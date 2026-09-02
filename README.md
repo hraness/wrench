@@ -171,7 +171,8 @@ const plugin = candidate satisfies ProviderPluginDefinitionV1
 void plugin
 ```
 
-The package root exposes programmatic plugin types and bounded validators.
+The package exposes seven public TypeScript entrypoints. Its root exposes
+programmatic plugin types and bounded validators.
 `@hraness/wrench/client` exposes persistent-read and strict live-invocation
 helpers, `@hraness/wrench/beeper` exposes the body-free Beeper contact
 interaction export, `@hraness/wrench/apple-photos` exposes exact local Photos

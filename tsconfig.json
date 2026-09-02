@@ -26,6 +26,9 @@
       ],
       "@hraness/wrench/omni": [
         "./src/omni-client.ts"
+      ],
+      "@hraness/wrench/messaging": [
+        "./src/messaging.ts"
       ]
     },
     "verbatimModuleSyntax": true,

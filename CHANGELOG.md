@@ -20,6 +20,8 @@ coordinate that completed both checks.
   three-step proof, a capability fact grid, a verified install block, and
   explicit CLI, SDK, and Agent Skill paths while retaining canonical metadata
   and compact-layout coverage.
+- Publish an Omarchy desktop-root news take that keeps a session-wide host
+  privilege grant distinct from one named, release-attested Wrench operation.
 - Bind production promotion to the immutable npm and GitHub release, exact
   current-main workflow source, a one-repository release App, an explicit
   expected-old Git lease, and terminal Vercel outcome evidence. Keep the

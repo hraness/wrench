@@ -2725,6 +2725,20 @@ var BEEPER_LOCAL_CONTRACT_V2_OPERATIONS = Object.freeze([
   "messaging.read",
   "messaging.content.search"
 ]);
+var BEEPER_DESKTOP_LOOPBACK_V2_OPERATIONS = Object.freeze([
+  "accounts.list",
+  "messaging.search",
+  "conversations.read",
+  "messaging.read",
+  "messaging.content.search"
+]);
+function isBeeperDesktopLoopbackOperationContract(action, contractVersion) {
+  return contractVersion === 2 && BEEPER_DESKTOP_LOOPBACK_V2_OPERATIONS.includes(action) || contractVersion === 3 && action === "messaging.read";
+}
+var BEEPER_LOCAL_OPERATION_RUNTIME_TRANSPORTS = Object.freeze(Object.fromEntries(BEEPER_LOCAL_OPERATION_NAMES.map((operation) => [
+  operation,
+  isBeeperDesktopLoopbackOperationContract(operation, BEEPER_LOCAL_OPERATION_CONTRACT_VERSIONS[operation]) ? "desktop-loopback" : "official-cli"
+])));
 function beeperLocalSurfaceInputType(value) {
   if (value !== "string" && value !== "number" && value !== "boolean" && value !== "array" && value !== "file")
     throw new Error("Beeper adapter contains an unsupported operation input type");

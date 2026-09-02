@@ -1,12 +1,14 @@
-// npm 11.19.0 packed the converged v0.16.3 product candidate at 2,157,703
-// packed bytes, 11,909,013 unpacked bytes, and 451 files. Prior CI measured a
-// 3,543-byte Linux/macOS gzip spread. Keep bounded room for that observed
-// transport variance and small reviewed payload drift without admitting another
-// archive-sized expansion.
-export const MAX_PACKED_BYTES = 2_180_000;
-export const MAX_PACKED_ENTRIES = 455;
-export const MAX_PACKED_FILES = 455;
-export const MAX_UNPACKED_BYTES = 12_025_000;
+// After a clean Bun 1.3.14 build, two npm 11.19.0 packs of the converged
+// v0.16.3 product candidate were byte-identical: 2,157,644 packed bytes,
+// 11,909,660 unpacked bytes, and 451 files. Their SHA-256 was
+// 9091a5ed7367073df1dc255933cf49f077f31257d51f67b4b2af43958df531bc. Prior CI
+// measured a 3,543-byte Linux/macOS gzip spread. Keep 7,356 packed bytes and
+// 15,340 unpacked bytes of bounded headroom, while admitting no package-inventory
+// expansion.
+export const MAX_PACKED_BYTES = 2_165_000;
+export const MAX_PACKED_ENTRIES = 451;
+export const MAX_PACKED_FILES = 451;
+export const MAX_UNPACKED_BYTES = 11_925_000;
 
 const TAR_BLOCK_BYTES = 512;
 const TAR_ENTRY_ALLOWANCE_BYTES = TAR_BLOCK_BYTES + (TAR_BLOCK_BYTES - 1);
@@ -24,8 +26,8 @@ export const MAX_PACKAGE_TAR_BYTES = Math.ceil(
 ) * TAR_BLOCK_BYTES;
 
 export const packageArtifactBudget = Object.freeze({
-  entryCount: Object.freeze({ min: 350, max: MAX_PACKED_ENTRIES }),
-  fileCount: Object.freeze({ min: 350, max: MAX_PACKED_FILES }),
+  entryCount: Object.freeze({ min: MAX_PACKED_ENTRIES, max: MAX_PACKED_ENTRIES }),
+  fileCount: Object.freeze({ min: MAX_PACKED_FILES, max: MAX_PACKED_FILES }),
   packedBytes: Object.freeze({ min: 1_600_000, max: MAX_PACKED_BYTES }),
   unpackedBytes: Object.freeze({ min: 9_000_000, max: MAX_UNPACKED_BYTES }),
 });

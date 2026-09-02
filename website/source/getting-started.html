@@ -137,7 +137,7 @@ if (!isProviderPluginId(candidate.id)) {
 }
 
 const plugin = candidate satisfies ProviderPluginDefinitionV1</code></pre></div>
-          <p>The package root exposes plugin types and bounded validators. <code>@hraness/wrench/client</code> exposes persistent-read helpers, while <code>@hraness/wrench/omni</code> exposes normalized cross-provider reads. Importing these entrypoints does not start the CLI or inspect local state.</p>
+          <p>The package has seven public TypeScript entrypoints: <code>@hraness/wrench</code> for plugin types and bounded validators, <code>@hraness/wrench/client</code> for persistent reads and strict live invocation, <code>@hraness/wrench/beeper</code> for body-free contact interactions, <code>@hraness/wrench/apple-photos</code> for local Photos contact evidence, <code>@hraness/wrench/whatsapp</code> for the bounded private Message Like Me export, <code>@hraness/wrench/omni</code> for normalized cross-provider reads, and <code>@hraness/wrench/messaging</code> for agentic route discovery and resolution. Importing any entrypoint does not start the CLI. Importing the package root also does not inspect local state.</p>
         </section>
 
         <section aria-labelledby="developer-resources">

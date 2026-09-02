@@ -39,6 +39,15 @@ const archivedAdapterNamePattern =
   /^wrench(?:-web)?-adapter\.v([0-9]+\.[0-9]+\.[0-9]+)\.json$/u;
 const MAX_PACKED_ARCHIVED_UPGRADE_FAMILIES = 32;
 const PACKED_ARCHIVED_UPGRADE_COMMAND_TIMEOUT_MS = 30_000;
+const publicImportSpecifiers = Object.freeze([
+  "@hraness/wrench",
+  "@hraness/wrench/client",
+  "@hraness/wrench/beeper",
+  "@hraness/wrench/apple-photos",
+  "@hraness/wrench/whatsapp",
+  "@hraness/wrench/omni",
+  "@hraness/wrench/messaging",
+]);
 
 const packageRoot = resolve(import.meta.dir, "..");
 const cli = join(packageRoot, "src", "cli.ts");
@@ -640,6 +649,15 @@ try {
     if (existsSync(join(installedPackageRoot, "bun.lock"))) {
       throw new Error("packed Wrench unexpectedly contains its repository lock");
     }
+    await runCommand(
+      "import every packed public SDK entrypoint",
+      [
+        process.execPath,
+        "--eval",
+        `await Promise.all(${JSON.stringify(publicImportSpecifiers)}.map((specifier) => import(specifier)))`,
+      ],
+      consumer,
+    );
     const installedManifest = requireJsonObject(
       "packed Wrench manifest",
       await Bun.file(join(installedPackageRoot, "package.json")).json(),

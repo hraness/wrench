@@ -7,6 +7,7 @@ import {
 } from "./provider-capability-attestation";
 import {
   BEEPER_PAGE_METADATA,
+  BEEPER_PRESENTATION_TRANSPORT_COUNTS,
   createBeeperPresentationFacts,
   createProviderDirectory,
   createWhatsAppPresentationFacts,
@@ -106,6 +107,8 @@ describe("provider presentation", () => {
     const facts = createBeeperPresentationFacts(directory);
     expect(facts).toMatchObject({
       adapterVersion: "2.3.0",
+      cliBackedOperationCount:
+        BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount,
       cliCommandCount: 101,
       cliCommit: "a416af06023449a87312dc11e54643fd9dc94b8c",
       cliReleaseUrl: "https://github.com/beeper/cli/releases/tag/v0.6.2",
@@ -116,12 +119,17 @@ describe("provider presentation", () => {
       cliVersion: "0.6.2",
       desktopApiCommit: "b9c1714410139c2139b597338cd002d785653e85",
       desktopApiVersion: "5.0.0",
+      desktopLoopbackOperationCount:
+        BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount,
       observedOperationCount: 32,
       pageDescription: BEEPER_PAGE_METADATA.description,
       pageTitle: BEEPER_PAGE_METADATA.title,
       semanticContractVersionLabel: "Contract versions 1, 2, 3",
       semanticContractVersions: [1, 2, 3],
     });
+    expect(
+      facts.cliBackedOperationCount + facts.desktopLoopbackOperationCount,
+    ).toBe(facts.observedOperationCount);
     expect(facts.artifactTable.match(/<tbody><tr>/gu)).toHaveLength(1);
     expect(facts.artifactTable.match(/<tr>/gu)).toHaveLength(5);
     expect(facts.artifactTable).toContain("macOS arm64");
@@ -185,7 +193,7 @@ describe("provider presentation", () => {
     expect(cards).toContain("32 supported actions");
     expect(cards).toContain("Accounts · Bridges · Contacts · Conversations · Messages · Presence · Reactions");
     expect(cards).toContain(
-      "32 reviewed actions: 27 through one pinned CLI and five fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.",
+      `${String(directory.entries[0]?.observedCount)} reviewed actions: ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount)} through one pinned CLI and ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount)} fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.`,
     );
     expect(cards).not.toContain("other supported actions");
     expect(cards).not.toContain("{{");

@@ -617,6 +617,10 @@ function renderTemplate(
     ["{{WRENCH_SKILL_INSTALL_COMMAND_BUNX}}", skillInstallCommands.bunx],
     ["{{WRENCH_VERSION}}", identity.version],
     ["{{BEEPER_ADAPTER_VERSION}}", options.beeperFacts.adapterVersion],
+    [
+      "{{BEEPER_CLI_BACKED_OPERATION_COUNT}}",
+      String(options.beeperFacts.cliBackedOperationCount),
+    ],
     ["{{BEEPER_CLI_COMMAND_COUNT}}", String(options.beeperFacts.cliCommandCount)],
     ["{{BEEPER_CLI_COMMIT}}", options.beeperFacts.cliCommit],
     ["{{BEEPER_CLI_RELEASE_MANIFEST_SHA256}}", options.beeperFacts.cliReleaseManifestSha256],
@@ -627,6 +631,10 @@ function renderTemplate(
     ["{{BEEPER_CLI_VERSION}}", options.beeperFacts.cliVersion],
     ["{{BEEPER_DESKTOP_API_COMMIT}}", options.beeperFacts.desktopApiCommit],
     ["{{BEEPER_DESKTOP_API_VERSION}}", options.beeperFacts.desktopApiVersion],
+    [
+      "{{BEEPER_DESKTOP_LOOPBACK_OPERATION_COUNT}}",
+      String(options.beeperFacts.desktopLoopbackOperationCount),
+    ],
     ["{{BEEPER_OBSERVED_OPERATION_COUNT}}", String(options.beeperFacts.observedOperationCount)],
     ["{{BEEPER_PAGE_DESCRIPTION}}", options.beeperFacts.pageDescription],
     ["{{BEEPER_PAGE_TITLE}}", options.beeperFacts.pageTitle],
