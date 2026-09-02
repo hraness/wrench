@@ -29,6 +29,7 @@ import {
   revokeReleaseAppTokenWithConvergence,
   WRENCH_REPOSITORY_ID,
   withReleaseAppToken,
+  withReleaseAppTokenFromEnvironment,
 } from "./release-app-token.mjs";
 import {
   assertReleaseTagNewerThanPublished,
@@ -2235,6 +2236,7 @@ fi
     revoke: revokeWithFetch,
   }, operation);
 }`);
+    expect(withReleaseAppTokenFromEnvironment.length).toBe(3);
     expect(releaseAppTokenSource.match(/^    revoke: revokeWithFetch,$/gmu) ?? [])
       .toHaveLength(1);
     const revocationImplementationStart = releaseAppTokenSource.indexOf(
@@ -2251,7 +2253,7 @@ fi
       revocationImplementationEnd,
     );
     expect(createHash("sha256").update(revocationImplementationSource).digest("hex")).toBe(
-      "75fe2bb5cc946297507f0a1ffdc7736fe27793ddb9c4b6a69e915927c5c37681",
+      "d33def2bf83f6166d0048e5715eec79076c25ef92af602729a9e4d1bc3410cb4",
     );
     expect(revocationImplementationSource.match(/input\.fetchImplementation/gu) ?? [])
       .toHaveLength(3);
@@ -2681,6 +2683,145 @@ fi
       return Object.freeze({ harness, receipt });
     }
 
+    const environmentWrapperHarness = createRevocationHarness(stableDenials);
+    const environmentWrapperEvents: string[] = [];
+    const environmentWrapperFetch = async (request: URL | RequestInfo, init?: RequestInit) => {
+      expect(request).toBeInstanceOf(URL);
+      const url = new URL(String(request));
+      const method = init?.method ?? "GET";
+      environmentWrapperEvents.push(`${method} ${url.pathname}`);
+      if (
+        url.pathname === "/installation/token" ||
+        url.pathname === "/installation/repositories"
+      ) {
+        return environmentWrapperHarness.fetchImplementation(request, init);
+      }
+      expect(url.origin).toBe("https://api.github.com");
+      expect(url.search).toBe("");
+      expect(url.hash).toBe("");
+      expect(url.username).toBe("");
+      expect(url.password).toBe("");
+      expect(init?.redirect).toBe("error");
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      expect(init?.signal?.aborted).toBe(false);
+      const headers = init?.headers as Readonly<Record<string, string>> | undefined;
+      expect(headers?.Accept).toBe("application/vnd.github+json");
+      expect(headers?.Authorization).toBe(`Bearer ${jwt}`);
+      expect(headers?.["User-Agent"]).toBe("wrench-release-writer");
+      expect(headers?.["X-GitHub-Api-Version"]).toBe("2022-11-28");
+      const jsonResponse = (body: unknown, status: number, date?: string) => new Response(
+        JSON.stringify(body),
+        { headers: date === undefined ? undefined : { Date: date }, status },
+      );
+      if (url.pathname === "/app") {
+        expect(method).toBe("GET");
+        expect(Object.keys(init ?? {}).sort()).toEqual([
+          "headers",
+          "method",
+          "redirect",
+          "signal",
+        ]);
+        expect(Object.keys(headers ?? {}).sort()).toEqual([
+          "Accept",
+          "Authorization",
+          "User-Agent",
+          "X-GitHub-Api-Version",
+        ]);
+        return jsonResponse(appIdentity, 200);
+      }
+      if (url.pathname === `/app/installations/${String(configuration.installationId)}`) {
+        expect(method).toBe("GET");
+        expect(Object.keys(init ?? {}).sort()).toEqual([
+          "headers",
+          "method",
+          "redirect",
+          "signal",
+        ]);
+        expect(Object.keys(headers ?? {}).sort()).toEqual([
+          "Accept",
+          "Authorization",
+          "User-Agent",
+          "X-GitHub-Api-Version",
+        ]);
+        return jsonResponse(installation, 200);
+      }
+      expect(url.pathname).toBe(
+        `/app/installations/${String(configuration.installationId)}/access_tokens`,
+      );
+      expect(method).toBe("POST");
+      expect(Object.keys(init ?? {}).sort()).toEqual([
+        "body",
+        "headers",
+        "method",
+        "redirect",
+        "signal",
+      ]);
+      expect(Object.keys(headers ?? {}).sort()).toEqual([
+        "Accept",
+        "Authorization",
+        "Content-Type",
+        "User-Agent",
+        "X-GitHub-Api-Version",
+      ]);
+      expect(headers?.["Content-Type"]).toBe("application/json");
+      expect(init?.body).toBe(JSON.stringify(releaseAppTokenRequestBody()));
+      return jsonResponse(response, 201, "Sun, 30 Aug 2026 01:00:00 GMT");
+    };
+    const originalFetch = globalThis.fetch;
+    const originalDateNow = Date.now;
+    const originalStdoutWrite = process.stdout.write;
+    let environmentWrapperResult: string | undefined;
+    try {
+      globalThis.fetch = environmentWrapperFetch as typeof fetch;
+      Date.now = () => Date.parse("2026-08-30T01:00:00Z");
+      process.stdout.write = ((chunk: string | Uint8Array) => {
+        expect(String(chunk)).toBe(`::add-mask::${token}\n`);
+        environmentWrapperEvents.push(`mask:${token}`);
+        return true;
+      }) as typeof process.stdout.write;
+      environmentWrapperResult = await withReleaseAppTokenFromEnvironment(
+        environment,
+        async (value, receipt) => {
+          environmentWrapperEvents.push(`operation:${value}`);
+          expect(receipt).toEqual({
+            appId: configuration.appId,
+            appSlug: configuration.appSlug,
+            clientId: configuration.clientId,
+            expiresAt: response.expires_at,
+            installationId: configuration.installationId,
+            repositoryId: WRENCH_REPOSITORY_ID,
+          });
+          return "environment-wrapper-advanced";
+        },
+        async (receipt) => {
+          environmentWrapperEvents.push(`revoked:${JSON.stringify(receipt)}`);
+        },
+      );
+    } finally {
+      process.stdout.write = originalStdoutWrite;
+      Date.now = originalDateNow;
+      globalThis.fetch = originalFetch;
+    }
+    environmentWrapperEvents.push(`return:${environmentWrapperResult}`);
+    expect(environmentWrapperEvents).toEqual([
+      "GET /app",
+      `GET /app/installations/${String(configuration.installationId)}`,
+      `POST /app/installations/${String(configuration.installationId)}/access_tokens`,
+      `mask:${token}`,
+      `operation:${token}`,
+      "DELETE /installation/token",
+      "GET /installation/repositories",
+      "GET /installation/repositories",
+      `revoked:${JSON.stringify(firstTwoDenialsReceipt)}`,
+      "return:environment-wrapper-advanced",
+    ]);
+    expect(environmentWrapperHarness.calls).toEqual([
+      "DELETE /installation/token",
+      "GET /installation/repositories",
+      "GET /installation/repositories",
+    ]);
+    expect(environmentWrapperHarness.timeouts).toEqual([]);
+
     expect(RELEASE_APP_REVOCATION_OBSERVATION_OFFSETS_MILLISECONDS).toEqual([
       0,
       250,
@@ -2956,7 +3097,7 @@ fi
       1_000,
     ]);
 
-    for (const authoritativeBegin of [250, 251, 30_000, 30_001] as const) {
+    for (const authoritativeBegin of [250, 251] as const) {
       const closedBoundary = createRevocationHarness(stableDenials, {
         nowSamples: [0, 1, 2, authoritativeBegin, 30_002],
       });
@@ -2973,6 +3114,93 @@ fi
       expect(closedBoundary.observationCount()).toBe(0);
       expect(closedBoundary.sleepCalls).toEqual([]);
       expect(closedBoundary.timeouts).toEqual([10_000]);
+    }
+
+    for (const authoritativeBegin of [30_000, 30_001] as const) {
+      const finalSlotBoundary = createRevocationHarness(stableDenials, {
+        nowSamples: [
+          0,
+          250,
+          500,
+          1_000,
+          2_000,
+          4_000,
+          8_000,
+          16_000,
+          24_000,
+          29_000,
+          29_000,
+          29_000,
+          authoritativeBegin,
+        ],
+      });
+      await expect(revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: finalSlotBoundary.createTimeoutSignal,
+        expiresAt: response.expires_at,
+        fetchImplementation: finalSlotBoundary.fetchImplementation,
+        now: finalSlotBoundary.now,
+        sleep: finalSlotBoundary.sleep,
+        token,
+      })).rejects.toThrow("did not converge within the bounded operational window");
+      expect(finalSlotBoundary.calls).toEqual(["DELETE /installation/token"]);
+      expect(finalSlotBoundary.observationCount()).toBe(0);
+      expect(finalSlotBoundary.sleepCalls).toEqual([]);
+      expect(finalSlotBoundary.timeouts).toEqual([10_000]);
+    }
+
+    for (const authoritativeBegin of [30_000, 30_001] as const) {
+      const finalSlotAfterObservations = createRevocationHarness(
+        Array.from({ length: 9 }, () => observation(200)),
+        {
+          deleteObservation: observation(204, {
+            body: "empty",
+            fetchLatencyMilliseconds: 0,
+          }),
+        },
+      );
+      let finalSlotClockReads = 0;
+      const finalSlotNow = () => {
+        if (
+          finalSlotAfterObservations.observationCount() === 9 &&
+          finalSlotAfterObservations.currentClock() === 29_000
+        ) {
+          finalSlotClockReads += 1;
+          if (finalSlotClockReads === 2) {
+            finalSlotAfterObservations.advanceClock(authoritativeBegin - 29_000);
+          }
+        }
+        return finalSlotAfterObservations.currentClock();
+      };
+      await expect(revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: finalSlotAfterObservations.createTimeoutSignal,
+        expiresAt: response.expires_at,
+        fetchImplementation: finalSlotAfterObservations.fetchImplementation,
+        now: finalSlotNow,
+        sleep: finalSlotAfterObservations.sleep,
+        token,
+      })).rejects.toThrow("did not converge within the bounded operational window");
+      expect(finalSlotAfterObservations.calls).toEqual([
+        "DELETE /installation/token",
+        ...Array.from({ length: 9 }, () => "GET /installation/repositories"),
+      ]);
+      expect(finalSlotAfterObservations.observationCount()).toBe(9);
+      expect(finalSlotAfterObservations.sleepCalls).toEqual([
+        249,
+        249,
+        499,
+        999,
+        1_999,
+        3_999,
+        7_999,
+        7_999,
+        4_999,
+      ]);
+      expect(finalSlotAfterObservations.timeouts).toEqual([
+        ...Array.from({ length: 9 }, () => 10_000),
+        6_000,
+      ]);
     }
 
     const boundaryTimeoutHarness = createRevocationHarness(
@@ -3459,6 +3687,67 @@ fi
       observation(401),
     ])).rejects.toThrow("denied revocation observation is malformed");
 
+    const oneSecondBeforeExpiry = "Sun, 30 Aug 2026 01:59:59 GMT";
+    const acceptedDeleteDate = await runRevocationCase(stableDenials, {
+      deleteObservation: observation(204, {
+        body: "empty",
+        date: oneSecondBeforeExpiry,
+      }),
+    });
+    expect(acceptedDeleteDate.receipt).toEqual(firstTwoDenialsReceipt);
+    const acceptedAuthorizedDate = await runRevocationCase([
+      observation(200, { date: oneSecondBeforeExpiry }),
+      observation(401, { body: "empty", date: oneSecondBeforeExpiry }),
+      observation(401, { body: "text", date: oneSecondBeforeExpiry }),
+    ]);
+    expect(acceptedAuthorizedDate.receipt).toEqual({
+      converged: true,
+      observationCount: 3,
+      propagationObserved: true,
+      stableDenials: 2,
+    });
+    const acceptedDeniedDate = await runRevocationCase([
+      observation(401, { body: "empty", date: oneSecondBeforeExpiry }),
+      observation(401, { body: "text", date: oneSecondBeforeExpiry }),
+    ]);
+    expect(acceptedDeniedDate.receipt).toEqual(firstTwoDenialsReceipt);
+    for (const [label, observations, overrides] of [
+      [
+        "revocation authority time proof is malformed",
+        stableDenials,
+        {
+          deleteObservation: observation(204, {
+            body: "empty",
+            date: "Sun, 30 Aug 2026 02:00:00 GMT",
+          }),
+        },
+      ],
+      [
+        "authorized revocation observation is malformed",
+        [observation(200, { date: "Sun, 30 Aug 2026 02:00:00 GMT" })],
+        {},
+      ],
+      [
+        "denied revocation observation is malformed",
+        [observation(401, {
+          body: "empty",
+          date: "Sun, 30 Aug 2026 02:00:00 GMT",
+        })],
+        {},
+      ],
+    ] as const) {
+      const equalityBoundary = createRevocationHarness(observations, overrides);
+      await expect(revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: equalityBoundary.createTimeoutSignal,
+        expiresAt: response.expires_at,
+        fetchImplementation: equalityBoundary.fetchImplementation,
+        now: equalityBoundary.now,
+        sleep: equalityBoundary.sleep,
+        token,
+      })).rejects.toThrow(label);
+    }
+
     for (const [expiresAt, deleteObservation] of [
       ["malformed", observation(204, { body: "empty" })],
       [response.expires_at, observation(204, { body: "empty", date: "malformed" })],
@@ -3716,10 +4005,16 @@ fi
     ) ?? []).toHaveLength(1);
     expect(providerSource.match(/await withReleaseAppTokenFromEnvironment\(/gu) ?? [])
       .toHaveLength(1);
-    expect(productionAdvanceSource).toContain(
-      "await withReleaseAppTokenFromEnvironment(this.#environment, async (token) => {",
-    );
-    expect(productionAdvanceSource).toContain("advanceWebsiteProductionRefFromEnvironment");
+    expect(productionAdvanceSource.trimEnd()).toBe(`async advanceRef(repository, expectedOldSha, verifiedSha, verifiedTag) {
+    await withReleaseAppTokenFromEnvironment(this.#environment, async (token) => {
+      advanceWebsiteProductionRefFromEnvironment({
+        environment: Object.freeze({ WRENCH_RELEASE_APP_TOKEN: token }),
+        expectedOldSha,
+        repository,
+        verifiedSha,
+        verifiedTag,
+      });
+    });`);
 
     for (const overrides of [
       { GITHUB_API_URL: "https://github.example.invalid" },

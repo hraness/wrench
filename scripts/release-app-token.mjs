@@ -609,7 +609,7 @@ async function fetchRevocationDeletionResponse(input, request) {
 async function fetchRevocationObservationResponse(input, request) {
   const before = exactMonotonicNow(input.now, input.lastNow.value, `${request.label} begin`);
   input.lastNow.value = before;
-  if (before >= request.deadline || before >= request.nextTarget) {
+  if (before >= Math.min(request.deadline, request.nextTarget)) {
     return Object.freeze({ before, skipped: true });
   }
   const timeoutMilliseconds = exactTimeoutMilliseconds(request.deadline - before);
