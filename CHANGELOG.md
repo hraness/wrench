@@ -36,24 +36,9 @@ coordinate that completed both checks.
   index without query text. Keep the prior v2.2.0, v2.1.0, and v2.0.0 adapter
   manifests as exact upgrade baselines, and retain the local-materialization
   caveat rather than claiming complete remote provider history.
-- Accept one `x-web` `posts.publish` body up to the reviewed CreateTweet
-  25000-unit bound without truncation. Bind long-form text from `note_tweet`
-  when CreateTweet returns a short `full_text` preview. Thread and reply item
-  caps stay 280.
-- Refresh the reviewed X UserTweets and SearchTimeline operation coordinates
-  from current authenticated bundle evidence.
 - Export one bounded page of the signed-in X account's bookmarks, keyed by
   `post_id`, while resolving the reviewed Bookmarks operation across overlapping
   webpack maps.
-- Recover an orphaned same-boot browser session through a durable doctor lease
-  bound to its exact daemon start identity, launch, CDP endpoint, and private
-  root generations. Prepared, launch-intent, quiescent, and per-root removal
-  phases make close, TERM, and deletion recovery crash-resumable. Changed or
-  unprovable state remains fail-closed without making reboot part of the
-  recovery contract.
-- Return a bound `cleanup-required` result when durable realm admission blocks
-  an R1 read before dispatch. JSON callers retain the no-retry category while
-  the cleanup-unsafe claim remains fail-closed.
 - Fail closed before every Vercel build unless a true local invocation has no
   Vercel signal or the checked-in release marker and exact platform state agree.
 - Resolve the production release tag through a separately byte-bounded GitHub
