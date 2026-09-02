@@ -1,5 +1,5 @@
-// npm 11.19.0 packed the converged v0.16.3 product candidate at 2,157,702
-// packed bytes, 11,909,004 unpacked bytes, and 451 files. Prior CI measured a
+// npm 11.19.0 packed the converged v0.16.3 product candidate at 2,157,703
+// packed bytes, 11,909,013 unpacked bytes, and 451 files. Prior CI measured a
 // 3,543-byte Linux/macOS gzip spread. Keep bounded room for that observed
 // transport variance and small reviewed payload drift without admitting another
 // archive-sized expansion.
