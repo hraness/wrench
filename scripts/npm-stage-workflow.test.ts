@@ -5815,6 +5815,38 @@ fi
       promotionReceipt: wrongMode,
       sleep: async () => {},
     })).rejects.toThrow("releaseAppRevocation contradicts its mode");
+    const wrongTransition = {
+      ...(promotion as Readonly<Record<string, ProviderJson>>),
+      mode: "already-exact",
+      releaseAppRevocation: null,
+    };
+    await expect(waitForProviderOutcome({
+      api: new ProviderApiFixture(),
+      baselineReceipt: baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: wrongTransition,
+      sleep: async () => {},
+    })).rejects.toThrow("promotion receipt mode contradicts the recorded ref transition");
+    const immediateRevocation = {
+      ...(promotion as Readonly<Record<string, ProviderJson>>),
+      releaseAppRevocation: {
+        ...providerReleaseAppRevocation,
+        observationCount: 2,
+        propagationObserved: false,
+      },
+    };
+    await expect(waitForProviderOutcome({
+      api: waitCase(
+        providerDeployment(20, candidateAt),
+        [[candidateStatus(201, "success", successAt)]],
+      ),
+      baselineReceipt: baseline,
+      maxPolls: 1,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: immediateRevocation,
+      sleep: async () => {},
+    })).resolves.toEqual({ deploymentId: 20, statusId: 201 });
     const missingRevocation = {
       ...(promotion as Readonly<Record<string, ProviderJson>>),
     } as Record<string, ProviderJson>;
