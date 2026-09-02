@@ -95,7 +95,8 @@ version identities, action boundaries, export workflows, and exclusions.
 - **Local custody.** Archives remain inspectable and exact provider snapshots
   remain encrypted. Verified cached reads can work without a provider roundtrip.
 - **Honest mutations.** Consequential writes require an exact preview and durable
-  dispatch evidence. An indeterminate write is reconciled and never blindly retried.
+  dispatch evidence. An indeterminate write is never blindly retried and remains
+  unsettled until separate exact evidence can reconcile it.
 - **Content-bound trust.** Portable plugin approval applies to one verified
   content-addressed bundle, so changed code requires a new trust decision.
 

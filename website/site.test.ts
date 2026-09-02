@@ -181,6 +181,7 @@ describe("wrench.rip static site", () => {
       readFile(join(repositoryRoot, "middleware.ts"), "utf8"),
     ]);
     const html = pages[0]!.html;
+    const readme = await readFile(join(repositoryRoot, "README.md"), "utf8");
     const cssAsset = /<link rel="stylesheet" href="([^"?]+)">/u.exec(html)?.[1];
     expect(cssAsset).toMatch(/^\/assets\/styles-[a-f0-9]{12}\.css$/u);
     const builtCss = await readFile(join(websiteRoot, "dist", cssAsset!.slice(1)), "utf8");
@@ -316,6 +317,12 @@ describe("wrench.rip static site", () => {
     expect(guidesSection).not.toContain('class="card editorial-card"');
     expect(html.indexOf(argumentsSection ?? "")).toBeLessThan(html.indexOf(guidesSection ?? ""));
     expect(html).toContain("Give your coding agent bounded access to the web.");
+    const indeterminateWriteBoundary =
+      "An indeterminate write is never blindly retried and remains unsettled until separate exact evidence can reconcile it.";
+    for (const surface of [html, readme]) {
+      expect(surface.replaceAll(/\s+/gu, " ")).toContain(indeterminateWriteBoundary);
+      expect(surface).not.toContain("An indeterminate write is reconciled");
+    }
     expect(html).toContain('data-hraness-marketing="hero"');
     expect(html).toContain('data-hraness-marketing="install"');
     expect(html).toContain('data-hraness-marketing="interfaces"');
@@ -378,7 +385,8 @@ describe("wrench.rip static site", () => {
     expect(llms).toContain(
       "32 supported actions. Twenty-seven run through the pinned `@beeper/cli` 0.6.2 executable and five use fixed Desktop loopback reads.",
     );
-    expect(llms).toContain("Message actions are previewed and confirmed.");
+    expect(llms).toContain("Message mutations require preview and confirmation.");
+    expect(llms).not.toContain("Message actions are previewed and confirmed.");
     expect(llms).not.toContain("actions\u201427");
     expect(llms).toContain("pending message ID proves submission to Desktop only, not network delivery");
     expect(llms).toContain("Tagged `packages/cli/package.json` declares 0.6.1 and is provenance-only");
@@ -982,7 +990,8 @@ describe("wrench.rip static site", () => {
     expect(beeper?.html).toContain("does not call the CLI or SDK and never retries");
     expect(beeper?.html).not.toContain("--wait");
     expect(beeper?.html).not.toContain("terminal returned message ID");
-    expect(beeper?.html).toContain("Use Beeper directly for the lowest-friction access to its first-party breadth");
+    expect(beeper?.html).toContain("Use Beeper directly when you want its first-party breadth");
+    expect(beeper?.html).not.toContain("lowest-friction");
     expect(beeper?.html).toContain(
       'href="https://developers.beeper.com/desktop-api/mcp/">built-in Beeper Desktop MCP</a>',
     );
@@ -1039,7 +1048,7 @@ describe("wrench.rip static site", () => {
     });
     const agentFacingMessagingDocs = [
       beeper?.html ?? "",
-      await readFile(join(repositoryRoot, "README.md"), "utf8"),
+      readme,
       await readFile(
         join(repositoryRoot, "skills/wrench/references/messaging.md"),
         "utf8",
