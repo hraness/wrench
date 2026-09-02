@@ -2203,6 +2203,41 @@ fi
   });
 
   test("mints only one exact Wrench release-App token and always revokes it", async () => {
+    const releaseAppTokenSource = await readFile(releaseAppTokenHelperUrl, "utf8");
+    const revokeWithFetchSource = `async function revokeWithFetch(input) {
+  return revokeReleaseAppTokenWithConvergence({
+    apiUrl: input.apiUrl,
+    expiresAt: input.expiresAt,
+    token: input.token,
+  });
+}`;
+    expect(releaseAppTokenSource.match(/^async function revokeWithFetch\(input\) \{$/gmu) ?? [])
+      .toHaveLength(1);
+    expect(releaseAppTokenSource.match(/return revokeReleaseAppTokenWithConvergence\(/gu) ?? [])
+      .toHaveLength(1);
+    expect(releaseAppTokenSource).toContain(revokeWithFetchSource);
+    const environmentWrapperStart = releaseAppTokenSource.indexOf(
+      "export function withReleaseAppTokenFromEnvironment",
+    );
+    expect(environmentWrapperStart).toBeGreaterThan(0);
+    const environmentWrapperSource = releaseAppTokenSource.slice(environmentWrapperStart);
+    expect(environmentWrapperSource.trimEnd()).toBe(`export function withReleaseAppTokenFromEnvironment(environment, operation, onRevoked) {
+  return withReleaseAppToken({
+    environment,
+    inspect: inspectWithFetch,
+    inspectInstallation: inspectInstallationWithFetch,
+    mask(token) {
+      process.stdout.write(\`::add-mask::\${token}\\n\`);
+    },
+    mint: mintWithFetch,
+    nowMilliseconds: Date.now,
+    onRevoked,
+    revoke: revokeWithFetch,
+  }, operation);
+}`);
+    expect(releaseAppTokenSource.match(/^    revoke: revokeWithFetch,$/gmu) ?? [])
+      .toHaveLength(1);
+
     const { privateKey, publicKey } = generateKeyPairSync("rsa", {
       modulusLength: 2048,
       privateKeyEncoding: { format: "pem", type: "pkcs8" },
@@ -2277,7 +2312,7 @@ fi
       repository_selection: "selected",
       token,
     };
-    const immediateRevocationReceipt = Object.freeze({
+    const firstTwoDenialsReceipt = Object.freeze({
       converged: true,
       observationCount: 2,
       propagationObserved: false,
@@ -2348,7 +2383,7 @@ fi
       },
       async revoke(input: Readonly<{ token: string }>) {
         events.push(`revoke:${input.token}`);
-        return immediateRevocationReceipt;
+        return firstTwoDenialsReceipt;
       },
     }, async (value: string, receipt: Readonly<{ repositoryId: number }>) => {
       events.push(`operate:${value}`);
@@ -2384,6 +2419,7 @@ fi
       fetchLatencyMilliseconds?: number;
       location?: string;
       networkFailure?: "abort" | "pending" | true;
+      omitDate?: boolean;
       redirected?: boolean;
       requestId?: string;
       status: number;
@@ -2397,6 +2433,7 @@ fi
     function createRevocationHarness(
       observations: readonly RevocationObservation[],
       overrides: Readonly<{
+        auditEvents?: string[];
         deleteObservation?: RevocationObservation;
         initialClock?: number;
         nowSamples?: readonly number[];
@@ -2469,7 +2506,8 @@ fi
               : encoder.encode(JSON.stringify({ message: "Bad credentials" }));
             break;
         }
-        const headers: Record<string, string> = { Date: item.date ?? defaultDate };
+        const headers: Record<string, string> = {};
+        if (item.omitDate !== true) headers.Date = item.date ?? defaultDate;
         if (item.contentLength !== undefined) headers["Content-Length"] = item.contentLength;
         else if (item.body === "overflow") headers["Content-Length"] = String(1024 * 1024 + 1);
         if (item.location !== undefined) headers.Location = item.location;
@@ -2496,6 +2534,17 @@ fi
           headers,
           status: hasForbidden204Body ? 200 : item.status,
         });
+        if (overrides.auditEvents !== undefined) {
+          const responseHeaders = result.headers;
+          Object.defineProperty(result, "headers", {
+            value: Object.freeze({
+              get(name: string) {
+                overrides.auditEvents?.push(`header:${name.toLowerCase()}`);
+                return responseHeaders.get(name);
+              },
+            }),
+          });
+        }
         if (hasForbidden204Body) Object.defineProperty(result, "status", { value: 204 });
         if (item.redirected === true) {
           Object.defineProperty(result, "redirected", { value: true });
@@ -2503,11 +2552,35 @@ fi
         return result;
       };
       const fetchImplementation = async (request: URL | RequestInfo, init?: RequestInit) => {
+        expect(request).toBeInstanceOf(URL);
+        expect(Object.keys(init ?? {}).sort()).toEqual([
+          "headers",
+          "method",
+          "redirect",
+          "signal",
+        ]);
         const url = new URL(String(request));
         const method = init?.method ?? "GET";
-        const authorization = (init?.headers as Readonly<Record<string, string>> | undefined)
-          ?.Authorization;
-        expect(authorization).toBe(`Bearer ${token}`);
+        const headers = init?.headers as Readonly<Record<string, string>> | undefined;
+        expect(url.origin).toBe("https://api.github.com");
+        expect(url.href).toBe(`https://api.github.com${url.pathname}`);
+        expect(url.search).toBe("");
+        expect(url.hash).toBe("");
+        expect(url.username).toBe("");
+        expect(url.password).toBe("");
+        expect(init?.body).toBeUndefined();
+        expect(Object.keys(headers ?? {}).sort()).toEqual([
+          "Accept",
+          "Authorization",
+          "User-Agent",
+          "X-GitHub-Api-Version",
+        ]);
+        expect(headers).toEqual({
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${token}`,
+          "User-Agent": "wrench-release-writer",
+          "X-GitHub-Api-Version": "2022-11-28",
+        });
         expect(init?.redirect).toBe("error");
         calls.push(`${method} ${url.pathname}`);
         callTimes.push(clock);
@@ -2540,6 +2613,7 @@ fi
         fetchImplementation,
         currentClock() { return clock; },
         now() {
+          overrides.auditEvents?.push("clock");
           const sample = overrides.nowSamples?.[nowSampleIndex];
           nowSampleIndex += 1;
           if (sample !== undefined) clock = sample;
@@ -2620,7 +2694,7 @@ fi
     const canonicalEmptyDelete = await runRevocationCase(stableDenials, {
       deleteObservation: observation(204, { body: "empty", contentLength: "0" }),
     });
-    expect(canonicalEmptyDelete.receipt).toEqual(immediateRevocationReceipt);
+    expect(canonicalEmptyDelete.receipt).toEqual(firstTwoDenialsReceipt);
     expect(canonicalEmptyDelete.harness.calls).toEqual([
       "DELETE /installation/token",
       "GET /installation/repositories",
@@ -2714,11 +2788,11 @@ fi
 
     for (const invalidReceipt of [
       undefined,
-      { ...immediateRevocationReceipt, observationCount: 3 },
-      { ...immediateRevocationReceipt, observationCount: 2, propagationObserved: true },
-      { ...immediateRevocationReceipt, observationCount: 11, propagationObserved: true },
-      { ...immediateRevocationReceipt, stableDenials: 1 },
-      { ...immediateRevocationReceipt, extra: true },
+      { ...firstTwoDenialsReceipt, observationCount: 3 },
+      { ...firstTwoDenialsReceipt, observationCount: 2, propagationObserved: true },
+      { ...firstTwoDenialsReceipt, observationCount: 11, propagationObserved: true },
+      { ...firstTwoDenialsReceipt, stableDenials: 1 },
+      { ...firstTwoDenialsReceipt, extra: true },
     ] as const) {
       let invalidObserverCalls = 0;
       await expect(withReleaseAppToken({
@@ -2746,8 +2820,8 @@ fi
     }, async () => "advanced")).rejects.toThrow("revocation receipt");
 
     const deferredEvents: string[] = [];
-    let settleRevocation: ((value: typeof immediateRevocationReceipt) => void) | undefined;
-    const deferredRevocation = new Promise<typeof immediateRevocationReceipt>((resolve) => {
+    let settleRevocation: ((value: typeof firstTwoDenialsReceipt) => void) | undefined;
+    const deferredRevocation = new Promise<typeof firstTwoDenialsReceipt>((resolve) => {
       settleRevocation = resolve;
     });
     const deferredProductionFlow = (async () => {
@@ -2772,7 +2846,7 @@ fi
       await Promise.resolve();
     }
     expect(deferredEvents).toEqual(["leased-write", "revocation-pending"]);
-    settleRevocation?.(immediateRevocationReceipt);
+    settleRevocation?.(firstTwoDenialsReceipt);
     await deferredProductionFlow;
     expect(deferredEvents).toEqual([
       "leased-write",
@@ -2783,7 +2857,7 @@ fi
 
     const deferredFailureEvents: string[] = [];
     let rejectDeferredRevocation: ((reason: Error) => void) | undefined;
-    const deferredRevocationFailure = new Promise<typeof immediateRevocationReceipt>(
+    const deferredRevocationFailure = new Promise<typeof firstTwoDenialsReceipt>(
       (_resolve, reject) => { rejectDeferredRevocation = reject; },
     );
     const deferredFailureFlow = (async () => {
@@ -2860,7 +2934,7 @@ fi
 
     for (const authoritativeBegin of [251, 252, 30_001, 30_002] as const) {
       const closedBoundary = createRevocationHarness(stableDenials, {
-        nowSamples: [0, 1, 2, 2, authoritativeBegin, 30_002],
+        nowSamples: [0, 1, 2, authoritativeBegin, 30_002],
       });
       await expect(revokeReleaseAppTokenWithConvergence({
         apiUrl: new URL("https://api.github.com/"),
@@ -3094,12 +3168,14 @@ fi
         date: "invalid-authorized-date-secret",
         requestId: "authorized-date-request-secret",
       }),
+      observation(200, { omitDate: true }),
       observation(401, {
         body: "text",
         bodyText: "denied-date-body-secret",
         date: "invalid-denied-date-secret",
         requestId: "denied-date-request-secret",
       }),
+      observation(401, { body: "text", omitDate: true }),
     ] as const) {
       const invalidDateHarness = createRevocationHarness([invalidDateObservation]);
       let caught: unknown;
@@ -3123,7 +3199,7 @@ fi
       );
       for (const sensitive of [
         token,
-        String(invalidDateObservation.date),
+        invalidDateObservation.date ?? "",
         String(invalidDateObservation.requestId),
         invalidDateObservation.bodyText ?? "",
         "/installation/repositories",
@@ -3221,13 +3297,11 @@ fi
       }
     }
 
-    for (const [observations, deleteObservation] of [
-      [stableDenials, observation(204, { body: "empty", networkFailure: "pending" })],
-      [stableDenials, observation(204, { body: "pending" })],
-      [[observation(401, { networkFailure: "pending" })], observation(204, { body: "empty" })],
-      [[observation(401, { body: "pending" })], observation(204, { body: "empty" })],
+    for (const deleteObservation of [
+      observation(204, { body: "empty", networkFailure: "pending" }),
+      observation(204, { body: "pending" }),
     ] as const) {
-      const pendingHarness = createRevocationHarness(observations, { deleteObservation });
+      const pendingHarness = createRevocationHarness(stableDenials, { deleteObservation });
       let caught: unknown;
       try {
         await revokeReleaseAppTokenWithConvergence({
@@ -3244,7 +3318,35 @@ fi
       }
       expect(String(caught)).toContain("indeterminate");
       expect(String(caught)).not.toContain(token);
-      expect(pendingHarness.calls.length).toBeLessThanOrEqual(2);
+      expect(pendingHarness.calls).toEqual(["DELETE /installation/token"]);
+    }
+    for (const observations of [
+      [observation(401, { networkFailure: "pending" })],
+      [observation(401, { body: "pending" })],
+    ] as const) {
+      const pendingHarness = createRevocationHarness(observations, {
+        deleteObservation: observation(204, { body: "empty" }),
+      });
+      let caught: unknown;
+      try {
+        await revokeReleaseAppTokenWithConvergence({
+          apiUrl: new URL("https://api.github.com/"),
+          createTimeoutSignal: () => AbortSignal.timeout(1),
+          expiresAt: response.expires_at,
+          fetchImplementation: pendingHarness.fetchImplementation,
+          now: pendingHarness.now,
+          sleep: pendingHarness.sleep,
+          token,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(String(caught)).toContain("indeterminate");
+      expect(String(caught)).not.toContain(token);
+      expect(pendingHarness.calls).toEqual([
+        "DELETE /installation/token",
+        "GET /installation/repositories",
+      ]);
     }
 
     const missedSlots = await runRevocationCase([
@@ -3255,8 +3357,15 @@ fi
     expect(missedSlots.receipt.observationCount).toBe(3);
     expect(missedSlots.harness.callTimes.slice(1)).toEqual([1, 16_001, 24_001]);
 
-    for (const invalidClock of [Number.NaN, Number.POSITIVE_INFINITY, -1] as const) {
-      const clockHarness = createRevocationHarness(stableDenials, { initialClock: invalidClock });
+    for (const invalidClock of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      -1,
+      Number.MAX_SAFE_INTEGER + 1,
+    ] as const) {
+      const clockHarness = createRevocationHarness(stableDenials, {
+        nowSamples: [invalidClock],
+      });
       await expect(revokeReleaseAppTokenWithConvergence({
         apiUrl: new URL("https://api.github.com/"),
         createTimeoutSignal: clockHarness.createTimeoutSignal,
@@ -3266,7 +3375,7 @@ fi
         sleep: clockHarness.sleep,
         token,
       })).rejects.toThrow("clock is invalid");
-      expect(clockHarness.calls).toHaveLength(0);
+      expect(clockHarness.calls).toEqual(["DELETE /installation/token"]);
     }
     const throwingClock = createRevocationHarness(stableDenials);
     await expect(revokeReleaseAppTokenWithConvergence({
@@ -3278,7 +3387,31 @@ fi
       sleep: throwingClock.sleep,
       token,
     })).rejects.toThrow("clock read failed");
-    expect(throwingClock.calls).toHaveLength(0);
+    expect(throwingClock.calls).toEqual(["DELETE /installation/token"]);
+
+    const deletionCompletionEvents: string[] = [];
+    const deletionCompletionHarness = createRevocationHarness(stableDenials, {
+      auditEvents: deletionCompletionEvents,
+      deleteObservation: observation(204, { body: "empty", date: "malformed" }),
+      nowSamples: [0],
+    });
+    await expect(revokeReleaseAppTokenWithConvergence({
+      apiUrl: new URL("https://api.github.com/"),
+      createTimeoutSignal: deletionCompletionHarness.createTimeoutSignal,
+      expiresAt: response.expires_at,
+      fetchImplementation: deletionCompletionHarness.fetchImplementation,
+      now: deletionCompletionHarness.now,
+      sleep: deletionCompletionHarness.sleep,
+      token,
+    })).rejects.toThrow("revocation authority time proof is malformed");
+    expect(deletionCompletionHarness.calls).toEqual(["DELETE /installation/token"]);
+    expect(deletionCompletionEvents).toEqual([
+      "header:location",
+      "header:content-length",
+      "header:content-length",
+      "clock",
+      "header:date",
+    ]);
 
     const boundary = await runRevocationCase([
       ...Array.from({ length: 8 }, () => observation(200)),
@@ -3304,6 +3437,7 @@ fi
     for (const [expiresAt, deleteObservation] of [
       ["malformed", observation(204, { body: "empty" })],
       [response.expires_at, observation(204, { body: "empty", date: "malformed" })],
+      [response.expires_at, observation(204, { body: "empty", omitDate: true })],
     ] as const) {
       const invalidAuthority = createRevocationHarness(stableDenials, { deleteObservation });
       await expect(revokeReleaseAppTokenWithConvergence({
@@ -3315,11 +3449,7 @@ fi
         sleep: invalidAuthority.sleep,
         token,
       })).rejects.toThrow("revocation authority time proof is malformed");
-      expect(invalidAuthority.calls).toEqual([
-        "DELETE /installation/token",
-        "GET /installation/repositories",
-        "GET /installation/repositories",
-      ]);
+      expect(invalidAuthority.calls).toEqual(["DELETE /installation/token"]);
     }
 
     const impreciseDeadline = createRevocationHarness(stableDenials, {
@@ -3346,7 +3476,7 @@ fi
       nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
       async revoke(input: Readonly<{ token: string }>) {
         revokedAfterFailure.push(input.token);
-        return immediateRevocationReceipt;
+        return firstTwoDenialsReceipt;
       },
     }, async () => {
       throw new Error("simulated leased push failure");
@@ -3371,7 +3501,7 @@ fi
       nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
       async revoke(input: Readonly<{ token: string }>) {
         malformedTokenRevocations.push(input.token);
-        return immediateRevocationReceipt;
+        return firstTwoDenialsReceipt;
       },
     }, async () => "unreachable")).rejects.toThrow("permissions are not exactly");
     expect(malformedTokenRevocations).toEqual([token]);
@@ -3556,7 +3686,14 @@ fi
     const productionAdvanceStart = providerSource.indexOf("async advanceRef(repository");
     const productionAdvanceEnd = providerSource.indexOf("\n  }\n}", productionAdvanceStart);
     const productionAdvanceSource = providerSource.slice(productionAdvanceStart, productionAdvanceEnd);
-    expect(productionAdvanceSource).toContain("await withReleaseAppTokenFromEnvironment");
+    expect(providerSource.match(
+      /^import \{ withReleaseAppTokenFromEnvironment \} from "\.\/release-app-token\.mjs";$/gmu,
+    ) ?? []).toHaveLength(1);
+    expect(providerSource.match(/await withReleaseAppTokenFromEnvironment\(/gu) ?? [])
+      .toHaveLength(1);
+    expect(productionAdvanceSource).toContain(
+      "await withReleaseAppTokenFromEnvironment(this.#environment, async (token) => {",
+    );
     expect(productionAdvanceSource).toContain("advanceWebsiteProductionRefFromEnvironment");
 
     for (const overrides of [
@@ -6013,7 +6150,10 @@ fi
     expect(agents).toContain("two stable authorization denials");
     expect(agents).toContain("ten-slot, 30-second monotonic operational window before the exact ref post-read");
     expect(agents).toContain("not a GitHub propagation SLA");
-    expect(agents).toContain("cap the App REST path at fourteen requests");
+    expect(agents).toContain("cap the App path at fourteen REST requests");
+    expect(agents).toContain("canonical GitHub `Date` headers strictly before the minted `expires_at`");
+    expect(agents).toContain("`propagationObserved=false` means the first two probes were the stable 401 pair");
+    expect(agents).toContain("`propagationObserved=true` means at least one exact 200 preceded the final two stable 401s");
     expect(agents).not.toContain("provisional source and initial App registration");
     expect(agents).not.toContain("contents-only writer");
     expect(agents).toContain("Require bounded read-only jobs");
@@ -6068,6 +6208,9 @@ fi
     expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");
     expect(websiteAgents).toContain("exactly one empty-204 token revocation");
     expect(websiteAgents).toContain("ten absolute offsets inside a 30-second half-open request-start window");
+    expect(websiteAgents).toContain("Every accepted 200 or 401 also requires a canonical pre-expiry `Date`");
+    expect(websiteAgents).toContain("`propagationObserved=false` means those were the first two probes");
+    expect(websiteAgents).toContain("while `true` means at least one exact 200 preceded the final two 401s");
     expect(websiteAgents).toContain("Two stable HTTP 401 observations must converge before the exact ref readback");
     expect(websiteAgents).toContain("not a GitHub propagation SLA");
     expect(websiteAgents).toContain("initial success observation plus two stable");

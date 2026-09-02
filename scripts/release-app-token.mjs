@@ -588,16 +588,31 @@ function exactTimeoutMilliseconds(remaining) {
   return timeout;
 }
 
-async function fetchRevocationResponse(input, request) {
+async function fetchRevocationDeletionResponse(input, request) {
+  let response;
+  try {
+    response = await input.fetchImplementation(request.url, {
+      headers: appRequestHeaders(`Bearer ${input.token}`, "wrench-release-writer"),
+      method: "DELETE",
+      redirect: "error",
+      signal: input.createTimeoutSignal(REQUEST_TIMEOUT_MILLISECONDS),
+    });
+  } catch {
+    throw revocationIndeterminate("release App token revocation transport failed");
+  }
+  return Object.freeze({
+    redirected: response.redirected !== false || response.headers.get("location") !== null,
+    response,
+  });
+}
+
+async function fetchRevocationObservationResponse(input, request) {
   const before = exactMonotonicNow(input.now, input.lastNow.value, `${request.label} begin`);
   input.lastNow.value = before;
-  let timeoutMilliseconds = request.timeoutMilliseconds;
-  if (request.deadline !== undefined) {
-    if (before >= request.deadline || before >= request.nextTarget) {
-      return Object.freeze({ before, skipped: true });
-    }
-    timeoutMilliseconds = exactTimeoutMilliseconds(request.deadline - before);
+  if (before >= request.deadline || before >= request.nextTarget) {
+    return Object.freeze({ before, skipped: true });
   }
+  const timeoutMilliseconds = exactTimeoutMilliseconds(request.deadline - before);
   let response;
   try {
     response = await input.fetchImplementation(request.url, {
@@ -669,7 +684,7 @@ async function asRevocationIndeterminate(reason, operation) {
 }
 
 /**
- * Revokes exactly once and then waits for two stable authorization denials from
+ * Sends exactly one revocation request and then waits for two stable authorization denials from
  * the token's exact selected-repository endpoint. The 30-second request-start window is
  * an operational fail-closed ceiling, not a claim about GitHub's revocation propagation SLA.
  */
@@ -695,12 +710,8 @@ export async function revokeReleaseAppTokenWithConvergence(input) {
 
   let deletion;
   let deletionError;
-  let deletionCompletedAt;
   try {
-    deletion = await fetchRevocationResponse(shared, {
-      label: "release App token revocation",
-      method: "DELETE",
-      timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS,
+    deletion = await fetchRevocationDeletionResponse(shared, {
       url: deleteUrl,
     });
     if (deletion.redirected) {
@@ -711,7 +722,6 @@ export async function revokeReleaseAppTokenWithConvergence(input) {
           "release App token revocation response",
         ),
       );
-      completeRevocationRequest(shared, deletion.before, "release App token revocation");
       throw revocationIndeterminate("release App token revocation redirected");
     }
     if (deletion.response.status !== 204) {
@@ -722,7 +732,6 @@ export async function revokeReleaseAppTokenWithConvergence(input) {
           "release App token revocation response",
         ),
       );
-      completeRevocationRequest(shared, deletion.before, "release App token revocation");
       throw revocationIndeterminate("revocation was not accepted");
     }
     let deletionBytes;
@@ -744,18 +753,19 @@ export async function revokeReleaseAppTokenWithConvergence(input) {
     } finally {
       deletionBytes?.fill(0);
     }
-    deletionCompletedAt = completeRevocationRequest(
-      shared,
-      deletion.before,
-      "release App token revocation",
-    );
   } catch (error) {
     deletionError = error;
   }
   if (deletionError !== undefined) throw deletionError;
 
+  const startedAt = exactMonotonicNow(
+    now,
+    undefined,
+    "release App token revocation completion",
+  );
+  lastNow.value = startedAt;
+
   let expiresMilliseconds;
-  let authorityError;
   try {
     expiresMilliseconds = parseSecondTimestamp(input.expiresAt, "release App token expires_at");
     parseServerDateBeforeExpiry(
@@ -764,11 +774,9 @@ export async function revokeReleaseAppTokenWithConvergence(input) {
       "release App token revocation",
     );
   } catch {
-    authorityError = revocationIndeterminate("revocation authority time proof is malformed");
-    expiresMilliseconds = Number.POSITIVE_INFINITY;
+    throw revocationIndeterminate("revocation authority time proof is malformed");
   }
 
-  const startedAt = deletionCompletedAt;
   if (startedAt > Number.MAX_SAFE_INTEGER - REVOCATION_DEADLINE_MILLISECONDS) {
     throw revocationIndeterminate("revocation convergence deadline is outside the precise clock range");
   }
@@ -793,7 +801,7 @@ export async function revokeReleaseAppTokenWithConvergence(input) {
       if (current >= nextTarget) continue;
       current = await waitForAbsoluteObservation(shared, target, nextTarget);
       if (current >= nextTarget || current >= deadline) continue;
-      const observation = await fetchRevocationResponse(shared, {
+      const observation = await fetchRevocationObservationResponse(shared, {
         deadline,
         label: "release App token revocation observation",
         method: "GET",
@@ -913,15 +921,7 @@ export async function revokeReleaseAppTokenWithConvergence(input) {
     convergenceError = error;
   }
 
-  const proofErrors = [authorityError, convergenceError]
-    .filter((error) => error !== undefined);
-  if (proofErrors.length > 1) {
-    throw new AggregateError(
-      proofErrors,
-      "release App token revocation proofs failed",
-    );
-  }
-  if (proofErrors.length === 1) throw proofErrors[0];
+  if (convergenceError !== undefined) throw convergenceError;
   return convergenceReceipt;
 }
 

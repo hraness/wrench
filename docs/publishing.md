@@ -401,7 +401,9 @@ Git configuration or checkout credential, no interactive prompt, and a
 
 After the operation, the shared helper sends exactly one nonredirecting
 `DELETE /installation/token` request and requires an HTTP 204 with absent or
-canonical-zero `Content-Length` and zero body bytes.
+canonical-zero `Content-Length` and zero body bytes. Its GitHub `Date` header,
+and the `Date` header on every accepted HTTP 200 or 401 observation, must be
+canonical and strictly precede the minted token's exact `expires_at`.
 The monotonic completion of that response anchors a separate 30-second
 half-open request-start window `[start, deadline)`. A response that completes
 exactly at the deadline remains eligible; a later completion fails. The helper
@@ -420,6 +422,10 @@ oversized authority data, transport or sleep failure, clock drift, or deadline
 inconsistency is indeterminate and fails closed. If every observation that can
 start before the deadline remains authorized, the result is a distinct
 nonconvergence failure even when charged latency reduces the number of reads.
+The sanitized receipt sets `propagationObserved=false` only when the first two
+observations are the required 401 pair and no authorized 200 was observed. It
+sets `propagationObserved=true` only when at least one exact authorized 200
+precedes the final two stable 401 observations.
 This operational ceiling is a
 Wrench fail-closed policy, not a GitHub revocation-propagation SLA. No action is
 retried, and operation and revocation failures are both retained when they
