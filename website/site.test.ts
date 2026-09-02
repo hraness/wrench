@@ -5,7 +5,8 @@ import { join, resolve } from "node:path";
 
 import {
   HRANESS_HOME_URL,
-  HRANESS_NEWSLETTER_URL,
+  HRANESS_MAILING_SUBSCRIBE_URL,
+  HRANESS_TURNSTILE_SCRIPT_URL,
   hranessSocialLinks,
 } from "@hraness/site-footer";
 
@@ -26,6 +27,8 @@ import {
   SITE_TITLE,
   SKILLS_URL,
   versionedNpmPackageUrl,
+  WRENCH_MAILING_TURNSTILE_SITEKEY_ENV,
+  wrenchMailingListConfig,
 } from "./build";
 import { handleDocumentNegotiation } from "../edge/negotiation";
 import {
@@ -117,6 +120,32 @@ describe("wrench.rip static site", () => {
       .toThrow("descriptions must stay identical");
   });
 
+  test("binds signup to Wrench and fails production closed without a key", () => {
+    const turnstileSitekey = "1x00000000000000000000AA";
+    expect(wrenchMailingListConfig({
+      [WRENCH_MAILING_TURNSTILE_SITEKEY_ENV]: turnstileSitekey,
+    })).toEqual({
+      audience: "wrench",
+      kind: "signup",
+      turnstileSitekey,
+    });
+    expect(wrenchMailingListConfig({})).toEqual({ kind: "none" });
+    expect(wrenchMailingListConfig({
+      [WRENCH_MAILING_TURNSTILE_SITEKEY_ENV]: "",
+    })).toEqual({ kind: "none" });
+    expect(wrenchMailingListConfig({ VERCEL_ENV: "preview" }))
+      .toEqual({ kind: "none" });
+    for (const turnstileSitekey of [undefined, ""]) {
+      expect(() => wrenchMailingListConfig({
+        [WRENCH_MAILING_TURNSTILE_SITEKEY_ENV]: turnstileSitekey,
+        VERCEL_ENV: "production",
+      })).toThrow(WRENCH_MAILING_TURNSTILE_SITEKEY_ENV);
+    }
+    expect(() => wrenchMailingListConfig({
+      [WRENCH_MAILING_TURNSTILE_SITEKEY_ENV]: "not a public key",
+    })).toThrow(WRENCH_MAILING_TURNSTILE_SITEKEY_ENV);
+  });
+
   test("builds canonical discovery, semantic content, and private-key-free analytics", async () => {
     const packageIdentity = parsePackageIdentity(
       await Bun.file(join(repositoryRoot, "package.json")).json(),
@@ -124,6 +153,7 @@ describe("wrench.rip static site", () => {
     const npmPackageUrl = versionedNpmPackageUrl(packageIdentity);
     const skillInstallCommands = agentSkillInstallCommands(packageIdentity);
     await buildWebsite({
+      [WRENCH_MAILING_TURNSTILE_SITEKEY_ENV]: "1x00000000000000000000AA",
       NEXT_PUBLIC_POSTHOG_HOST: DEFAULT_POSTHOG_HOST,
       NEXT_PUBLIC_POSTHOG_KEY: "phc_public_project_token",
     });
@@ -393,7 +423,6 @@ describe("wrench.rip static site", () => {
     }
     const expectedFooterHrefs = [
       HRANESS_HOME_URL,
-      HRANESS_NEWSLETTER_URL,
       ...hranessSocialLinks.map(({ href }) => href),
     ];
     for (const document of [...pages.map(({ html: pageHtml }) => pageHtml), notFound]) {
@@ -401,6 +430,10 @@ describe("wrench.rip static site", () => {
       const footer = /<footer\b[\s\S]*?<\/footer>/u.exec(document)?.[0];
       expect(footer).toBeDefined();
       expect(footer).toContain('data-slot="hraness-site-footer"');
+      expect(footer).toContain('data-mailing-list="signup"');
+      expect(footer).toContain(`action="${HRANESS_MAILING_SUBSCRIBE_URL}"`);
+      expect(footer).toContain('name="audience" type="hidden" value="wrench"');
+      expect(footer).toContain(`src="${HRANESS_TURNSTILE_SCRIPT_URL}"`);
       expect(footer?.match(/data-slot="hraness-mark"/gu)).toHaveLength(1);
       expect(footer?.match(/data-slot="social-icon"/gu)).toHaveLength(10);
       expect(
@@ -466,6 +499,10 @@ describe("wrench.rip static site", () => {
       rule.source === "/((?!preview/$).*)");
     expect(frameDenyHeaders?.headers).toEqual([
       { key: "X-Frame-Options", value: "DENY" },
+      {
+        key: "Content-Security-Policy",
+        value: "form-action 'self' https://account.hraness.com; frame-src https://challenges.cloudflare.com; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com https://*.posthog.com https://*.posthogusercontent.com",
+      },
     ]);
     const frameDenyPattern = /^\/((?!preview\/$).*)$/u;
     expect(frameDenyPattern.test("/preview/")).toBe(false);
@@ -495,6 +532,7 @@ describe("wrench.rip static site", () => {
     ]);
     expect(vercel.headers.filter((rule: { headers: Array<{ key: string }> }) =>
       rule.headers.some((header) => header.key === "Content-Security-Policy"))).toEqual([
+      frameDenyHeaders,
       previewHeaders,
     ]);
 

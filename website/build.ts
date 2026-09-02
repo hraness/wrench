@@ -10,7 +10,10 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { renderHranessSiteFooter } from "@hraness/site-footer";
+import {
+  renderHranessSiteFooter,
+  type HranessMailingListConfig,
+} from "@hraness/site-footer";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -50,6 +53,8 @@ export const PUBLISHER_URL = "https://github.com/hraness" as const;
 export const SKILL_REPOSITORY = "hraness/wrench" as const;
 export const CONTENT_REVIEWED_RELEASE = "v0.16.3" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
+export const WRENCH_MAILING_TURNSTILE_SITEKEY_ENV =
+  "NEXT_PUBLIC_HRANESS_MAILING_TURNSTILE_SITEKEY" as const;
 export const DEMO_PUBLIC_FILES = [
   "wrench-first-capture.gif",
   "wrench-first-capture.mp4",
@@ -675,6 +680,31 @@ function postHogEnvironment(environment: Readonly<Record<string, string | undefi
   return { host, key };
 }
 
+export function wrenchMailingListConfig(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): HranessMailingListConfig {
+  const turnstileSitekey =
+    environment[WRENCH_MAILING_TURNSTILE_SITEKEY_ENV];
+  if (turnstileSitekey === undefined || turnstileSitekey === "") {
+    if (environment.VERCEL_ENV === "production") {
+      throw new Error(
+        `${WRENCH_MAILING_TURNSTILE_SITEKEY_ENV} must be configured for Vercel Production.`,
+      );
+    }
+    return { kind: "none" };
+  }
+  if (!/^[A-Za-z0-9_-]{20,100}$/u.test(turnstileSitekey)) {
+    throw new Error(
+      `${WRENCH_MAILING_TURNSTILE_SITEKEY_ENV} must be a 20-100 character URL-safe public Cloudflare Turnstile sitekey.`,
+    );
+  }
+  return {
+    audience: "wrench",
+    kind: "signup",
+    turnstileSitekey,
+  };
+}
+
 export async function buildWebsite(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<void> {
@@ -750,7 +780,9 @@ export async function buildWebsite(
     attestation,
     beeperFacts,
     cssAsset,
-    hranessSiteFooter: renderHranessSiteFooter(),
+    hranessSiteFooter: renderHranessSiteFooter({
+      mailingList: wrenchMailingListConfig(environment),
+    }),
     packageIdentity: identity,
     postHogHost: postHog.host,
     postHogKey: postHog.key,
