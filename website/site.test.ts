@@ -375,8 +375,13 @@ describe("wrench.rip static site", () => {
     expect(llms).not.toContain(`${SITE_ORIGIN}/agentic-web-spoofing/`);
     expect(llms).not.toContain(`${SITE_ORIGIN}/vms-cannot-contain-agents/`);
     expect(llms).toContain(`${SITE_ORIGIN}/providers/beeper/`);
+    expect(llms).toContain(
+      "32 supported actions. Twenty-seven run through the pinned `@beeper/cli` 0.6.2 executable and five use fixed Desktop loopback reads.",
+    );
+    expect(llms).toContain("Message actions are previewed and confirmed.");
+    expect(llms).not.toContain("actions\u201427");
     expect(llms).toContain("pending message ID proves submission to Desktop only, not network delivery");
-    expect(llms).toContain("tagged `packages/cli/package.json` declares 0.6.1 and is provenance-only");
+    expect(llms).toContain("Tagged `packages/cli/package.json` declares 0.6.1 and is provenance-only");
     expect(llms).toContain("exact executable runtime identity remains authoritative");
     expect(llms).toContain(`${SITE_ORIGIN}/providers/whatsapp/`);
     expect(llms).toContain("does not pair, sync, or send");
