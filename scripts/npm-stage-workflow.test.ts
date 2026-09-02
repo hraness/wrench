@@ -2205,6 +2205,9 @@ fi
 
   test("mints only one exact Wrench release-App token and always revokes it", async () => {
     const releaseAppTokenSource = await readFile(releaseAppTokenHelperUrl, "utf8");
+    expect(createHash("sha256").update(releaseAppTokenSource).digest("hex")).toBe(
+      "56c89960c6cdfadd7e34cd2b64bfa022a3884aedf73187016f9e5b7cd6ac3cb6",
+    );
     const revokeWithFetchSource = `async function revokeWithFetch(input) {
   return revokeReleaseAppTokenWithConvergence({
     apiUrl: input.apiUrl,
