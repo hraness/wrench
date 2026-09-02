@@ -386,91 +386,6 @@ made caller-selectable for the canary. The release remains unready for
 production activation or final product merge until that proof passes. Never
 broaden the App silently or during a failed canary.
 
-The temporary **Prove release App canary** workflow is the single-use exception
-to the production writer boundary. It has no inputs and accepts only the first
-`workflow_dispatch` attempt by `0thernet` (`actor_id=894119`) from exact
-protected current `main` in Wrench repository ID `1316443113`. `P` remains exact
-commit `6d9096b0fabbc03ede0741ec4931fbe19127440c`. `C` remains exact commit
-`0bf88a064233635e0c5485c61f9c533974a7dca4`, the direct child of `P` whose only
-changed path is `.github/workflows/website-production.yml`. The temporary
-workflow commit `D` must instead be a direct child of the then-current green
-main baseline `B`; `C` must be an ancestor of `B`. The exact `B` to `D` delta
-contains only `.github/workflows/release-app-canary.yml`, `docs/publishing.md`,
-`scripts/npm-stage-workflow.test.ts`, and `scripts/release-app-canary.mjs`.
-`vercel.json` must be byte-identical between `P` and `C`, and separately between
-`B` and `D`. All four commits must keep
-`git.deploymentEnabled.website-production-canary=false`. This paired check
-allows unrelated reviewed main evolution without weakening the canary preview
-exclusion or pretending that `C` remains the parent of a later `D`.
-
-Before the dispatch, create one production-only active ruleset named
-`Temporary website-production activation freeze`. It must target only
-`refs/heads/website-production`, have no bypass actors, and contain exactly
-creation, deletion, non-fast-forward, and update restrictions, with
-fetch-and-merge updates disabled. Capture its response ID, node ID,
-`created_at`, `updated_at`, and canonical administrator JSON before retrying any
-uncertain create. Store its exact ID and canonical UTC `updated_at` in temporary
-`production-ref-writer-key` variables
-`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID` and
-`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT`. The canary helper
-requires exactly four applicable rules on the canary ref from the mirrored
-lifecycle and update layers. Production must expose those same four controls
-plus exactly four controls from this one captured freeze. It reads and
-fingerprints all three detailed rulesets before, immediately around, and after
-the write. Read-only workflow responses cannot disclose bypass actors, so the
-administrator readback must separately prove no bypass on the lifecycle and
-freeze rulesets and exactly the dedicated Wrench App Integration with
-`bypass_mode=always`, never `exempt`, on the mirrored update ruleset.
-
-All six ruleset-fingerprint variables used by this temporary protocol are
-administrator-provisioned proof inputs, not durable App configuration. Before
-setting them, the administrator must read each detailed repository ruleset by
-its captured response ID and retain the canonical source, target refs,
-enforcement, bypass actors, rules, node ID, creation time, and update time. The
-environment values are only the exact ID and canonical UTC `updated_at` pairs
-for the lifecycle, mirrored update, and production-only freeze rulesets:
-`WRENCH_RELEASE_LIFECYCLE_RULESET_ID`,
-`WRENCH_RELEASE_LIFECYCLE_RULESET_UPDATED_AT`,
-`WRENCH_RELEASE_UPDATE_RULESET_ID`,
-`WRENCH_RELEASE_UPDATE_RULESET_UPDATED_AT`,
-`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID`, and
-`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT`. Any missing, extra,
-noncanonical, or provenance-mismatched value blocks the proof.
-
-Freeze all other repository mutation before proof. Record one ordinary
-`0thernet` non-force `P` to `C` denial and its unique failed Rule Suite while
-the persistent canary remains at `P`. Then dispatch the temporary workflow
-exactly once from `D` and approve its one `production-ref-writer-key` admission.
-The helper binds the unique workflow history, exact `main=D`, unchanged
-production ref, `canary=P`, and every control fingerprint before minting a
-token. The shared token helper proves the App, selected installation, and minted
-token close to exactly `metadata:read`, `contents:write`, and
-`workflows:write`, with no Administration or other permission and only Wrench
-repository ID `1316443113`. A private `GIT_ASKPASS` operation performs the one
-explicit leased `P` to `C` fast-forward, proves a separate stale `P` to `D`
-lease cannot mutate the ref, revokes the token, and proves reuse receives a
-nonredirecting HTTP 401. Terminal reads require `main=D`, production unchanged,
-canary `C`, and all three rulesets unchanged.
-
-Retain the canonical evidence record, downloaded prove-job log, App and
-installation readbacks, ordinary-denial and App-bypass Rule Suites, environment
-admission, ruleset administrator projections, GitHub run identity, and their
-SHA-256 digests. The App Rule Suite must bind the dedicated App bot, exact `P`
-before and `C` after, the failed update restriction admitted only through its
-App bypass, and passing destructive rules. Any ambiguous mutation or evidence
-gap invalidates the proof; never rerun it or reset/delete the persistent
-canary. A separate checked cleanup PR must delete the temporary workflow and
-helper and replace this temporary protocol prose and its tests with the
-retained, evidence-bound result. Retain the canary at `C`, the mirrored
-permanent rulesets, and the production-only freeze. After that cleanup is
-merged and its exact-main CI is green, delete all six temporary
-ruleset-fingerprint variables by exact name. Read the environment back and
-require exactly the four reviewed App ID, client ID, slug, and installation ID
-variables plus the single private key secret, with its main-only branch policy,
-reviewer, `prevent_self_review` setting, and disabled admin bypass unchanged.
-Remove the production freeze later only by its captured ID after a fresh
-release-owner audit; uncertainty leaves production safely frozen.
-
 The minted token must carry a bounded one-hour expiry and fit the streamed
 response parser. The helper masks it and passes it only through a private
 `GIT_ASKPASS` environment. Because the writer checks out only exact current-main
@@ -482,9 +397,40 @@ with the explicit compare-and-swap lease
 `--force-with-lease=refs/heads/website-production:<expected-old>`. The push has
 one exact source-to-destination refspec, no followed tags, no hooks, no persisted
 Git configuration or checkout credential, no interactive prompt, and a
-60-second cap on each Git process. The App token is revoked before the exact production-ref post-read;
-operation and revocation failures are both retained when they coincide. Every
-read-only `gh api` child receives `GH_TOKEN` but has every
+60-second cap on each Git process.
+
+After the operation, the shared helper sends exactly one nonredirecting
+`DELETE /installation/token` request and requires an HTTP 204 with absent or
+canonical-zero `Content-Length` and zero body bytes. Its GitHub `Date` header,
+and the `Date` header on every accepted HTTP 200 or 401 observation, must be
+canonical and strictly precede the minted token's exact `expires_at`.
+The monotonic completion of that response anchors a separate 30-second
+half-open request-start window `[start, deadline)`. A response that completes
+exactly at the deadline remains eligible; a later completion fails. The helper
+may make at most ten reads of the token's exact `/installation/repositories`
+endpoint at absolute offsets 0, 250,
+500, 1,000, 2,000, 4,000, 8,000, 16,000, 24,000, and 29,000 milliseconds. Each
+read is admitted and timed from one authoritative request-begin clock sample,
+then capped at the lesser of ten seconds and that sample's remaining window.
+Request,
+body, and sleep latency are charged to the same window. A missed absolute slot
+is skipped instead of triggering a burst or sliding later observations. An HTTP
+200 before denial must still name the exact singleton selected Wrench
+repository. Acceptance requires HTTP 401 on two distinct scheduled reads; a
+later 200 after a 401, only one 401, any other status, a redirect, malformed or
+oversized authority data, transport or sleep failure, clock drift, or deadline
+inconsistency is indeterminate and fails closed. If every observation that can
+start before the deadline remains authorized, the result is a distinct
+nonconvergence failure even when charged latency reduces the number of reads.
+The sanitized receipt sets `propagationObserved=false` only when the first two
+observations are the required 401 pair and no authorized 200 was observed. It
+sets `propagationObserved=true` only when at least one exact authorized 200
+precedes the final two stable 401 observations.
+This operational ceiling is a
+Wrench fail-closed policy, not a GitHub revocation-propagation SLA. No action is
+retried, and operation and revocation failures are both retained when they
+coincide. The exact production-ref post-read begins only after convergence.
+Every read-only `gh api` child receives `GH_TOKEN` but has every
 `WRENCH_RELEASE_APP_*` value removed from its environment. A missing branch,
 moved tag, concurrent ref update, divergence, rollback, server-time regression,
 source drift, token-scope drift, push rejection, revocation failure, or post-read
@@ -548,9 +494,10 @@ worst missing-Release path uses 16 calls, including all five bounded release
 pages plus the empty sentinel page. The immutable Release and downstream
 promotion workflows together use at most 278 REST calls, leaving 722 calls
 under the repository `GITHUB_TOKEN` limit of 1,000 REST requests per hour. The
-promotion helper itself uses at most 13 read-only REST
-calls; its leased Git push and four App-authentication requests do not consume
-that `GITHUB_TOKEN` budget. Five
+promotion helper itself uses at most 13 read-only REST calls; its leased Git
+push and at most fourteen App REST requests do not consume that `GITHUB_TOKEN`
+budget. Those App requests are the three setup and mint calls, one DELETE, and
+at most ten convergence probes. Git authentication is outside that REST bound. Five
 bounded GraphQL pages across two baseline reads, 20 observations, and two
 confirmations make at most 120 requests. Each response must cost no more than
 two points, for a 240-point ceiling and 760 points of headroom under the

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { createHash, generateKeyPairSync, verify } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -25,9 +24,12 @@ import {
   parseReleaseAppIdentity,
   parseReleaseAppInstallation,
   parseReleaseAppTokenResponse,
+  RELEASE_APP_REVOCATION_OBSERVATION_OFFSETS_MILLISECONDS,
   releaseAppTokenRequestBody,
+  revokeReleaseAppTokenWithConvergence,
   WRENCH_REPOSITORY_ID,
   withReleaseAppToken,
+  withReleaseAppTokenFromEnvironment,
 } from "./release-app-token.mjs";
 import {
   assertReleaseTagNewerThanPublished,
@@ -49,34 +51,6 @@ import {
   verifiedReleaseFetchArguments,
   websiteProductionPushArguments,
 } from "./release-ref-writer.mjs";
-import {
-  advanceCanaryRef,
-  assertCanaryGitTopology,
-  assertRevokedTokenCannotBeReused,
-  CANARY_EVIDENCE_LOG_MARKER,
-  CANARY_START_SENTINEL,
-  CANARY_TARGET_SENTINEL,
-  canaryEvidenceLogLine,
-  canaryPushArguments,
-  decodeCanaryEvidence,
-  decodeCanaryReceipt,
-  encodeCanaryEvidence,
-  encodeCanaryReceipt,
-  fixedCanaryCoordinate,
-  parseApplicableRules,
-  parseCanaryCoordinate,
-  parseCanaryEvidenceLog,
-  parseCanaryInvocation,
-  parseGitHubServerTimestamp,
-  parseProductionApplicableRules,
-  parseRuleset,
-  parseRulesetTimestamp,
-  parseRulesetTimestampFingerprint,
-  parseSingleCanaryRun,
-  preflightCanary,
-  proveCanary,
-  publishCanaryEvidence,
-} from "./release-app-canary.mjs";
 
 const stageWorkflowUrl = new URL("../.github/workflows/npm-stage.yml", import.meta.url);
 const ciWorkflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
@@ -85,15 +59,10 @@ const websiteProductionWorkflowUrl = new URL(
   "../.github/workflows/website-production.yml",
   import.meta.url,
 );
-const releaseAppCanaryWorkflowUrl = new URL(
-  "../.github/workflows/release-app-canary.yml",
-  import.meta.url,
-);
 const codeownersUrl = new URL("../.github/CODEOWNERS", import.meta.url);
 const workflowsUrl = new URL("../.github/workflows/", import.meta.url);
 const releaseAppTokenHelperUrl = new URL("./release-app-token.mjs", import.meta.url);
 const releaseRefWriterHelperUrl = new URL("./release-ref-writer.mjs", import.meta.url);
-const releaseAppCanaryHelperUrl = new URL("./release-app-canary.mjs", import.meta.url);
 const providerOutcomeHelperUrl = new URL("./release-provider-outcome.mjs", import.meta.url);
 const manifestUrl = new URL("../package.json", import.meta.url);
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
@@ -153,19 +122,6 @@ async function run(command: readonly string[], cwd: string): Promise<void> {
   const child = Bun.spawn([...command], { cwd, stderr: "inherit", stdout: "inherit" });
   const exitCode = await child.exited;
   if (exitCode !== 0) throw new Error(`Command failed (${String(exitCode)}): ${command.join(" ")}`);
-}
-
-async function runOutput(command: readonly string[], cwd: string): Promise<string> {
-  const child = Bun.spawn([...command], { cwd, stderr: "pipe", stdout: "pipe" });
-  const [exitCode, stderr, stdout] = await Promise.all([
-    child.exited,
-    new Response(child.stderr).text(),
-    new Response(child.stdout).text(),
-  ]);
-  if (exitCode !== 0) {
-    throw new Error(`${command.join(" ")} failed with ${String(exitCode)}: ${stderr.trim()}`);
-  }
-  return stdout;
 }
 
 function sha1(bytes: Uint8Array): string {
@@ -2248,6 +2204,66 @@ fi
   });
 
   test("mints only one exact Wrench release-App token and always revokes it", async () => {
+    const releaseAppTokenSource = await readFile(releaseAppTokenHelperUrl, "utf8");
+    expect(createHash("sha256").update(releaseAppTokenSource).digest("hex")).toBe(
+      "56c89960c6cdfadd7e34cd2b64bfa022a3884aedf73187016f9e5b7cd6ac3cb6",
+    );
+    const revokeWithFetchSource = `async function revokeWithFetch(input) {
+  return revokeReleaseAppTokenWithConvergence({
+    apiUrl: input.apiUrl,
+    expiresAt: input.expiresAt,
+    token: input.token,
+  });
+}`;
+    expect(releaseAppTokenSource.match(/^async function revokeWithFetch\(input\) \{$/gmu) ?? [])
+      .toHaveLength(1);
+    expect(releaseAppTokenSource.match(/return revokeReleaseAppTokenWithConvergence\(/gu) ?? [])
+      .toHaveLength(1);
+    expect(releaseAppTokenSource).toContain(revokeWithFetchSource);
+    const environmentWrapperStart = releaseAppTokenSource.indexOf(
+      "export function withReleaseAppTokenFromEnvironment",
+    );
+    expect(environmentWrapperStart).toBeGreaterThan(0);
+    const environmentWrapperSource = releaseAppTokenSource.slice(environmentWrapperStart);
+    expect(environmentWrapperSource.trimEnd()).toBe(`export function withReleaseAppTokenFromEnvironment(environment, operation, onRevoked) {
+  return withReleaseAppToken({
+    environment,
+    inspect: inspectWithFetch,
+    inspectInstallation: inspectInstallationWithFetch,
+    mask(token) {
+      process.stdout.write(\`::add-mask::\${token}\\n\`);
+    },
+    mint: mintWithFetch,
+    nowMilliseconds: Date.now,
+    onRevoked,
+    revoke: revokeWithFetch,
+  }, operation);
+}`);
+    expect(withReleaseAppTokenFromEnvironment.length).toBe(3);
+    expect(releaseAppTokenSource.match(/^    revoke: revokeWithFetch,$/gmu) ?? [])
+      .toHaveLength(1);
+    const revocationImplementationStart = releaseAppTokenSource.indexOf(
+      "function revocationIndeterminate",
+    );
+    const revocationImplementationEnd = releaseAppTokenSource.indexOf(
+      "\nasync function revokeWithFetch",
+      revocationImplementationStart,
+    );
+    expect(revocationImplementationStart).toBeGreaterThan(0);
+    expect(revocationImplementationEnd).toBeGreaterThan(revocationImplementationStart);
+    const revocationImplementationSource = releaseAppTokenSource.slice(
+      revocationImplementationStart,
+      revocationImplementationEnd,
+    );
+    expect(createHash("sha256").update(revocationImplementationSource).digest("hex")).toBe(
+      "d33def2bf83f6166d0048e5715eec79076c25ef92af602729a9e4d1bc3410cb4",
+    );
+    expect(revocationImplementationSource.match(/input\.fetchImplementation/gu) ?? [])
+      .toHaveLength(3);
+    expect(revocationImplementationSource).toContain(
+      "const fetchImplementation = input.fetchImplementation ?? fetch;",
+    );
+
     const { privateKey, publicKey } = generateKeyPairSync("rsa", {
       modulusLength: 2048,
       privateKeyEncoding: { format: "pem", type: "pkcs8" },
@@ -2322,6 +2338,12 @@ fi
       repository_selection: "selected",
       token,
     };
+    const firstTwoDenialsReceipt = Object.freeze({
+      converged: true,
+      observationCount: 2,
+      propagationObserved: false,
+      stableDenials: 2,
+    });
     expect(() => parseReleaseAppIdentity(appIdentity, configuration)).not.toThrow();
     expect(() => parseReleaseAppInstallation(installation, configuration)).not.toThrow();
     for (const permissions of [
@@ -2387,6 +2409,7 @@ fi
       },
       async revoke(input: Readonly<{ token: string }>) {
         events.push(`revoke:${input.token}`);
+        return firstTwoDenialsReceipt;
       },
     }, async (value: string, receipt: Readonly<{ repositoryId: number }>) => {
       events.push(`operate:${value}`);
@@ -2403,6 +2426,1363 @@ fi
       `revoke:${token}`,
     ]);
 
+    const repositoryBody = Object.freeze({
+      repositories: [{
+        full_name: providerRepository,
+        id: WRENCH_REPOSITORY_ID,
+        name: "wrench",
+        owner: { login: "hraness" },
+      }],
+      repository_selection: "selected",
+      total_count: 1,
+    });
+    type RevocationObservation = Readonly<{
+      body?: "binary" | "empty" | "invalid-json" | "json" | "overflow" | "pending" | "text" | "wrong-repo";
+      bodyText?: string;
+      bodyLatencyMilliseconds?: number;
+      contentLength?: string;
+      date?: string;
+      fetchLatencyMilliseconds?: number;
+      location?: string;
+      networkFailure?: "abort" | "pending" | true;
+      omitDate?: boolean;
+      redirected?: boolean;
+      requestId?: string;
+      status: number;
+    }>;
+    const observation = (
+      status: number,
+      overrides: Omit<RevocationObservation, "status"> = {},
+    ): RevocationObservation => Object.freeze({ status, ...overrides });
+    const stableDenials = [observation(401, { body: "empty" }), observation(401, { body: "json" })];
+
+    function createRevocationHarness(
+      observations: readonly RevocationObservation[],
+      overrides: Readonly<{
+        auditEvents?: string[];
+        deleteObservation?: RevocationObservation;
+        initialClock?: number;
+        nowSamples?: readonly number[];
+        sleepMode?: "frozen" | "overflow" | "partial" | "regress" | "reject";
+      }> = {},
+    ) {
+      let clock = overrides.initialClock ?? 0;
+      let nowSampleIndex = 0;
+      let deleted = false;
+      let observationIndex = 0;
+      const calls: string[] = [];
+      const callTimes: number[] = [];
+      let cancelledBodies = 0;
+      const sourceChunks: Uint8Array[] = [];
+      const sleepCalls: number[] = [];
+      const timeouts: number[] = [];
+      const encoder = new TextEncoder();
+      const defaultDate = "Sun, 30 Aug 2026 01:00:01 GMT";
+      const responseFor = async (item: RevocationObservation, signal?: AbortSignal | null): Promise<Response> => {
+        if (item.networkFailure === "abort") {
+          throw new DOMException(`aborted ${token}`, "AbortError");
+        }
+        if (item.networkFailure === "pending") {
+          await new Promise<never>((_resolve, reject) => {
+            const abort = () => reject(new DOMException(`aborted ${token}`, "AbortError"));
+            if (signal?.aborted === true) abort();
+            else signal?.addEventListener("abort", abort, { once: true });
+          });
+        }
+        if (item.networkFailure === true) {
+          throw new Error(`network leaked ${token}`);
+        }
+        clock += item.fetchLatencyMilliseconds ?? 1;
+        let bytes: Uint8Array;
+        switch (item.body) {
+          case "empty":
+            bytes = new Uint8Array();
+            break;
+          case "text":
+            bytes = encoder.encode(item.bodyText ?? "denied");
+            break;
+          case "binary":
+            bytes = new Uint8Array([0xff, 0xfe, 0xfd]);
+            break;
+          case "invalid-json":
+            bytes = encoder.encode("{");
+            break;
+          case "overflow":
+            bytes = encoder.encode("bounded");
+            break;
+          case "pending":
+            bytes = new Uint8Array();
+            break;
+          case "json":
+            bytes = encoder.encode(JSON.stringify({ message: "Bad credentials" }));
+            break;
+          case "wrong-repo":
+            bytes = encoder.encode(JSON.stringify({
+              ...repositoryBody,
+              repositories: [{
+                ...repositoryBody.repositories[0],
+                full_name: "hraness/other",
+                id: 1,
+                name: "other",
+              }],
+            }));
+            break;
+          default:
+            bytes = item.status === 200
+              ? encoder.encode(JSON.stringify(repositoryBody))
+              : encoder.encode(JSON.stringify({ message: "Bad credentials" }));
+            break;
+        }
+        const headers: Record<string, string> = {};
+        if (item.omitDate !== true) headers.Date = item.date ?? defaultDate;
+        if (item.contentLength !== undefined) headers["Content-Length"] = item.contentLength;
+        else if (item.body === "overflow") headers["Content-Length"] = String(1024 * 1024 + 1);
+        if (item.location !== undefined) headers.Location = item.location;
+        if (item.requestId !== undefined) headers["X-GitHub-Request-Id"] = item.requestId;
+        const hasForbidden204Body = item.status === 204 && item.body !== undefined && item.body !== "empty";
+        const body = item.status === 204 && !hasForbidden204Body ? null : new ReadableStream<Uint8Array>({
+          cancel() { cancelledBodies += 1; },
+          start(controller) {
+            clock += item.bodyLatencyMilliseconds ?? 0;
+            if (item.body === "pending") {
+              const abort = () => controller.error(new DOMException(`aborted ${token}`, "AbortError"));
+              if (signal?.aborted === true) abort();
+              else signal?.addEventListener("abort", abort, { once: true });
+              return;
+            }
+            if (bytes.byteLength > 0) {
+              sourceChunks.push(bytes);
+              controller.enqueue(bytes);
+            }
+            controller.close();
+          },
+        });
+        const result = new Response(body, {
+          headers,
+          status: hasForbidden204Body ? 200 : item.status,
+        });
+        if (overrides.auditEvents !== undefined) {
+          const responseHeaders = result.headers;
+          Object.defineProperty(result, "headers", {
+            value: Object.freeze({
+              get(name: string) {
+                overrides.auditEvents?.push(`header:${name.toLowerCase()}`);
+                return responseHeaders.get(name);
+              },
+            }),
+          });
+        }
+        if (hasForbidden204Body) Object.defineProperty(result, "status", { value: 204 });
+        if (item.redirected === true) {
+          Object.defineProperty(result, "redirected", { value: true });
+        }
+        return result;
+      };
+      const fetchImplementation = async (request: URL | RequestInfo, init?: RequestInit) => {
+        expect(request).toBeInstanceOf(URL);
+        expect(Object.keys(init ?? {}).sort()).toEqual([
+          "headers",
+          "method",
+          "redirect",
+          "signal",
+        ]);
+        const url = new URL(String(request));
+        const method = init?.method ?? "GET";
+        const headers = init?.headers as Readonly<Record<string, string>> | undefined;
+        expect(url.origin).toBe("https://api.github.com");
+        expect(url.href).toBe(`https://api.github.com${url.pathname}`);
+        expect(url.search).toBe("");
+        expect(url.hash).toBe("");
+        expect(url.username).toBe("");
+        expect(url.password).toBe("");
+        expect(init?.body).toBeUndefined();
+        expect(Object.keys(headers ?? {}).sort()).toEqual([
+          "Accept",
+          "Authorization",
+          "User-Agent",
+          "X-GitHub-Api-Version",
+        ]);
+        expect(headers).toEqual({
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${token}`,
+          "User-Agent": "wrench-release-writer",
+          "X-GitHub-Api-Version": "2022-11-28",
+        });
+        expect(init?.redirect).toBe("error");
+        calls.push(`${method} ${url.pathname}`);
+        callTimes.push(clock);
+        if (url.pathname === "/installation/token") {
+          expect(method).toBe("DELETE");
+          expect(deleted).toBe(false);
+          deleted = true;
+          return responseFor(
+            overrides.deleteObservation ?? observation(204, { body: "empty" }),
+            init?.signal,
+          );
+        }
+        expect(url.pathname).toBe("/installation/repositories");
+        expect(method).toBe("GET");
+        expect(deleted).toBe(true);
+        const item = observations[observationIndex];
+        observationIndex += 1;
+        if (item === undefined) throw new Error("revocation fixture exhausted");
+        return responseFor(item, init?.signal);
+      };
+      return Object.freeze({
+        advanceClock(milliseconds: number) { clock += milliseconds; },
+        calls,
+        cancelledBodies() { return cancelledBodies; },
+        callTimes,
+        createTimeoutSignal(milliseconds: number) {
+          timeouts.push(milliseconds);
+          return new AbortController().signal;
+        },
+        fetchImplementation,
+        currentClock() { return clock; },
+        now() {
+          overrides.auditEvents?.push("clock");
+          const sample = overrides.nowSamples?.[nowSampleIndex];
+          nowSampleIndex += 1;
+          if (sample !== undefined) clock = sample;
+          return clock;
+        },
+        observationCount() { return observationIndex; },
+        async sleep(milliseconds: number) {
+          sleepCalls.push(milliseconds);
+          if (overrides.sleepMode === "reject") throw new Error(`sleep leaked ${token}`);
+          if (overrides.sleepMode === "frozen") return;
+          if (overrides.sleepMode === "regress") {
+            clock -= 1;
+            return;
+          }
+          if (overrides.sleepMode === "overflow") {
+            clock = Number.MAX_SAFE_INTEGER + 1;
+            return;
+          }
+          clock += overrides.sleepMode === "partial"
+            ? Math.max(1, Math.floor(milliseconds / 2))
+            : milliseconds;
+        },
+        sourceChunks,
+        sleepCalls,
+        timeouts,
+      });
+    }
+
+    async function runRevocationCase(
+      observations: readonly RevocationObservation[],
+      overrides: Parameters<typeof createRevocationHarness>[1] = {},
+    ) {
+      const harness = createRevocationHarness(observations, overrides);
+      const receipt = await revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: harness.createTimeoutSignal,
+        expiresAt: response.expires_at,
+        fetchImplementation: harness.fetchImplementation,
+        now: harness.now,
+        sleep: harness.sleep,
+        token,
+      });
+      return Object.freeze({ harness, receipt });
+    }
+
+    const environmentWrapperHarness = createRevocationHarness(stableDenials);
+    const environmentWrapperEvents: string[] = [];
+    const environmentWrapperFetch = async (request: URL | RequestInfo, init?: RequestInit) => {
+      expect(request).toBeInstanceOf(URL);
+      const url = new URL(String(request));
+      const method = init?.method ?? "GET";
+      environmentWrapperEvents.push(`${method} ${url.pathname}`);
+      if (
+        url.pathname === "/installation/token" ||
+        url.pathname === "/installation/repositories"
+      ) {
+        return environmentWrapperHarness.fetchImplementation(request, init);
+      }
+      expect(url.origin).toBe("https://api.github.com");
+      expect(url.search).toBe("");
+      expect(url.hash).toBe("");
+      expect(url.username).toBe("");
+      expect(url.password).toBe("");
+      expect(init?.redirect).toBe("error");
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      expect(init?.signal?.aborted).toBe(false);
+      const headers = init?.headers as Readonly<Record<string, string>> | undefined;
+      expect(headers?.Accept).toBe("application/vnd.github+json");
+      expect(headers?.Authorization).toBe(`Bearer ${jwt}`);
+      expect(headers?.["User-Agent"]).toBe("wrench-release-writer");
+      expect(headers?.["X-GitHub-Api-Version"]).toBe("2022-11-28");
+      const jsonResponse = (body: unknown, status: number, date?: string) => new Response(
+        JSON.stringify(body),
+        { headers: date === undefined ? undefined : { Date: date }, status },
+      );
+      if (url.pathname === "/app") {
+        expect(method).toBe("GET");
+        expect(Object.keys(init ?? {}).sort()).toEqual([
+          "headers",
+          "method",
+          "redirect",
+          "signal",
+        ]);
+        expect(Object.keys(headers ?? {}).sort()).toEqual([
+          "Accept",
+          "Authorization",
+          "User-Agent",
+          "X-GitHub-Api-Version",
+        ]);
+        return jsonResponse(appIdentity, 200);
+      }
+      if (url.pathname === `/app/installations/${String(configuration.installationId)}`) {
+        expect(method).toBe("GET");
+        expect(Object.keys(init ?? {}).sort()).toEqual([
+          "headers",
+          "method",
+          "redirect",
+          "signal",
+        ]);
+        expect(Object.keys(headers ?? {}).sort()).toEqual([
+          "Accept",
+          "Authorization",
+          "User-Agent",
+          "X-GitHub-Api-Version",
+        ]);
+        return jsonResponse(installation, 200);
+      }
+      expect(url.pathname).toBe(
+        `/app/installations/${String(configuration.installationId)}/access_tokens`,
+      );
+      expect(method).toBe("POST");
+      expect(Object.keys(init ?? {}).sort()).toEqual([
+        "body",
+        "headers",
+        "method",
+        "redirect",
+        "signal",
+      ]);
+      expect(Object.keys(headers ?? {}).sort()).toEqual([
+        "Accept",
+        "Authorization",
+        "Content-Type",
+        "User-Agent",
+        "X-GitHub-Api-Version",
+      ]);
+      expect(headers?.["Content-Type"]).toBe("application/json");
+      expect(init?.body).toBe(JSON.stringify(releaseAppTokenRequestBody()));
+      return jsonResponse(response, 201, "Sun, 30 Aug 2026 01:00:00 GMT");
+    };
+    const originalFetch = globalThis.fetch;
+    const originalDateNow = Date.now;
+    const originalStdoutWrite = process.stdout.write;
+    let environmentWrapperResult: string | undefined;
+    try {
+      globalThis.fetch = environmentWrapperFetch as typeof fetch;
+      Date.now = () => Date.parse("2026-08-30T01:00:00Z");
+      process.stdout.write = ((chunk: string | Uint8Array) => {
+        expect(String(chunk)).toBe(`::add-mask::${token}\n`);
+        environmentWrapperEvents.push(`mask:${token}`);
+        return true;
+      }) as typeof process.stdout.write;
+      environmentWrapperResult = await withReleaseAppTokenFromEnvironment(
+        environment,
+        async (value, receipt) => {
+          environmentWrapperEvents.push(`operation:${value}`);
+          expect(receipt).toEqual({
+            appId: configuration.appId,
+            appSlug: configuration.appSlug,
+            clientId: configuration.clientId,
+            expiresAt: response.expires_at,
+            installationId: configuration.installationId,
+            repositoryId: WRENCH_REPOSITORY_ID,
+          });
+          return "environment-wrapper-advanced";
+        },
+        async (receipt) => {
+          environmentWrapperEvents.push(`revoked:${JSON.stringify(receipt)}`);
+        },
+      );
+    } finally {
+      process.stdout.write = originalStdoutWrite;
+      Date.now = originalDateNow;
+      globalThis.fetch = originalFetch;
+    }
+    environmentWrapperEvents.push(`return:${environmentWrapperResult}`);
+    expect(environmentWrapperEvents).toEqual([
+      "GET /app",
+      `GET /app/installations/${String(configuration.installationId)}`,
+      `POST /app/installations/${String(configuration.installationId)}/access_tokens`,
+      `mask:${token}`,
+      `operation:${token}`,
+      "DELETE /installation/token",
+      "GET /installation/repositories",
+      "GET /installation/repositories",
+      `revoked:${JSON.stringify(firstTwoDenialsReceipt)}`,
+      "return:environment-wrapper-advanced",
+    ]);
+    expect(environmentWrapperHarness.calls).toEqual([
+      "DELETE /installation/token",
+      "GET /installation/repositories",
+      "GET /installation/repositories",
+    ]);
+    expect(environmentWrapperHarness.timeouts).toEqual([]);
+
+    expect(RELEASE_APP_REVOCATION_OBSERVATION_OFFSETS_MILLISECONDS).toEqual([
+      0,
+      250,
+      500,
+      1_000,
+      2_000,
+      4_000,
+      8_000,
+      16_000,
+      24_000,
+      29_000,
+    ]);
+    for (const bodies of [
+      ["empty", "text"],
+      ["json", "binary"],
+    ] as const) {
+      const direct = await runRevocationCase([
+        observation(401, { body: bodies[0] }),
+        observation(401, { body: bodies[1] }),
+      ]);
+      expect(direct.receipt).toEqual({
+        converged: true,
+        observationCount: 2,
+        propagationObserved: false,
+        stableDenials: 2,
+      });
+      expect(direct.harness.calls).toEqual([
+        "DELETE /installation/token",
+        "GET /installation/repositories",
+        "GET /installation/repositories",
+      ]);
+      expect(direct.harness.sourceChunks.every((chunk) =>
+        chunk.every((value) => value === 0))).toBe(true);
+    }
+    const canonicalEmptyDelete = await runRevocationCase(stableDenials, {
+      deleteObservation: observation(204, { body: "empty", contentLength: "0" }),
+    });
+    expect(canonicalEmptyDelete.receipt).toEqual(firstTwoDenialsReceipt);
+    expect(canonicalEmptyDelete.harness.calls).toEqual([
+      "DELETE /installation/token",
+      "GET /installation/repositories",
+      "GET /installation/repositories",
+    ]);
+
+    const propagated = await runRevocationCase([
+      observation(200),
+      observation(401, { body: "text" }),
+      observation(401, { body: "empty" }),
+    ], { sleepMode: "partial" });
+    expect(propagated.receipt).toEqual({
+      converged: true,
+      observationCount: 3,
+      propagationObserved: true,
+      stableDenials: 2,
+    });
+
+    const observedHarness = createRevocationHarness(stableDenials);
+    const observedEvents: string[] = [];
+    const observedResult = await withReleaseAppToken({
+      environment,
+      async inspect() { observedEvents.push("inspect"); return appIdentity; },
+      async inspectInstallation() { observedEvents.push("installation"); return installation; },
+      mask() { observedEvents.push("mask"); },
+      async mint() {
+        observedEvents.push("mint");
+        return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" };
+      },
+      nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+      async onRevoked(receipt: Readonly<Record<string, unknown>>) {
+        observedEvents.push(`observed:${JSON.stringify(receipt)}`);
+      },
+      async revoke(input: Readonly<{ apiUrl: URL; expiresAt: string; token: string }>) {
+        observedEvents.push("revoke:start");
+        const receipt = await revokeReleaseAppTokenWithConvergence({
+          ...input,
+          createTimeoutSignal: observedHarness.createTimeoutSignal,
+          fetchImplementation: observedHarness.fetchImplementation,
+          now: observedHarness.now,
+          sleep: observedHarness.sleep,
+        });
+        observedEvents.push("revoke:converged");
+        return receipt;
+      },
+    }, async () => {
+      observedEvents.push("operate");
+      return "advanced";
+    });
+    expect(observedResult).toBe("advanced");
+    expect(observedEvents).toEqual([
+      "inspect",
+      "installation",
+      "mint",
+      "mask",
+      "operate",
+      "revoke:start",
+      "revoke:converged",
+      'observed:{"converged":true,"observationCount":2,"propagationObserved":false,"stableDenials":2}',
+    ]);
+
+    const observerFailure = withReleaseAppToken({
+      environment,
+      async inspect() { return appIdentity; },
+      async inspectInstallation() { return installation; },
+      mask() {},
+      async mint() { return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" }; },
+      nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+      async onRevoked() { throw new Error("simulated sanitized observer failure"); },
+      async revoke() {
+        return {
+          converged: true,
+          observationCount: 2,
+          propagationObserved: false,
+          stableDenials: 2,
+        };
+      },
+    }, async () => {
+      throw new Error("simulated operation failure before observer");
+    });
+    try {
+      await observerFailure;
+      throw new Error("operation and observer unexpectedly succeeded");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors.map((item) => String(item))).toEqual([
+        "Error: simulated operation failure before observer",
+        "Error: simulated sanitized observer failure",
+      ]);
+    }
+
+    for (const invalidReceipt of [
+      undefined,
+      { ...firstTwoDenialsReceipt, observationCount: 3 },
+      { ...firstTwoDenialsReceipt, observationCount: 2, propagationObserved: true },
+      { ...firstTwoDenialsReceipt, observationCount: 11, propagationObserved: true },
+      { ...firstTwoDenialsReceipt, stableDenials: 1 },
+      { ...firstTwoDenialsReceipt, extra: true },
+    ] as const) {
+      let invalidObserverCalls = 0;
+      await expect(withReleaseAppToken({
+        environment,
+        async inspect() { return appIdentity; },
+        async inspectInstallation() { return installation; },
+        mask() {},
+        async mint() { return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" }; },
+        nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+        async onRevoked() { invalidObserverCalls += 1; },
+        async revoke() { return invalidReceipt; },
+      }, async () => "advanced")).rejects.toThrow("revocation receipt");
+      expect(invalidObserverCalls).toBe(0);
+    }
+    await expect(withReleaseAppToken({
+      environment,
+      async inspect() { return appIdentity; },
+      async inspectInstallation() { return installation; },
+      mask() {},
+      async mint() {
+        return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" };
+      },
+      nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+      async revoke() { return undefined; },
+    }, async () => "advanced")).rejects.toThrow("revocation receipt");
+
+    const deferredEvents: string[] = [];
+    let settleRevocation: ((value: typeof firstTwoDenialsReceipt) => void) | undefined;
+    const deferredRevocation = new Promise<typeof firstTwoDenialsReceipt>((resolve) => {
+      settleRevocation = resolve;
+    });
+    const deferredProductionFlow = (async () => {
+      await withReleaseAppToken({
+        environment,
+        async inspect() { return appIdentity; },
+        async inspectInstallation() { return installation; },
+        mask() {},
+        async mint() { return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" }; },
+        nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+        async onRevoked() { deferredEvents.push("revocation-receipt"); },
+        async revoke() {
+          deferredEvents.push("revocation-pending");
+          return deferredRevocation;
+        },
+      }, async () => {
+        deferredEvents.push("leased-write");
+      });
+      deferredEvents.push("post-ref-read");
+    })();
+    for (let attempt = 0; attempt < 16 && deferredEvents.length < 2; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(deferredEvents).toEqual(["leased-write", "revocation-pending"]);
+    settleRevocation?.(firstTwoDenialsReceipt);
+    await deferredProductionFlow;
+    expect(deferredEvents).toEqual([
+      "leased-write",
+      "revocation-pending",
+      "revocation-receipt",
+      "post-ref-read",
+    ]);
+
+    const deferredFailureEvents: string[] = [];
+    let rejectDeferredRevocation: ((reason: Error) => void) | undefined;
+    const deferredRevocationFailure = new Promise<typeof firstTwoDenialsReceipt>(
+      (_resolve, reject) => { rejectDeferredRevocation = reject; },
+    );
+    const deferredFailureFlow = (async () => {
+      await withReleaseAppToken({
+        environment,
+        async inspect() { return appIdentity; },
+        async inspectInstallation() { return installation; },
+        mask() {},
+        async mint() {
+          return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" };
+        },
+        nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+        async onRevoked() { deferredFailureEvents.push("revocation-receipt"); },
+        async revoke() {
+          deferredFailureEvents.push("revocation-pending");
+          return deferredRevocationFailure;
+        },
+      }, async () => { deferredFailureEvents.push("leased-write"); });
+      deferredFailureEvents.push("post-ref-read");
+    })();
+    for (let attempt = 0; attempt < 16 && deferredFailureEvents.length < 2; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(deferredFailureEvents).toEqual(["leased-write", "revocation-pending"]);
+    rejectDeferredRevocation?.(new Error("simulated deferred convergence failure"));
+    await expect(deferredFailureFlow).rejects.toThrow("simulated deferred convergence failure");
+    expect(deferredFailureEvents).toEqual(["leased-write", "revocation-pending"]);
+
+    const failedDeferredEvents: string[] = [];
+    await expect((async () => {
+      await withReleaseAppToken({
+        environment,
+        async inspect() { return appIdentity; },
+        async inspectInstallation() { return installation; },
+        mask() {},
+        async mint() { return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" }; },
+        nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+        async revoke() { throw new Error("simulated convergence failure"); },
+      }, async () => { failedDeferredEvents.push("leased-write"); });
+      failedDeferredEvents.push("post-ref-read");
+    })()).rejects.toThrow("simulated convergence failure");
+    expect(failedDeferredEvents).toEqual(["leased-write"]);
+
+    const persistentHarness = createRevocationHarness(
+      Array.from({ length: 10 }, () => observation(200)),
+    );
+    await expect(revokeReleaseAppTokenWithConvergence({
+      apiUrl: new URL("https://api.github.com/"),
+      createTimeoutSignal: persistentHarness.createTimeoutSignal,
+      expiresAt: response.expires_at,
+      fetchImplementation: persistentHarness.fetchImplementation,
+      now: persistentHarness.now,
+      sleep: persistentHarness.sleep,
+      token,
+    })).rejects.toThrow("did not converge within the bounded operational window");
+    expect(persistentHarness.observationCount()).toBe(10);
+    expect(persistentHarness.calls).toEqual([
+      "DELETE /installation/token",
+      ...Array.from({ length: 10 }, () => "GET /installation/repositories"),
+    ]);
+    expect(3 + persistentHarness.calls.length).toBe(14);
+    expect(persistentHarness.timeouts.slice(1)).toEqual([
+      10_000,
+      10_000,
+      10_000,
+      10_000,
+      10_000,
+      10_000,
+      10_000,
+      10_000,
+      6_000,
+      1_000,
+    ]);
+
+    for (const authoritativeBegin of [250, 251] as const) {
+      const closedBoundary = createRevocationHarness(stableDenials, {
+        nowSamples: [0, 1, 2, authoritativeBegin, 30_002],
+      });
+      await expect(revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: closedBoundary.createTimeoutSignal,
+        expiresAt: response.expires_at,
+        fetchImplementation: closedBoundary.fetchImplementation,
+        now: closedBoundary.now,
+        sleep: closedBoundary.sleep,
+        token,
+      })).rejects.toThrow("did not converge within the bounded operational window");
+      expect(closedBoundary.calls).toEqual(["DELETE /installation/token"]);
+      expect(closedBoundary.observationCount()).toBe(0);
+      expect(closedBoundary.sleepCalls).toEqual([]);
+      expect(closedBoundary.timeouts).toEqual([10_000]);
+    }
+
+    for (const authoritativeBegin of [30_000, 30_001] as const) {
+      const finalSlotBoundary = createRevocationHarness(stableDenials, {
+        nowSamples: [
+          0,
+          250,
+          500,
+          1_000,
+          2_000,
+          4_000,
+          8_000,
+          16_000,
+          24_000,
+          29_000,
+          29_000,
+          29_000,
+          authoritativeBegin,
+        ],
+      });
+      await expect(revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: finalSlotBoundary.createTimeoutSignal,
+        expiresAt: response.expires_at,
+        fetchImplementation: finalSlotBoundary.fetchImplementation,
+        now: finalSlotBoundary.now,
+        sleep: finalSlotBoundary.sleep,
+        token,
+      })).rejects.toThrow("did not converge within the bounded operational window");
+      expect(finalSlotBoundary.calls).toEqual(["DELETE /installation/token"]);
+      expect(finalSlotBoundary.observationCount()).toBe(0);
+      expect(finalSlotBoundary.sleepCalls).toEqual([]);
+      expect(finalSlotBoundary.timeouts).toEqual([10_000]);
+    }
+
+    for (const authoritativeBegin of [30_000, 30_001] as const) {
+      const finalSlotAfterObservations = createRevocationHarness(
+        Array.from({ length: 9 }, () => observation(200)),
+        {
+          deleteObservation: observation(204, {
+            body: "empty",
+            fetchLatencyMilliseconds: 0,
+          }),
+        },
+      );
+      let finalSlotClockReads = 0;
+      const finalSlotNow = () => {
+        if (
+          finalSlotAfterObservations.observationCount() === 9 &&
+          finalSlotAfterObservations.currentClock() === 29_000
+        ) {
+          finalSlotClockReads += 1;
+          if (finalSlotClockReads === 2) {
+            finalSlotAfterObservations.advanceClock(authoritativeBegin - 29_000);
+          }
+        }
+        return finalSlotAfterObservations.currentClock();
+      };
+      await expect(revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: finalSlotAfterObservations.createTimeoutSignal,
+        expiresAt: response.expires_at,
+        fetchImplementation: finalSlotAfterObservations.fetchImplementation,
+        now: finalSlotNow,
+        sleep: finalSlotAfterObservations.sleep,
+        token,
+      })).rejects.toThrow("did not converge within the bounded operational window");
+      expect(finalSlotAfterObservations.calls).toEqual([
+        "DELETE /installation/token",
+        ...Array.from({ length: 9 }, () => "GET /installation/repositories"),
+      ]);
+      expect(finalSlotAfterObservations.observationCount()).toBe(9);
+      expect(finalSlotAfterObservations.sleepCalls).toEqual([
+        249,
+        249,
+        499,
+        999,
+        1_999,
+        3_999,
+        7_999,
+        7_999,
+        4_999,
+      ]);
+      expect(finalSlotAfterObservations.timeouts).toEqual([
+        ...Array.from({ length: 9 }, () => 10_000),
+        6_000,
+      ]);
+    }
+
+    const boundaryTimeoutHarness = createRevocationHarness(
+      Array.from({ length: 10 }, () => observation(200)),
+    );
+    let finalSlotSamples = 0;
+    const boundaryTimeoutNow = () => {
+      if (
+        boundaryTimeoutHarness.observationCount() === 9 &&
+        boundaryTimeoutHarness.currentClock() === 29_001
+      ) {
+        finalSlotSamples += 1;
+        if (finalSlotSamples === 2) boundaryTimeoutHarness.advanceClock(500);
+      }
+      return boundaryTimeoutHarness.currentClock();
+    };
+    await expect(revokeReleaseAppTokenWithConvergence({
+      apiUrl: new URL("https://api.github.com/"),
+      createTimeoutSignal: boundaryTimeoutHarness.createTimeoutSignal,
+      expiresAt: response.expires_at,
+      fetchImplementation: boundaryTimeoutHarness.fetchImplementation,
+      now: boundaryTimeoutNow,
+      sleep: boundaryTimeoutHarness.sleep,
+      token,
+    })).rejects.toThrow("did not converge within the bounded operational window");
+    expect(boundaryTimeoutHarness.observationCount()).toBe(10);
+    expect(boundaryTimeoutHarness.callTimes.at(-1)).toBe(29_501);
+    expect(boundaryTimeoutHarness.timeouts.at(-1)).toBe(500);
+    expect(
+      (boundaryTimeoutHarness.callTimes.at(-1) ?? 0) +
+      (boundaryTimeoutHarness.timeouts.at(-1) ?? 0),
+    ).toBe(30_001);
+
+    const loneDenial = [
+      ...Array.from({ length: 9 }, () => observation(200)),
+      observation(401, { body: "empty" }),
+    ];
+    await expect(runRevocationCase(loneDenial)).rejects.toThrow("only one denial");
+    await expect(runRevocationCase([
+      observation(401, { body: "empty" }),
+      observation(200),
+    ])).rejects.toThrow("authorization returned after a denial");
+
+    const observationFailureCases: readonly Readonly<{
+      message: string;
+      observations: readonly RevocationObservation[];
+      overrides?: Parameters<typeof createRevocationHarness>[1];
+      sensitive?: readonly string[];
+    }>[] = [
+      {
+        message: "unexpected authorization state",
+        observations: [observation(403, {
+          body: "text",
+          bodyText: "observation-403-body-secret",
+          requestId: "observation-403-request-secret",
+        })],
+        sensitive: ["403", "observation-403-body-secret", "observation-403-request-secret"],
+      },
+      {
+        message: "unexpected authorization state",
+        observations: [observation(404, {
+          body: "text",
+          bodyText: "observation-404-body-secret",
+          requestId: "observation-404-request-secret",
+        })],
+        sensitive: ["404", "observation-404-body-secret", "observation-404-request-secret"],
+      },
+      {
+        message: "unexpected authorization state",
+        observations: [observation(429, {
+          body: "text",
+          bodyText: "observation-429-body-secret",
+          requestId: "observation-429-request-secret",
+        })],
+        sensitive: ["429", "observation-429-body-secret", "observation-429-request-secret"],
+      },
+      {
+        message: "unexpected authorization state",
+        observations: [observation(500, {
+          body: "text",
+          bodyText: "observation-500-body-secret",
+          requestId: "observation-500-request-secret",
+        })],
+        sensitive: ["500", "observation-500-body-secret", "observation-500-request-secret"],
+      },
+      {
+        message: "authorized revocation observation is malformed",
+        observations: [observation(200, { body: "wrong-repo" })],
+      },
+      {
+        message: "authorized revocation observation is malformed",
+        observations: [observation(200, { body: "binary" })],
+      },
+      {
+        message: "authorized revocation observation is malformed",
+        observations: [observation(200, { body: "overflow" })],
+      },
+      {
+        message: "redirected",
+        observations: [observation(200, {
+          body: "text",
+          bodyText: "observation-200-location-body-secret",
+          location: "https://observation-location-secret.invalid/",
+          requestId: "observation-200-location-request-secret",
+        })],
+        sensitive: [
+          "observation-200-location-body-secret",
+          "observation-200-location-request-secret",
+          "https://observation-location-secret.invalid/",
+        ],
+      },
+      {
+        message: "redirected",
+        observations: [observation(401, {
+          body: "json",
+          redirected: true,
+          requestId: "observation-401-redirect-request-secret",
+        })],
+        sensitive: ["Bad credentials", "observation-401-redirect-request-secret"],
+      },
+      {
+        message: "redirected",
+        observations: [observation(401, {
+          body: "text",
+          bodyText: "observation-401-location-body-secret",
+          location: "https://observation-401-location-secret.invalid/",
+          requestId: "observation-401-location-request-secret",
+        })],
+        sensitive: [
+          "observation-401-location-body-secret",
+          "observation-401-location-request-secret",
+          "https://observation-401-location-secret.invalid/",
+        ],
+      },
+      {
+        message: "transport failed",
+        observations: [observation(401, { networkFailure: true })],
+      },
+      {
+        message: "transport failed",
+        observations: [observation(401, { networkFailure: "abort" })],
+      },
+      {
+        message: "authorized revocation observation is malformed",
+        observations: [observation(200, { body: "invalid-json" })],
+      },
+      {
+        message: "denied revocation observation is malformed",
+        observations: [observation(401, { body: "overflow" })],
+      },
+      {
+        message: "sleep failed",
+        observations: [observation(200), ...stableDenials],
+        overrides: { sleepMode: "reject" },
+      },
+      {
+        message: "did not advance the clock",
+        observations: [observation(200), ...stableDenials],
+        overrides: { sleepMode: "frozen" },
+      },
+      {
+        message: "clock regressed",
+        observations: [observation(200), ...stableDenials],
+        overrides: { sleepMode: "regress" },
+      },
+      {
+        message: "clock is invalid",
+        observations: [observation(200), ...stableDenials],
+        overrides: { sleepMode: "overflow" },
+      },
+      {
+        message: "clock regressed",
+        observations: [
+          observation(401, { fetchLatencyMilliseconds: -1 }),
+          observation(401),
+        ],
+      },
+    ];
+    for (const failureCase of observationFailureCases) {
+      const failureHarness = createRevocationHarness(
+        failureCase.observations,
+        failureCase.overrides,
+      );
+      let caught: unknown;
+      try {
+        await revokeReleaseAppTokenWithConvergence({
+          apiUrl: new URL("https://api.github.com/"),
+          createTimeoutSignal: failureHarness.createTimeoutSignal,
+          expiresAt: response.expires_at,
+          fetchImplementation: failureHarness.fetchImplementation,
+          now: failureHarness.now,
+          sleep: failureHarness.sleep,
+          token,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(String(caught)).toContain(failureCase.message);
+      for (const sensitive of [
+        token,
+        "Bad credentials",
+        "/installation/repositories",
+        "/installation/token",
+        ...(failureCase.sensitive ?? []),
+      ]) {
+        expect(String(caught)).not.toContain(sensitive);
+      }
+      if (failureCase.observations.some((item) => item.body === "overflow")) {
+        expect(failureHarness.cancelledBodies()).toBe(1);
+      } else {
+        expect(failureHarness.sourceChunks.every((chunk) =>
+          chunk.every((value) => value === 0))).toBe(true);
+      }
+    }
+
+    for (const invalidDateObservation of [
+      observation(200, {
+        date: "invalid-authorized-date-secret",
+        requestId: "authorized-date-request-secret",
+      }),
+      observation(200, { omitDate: true }),
+      observation(401, {
+        body: "text",
+        bodyText: "denied-date-body-secret",
+        date: "invalid-denied-date-secret",
+        requestId: "denied-date-request-secret",
+      }),
+      observation(401, { body: "text", omitDate: true }),
+    ] as const) {
+      const invalidDateHarness = createRevocationHarness([invalidDateObservation]);
+      let caught: unknown;
+      try {
+        await revokeReleaseAppTokenWithConvergence({
+          apiUrl: new URL("https://api.github.com/"),
+          createTimeoutSignal: invalidDateHarness.createTimeoutSignal,
+          expiresAt: response.expires_at,
+          fetchImplementation: invalidDateHarness.fetchImplementation,
+          now: invalidDateHarness.now,
+          sleep: invalidDateHarness.sleep,
+          token,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(String(caught)).toContain(
+        invalidDateObservation.status === 200
+          ? "authorized revocation observation is malformed"
+          : "denied revocation observation is malformed",
+      );
+      for (const sensitive of [
+        token,
+        invalidDateObservation.date ?? "",
+        String(invalidDateObservation.requestId),
+        invalidDateObservation.bodyText ?? "",
+        "/installation/repositories",
+      ].filter((value) => value.length > 0)) {
+        expect(String(caught)).not.toContain(sensitive);
+      }
+      expect(invalidDateHarness.sourceChunks.length).toBeGreaterThan(0);
+      expect(invalidDateHarness.sourceChunks.every((chunk) =>
+        chunk.every((value) => value === 0))).toBe(true);
+    }
+
+    const rejectedDeleteCases: readonly Readonly<{
+      observation: RevocationObservation;
+      sensitive?: readonly string[];
+    }>[] = [
+      {
+        observation: observation(403, {
+          body: "text",
+          bodyText: "delete-403-body-secret",
+          requestId: "delete-403-request-secret",
+        }),
+        sensitive: ["403", "delete-403-body-secret", "delete-403-request-secret"],
+      },
+      {
+        observation: observation(401, {
+          body: "json",
+          requestId: "delete-401-request-secret",
+        }),
+        sensitive: ["401", "Bad credentials", "delete-401-request-secret"],
+      },
+      {
+        observation: observation(204, {
+          body: "text",
+          bodyText: "delete-redirect-body-secret",
+          contentLength: "27",
+          location: "https://delete-location-secret.invalid/",
+          requestId: "delete-redirect-request-secret",
+        }),
+        sensitive: [
+          "delete-redirect-body-secret",
+          "delete-redirect-request-secret",
+          "https://delete-location-secret.invalid/",
+        ],
+      },
+      {
+        observation: observation(204, {
+          body: "text",
+          bodyText: "delete-nonempty-body-secret",
+          contentLength: "27",
+        }),
+        sensitive: ["delete-nonempty-body-secret"],
+      },
+      {
+        observation: observation(204, { body: "empty", contentLength: "1" }),
+      },
+      {
+        observation: observation(204, { body: "empty", contentLength: "00" }),
+      },
+      { observation: observation(204, { body: "overflow" }) },
+      { observation: observation(204, { body: "empty", networkFailure: true }) },
+    ];
+    for (const rejectedDeleteCase of rejectedDeleteCases) {
+      const deleteObservation = rejectedDeleteCase.observation;
+      const rejectedDelete = createRevocationHarness(stableDenials, { deleteObservation });
+      let caught: unknown;
+      try {
+        await revokeReleaseAppTokenWithConvergence({
+          apiUrl: new URL("https://api.github.com/"),
+          createTimeoutSignal: rejectedDelete.createTimeoutSignal,
+          expiresAt: response.expires_at,
+          fetchImplementation: rejectedDelete.fetchImplementation,
+          now: rejectedDelete.now,
+          sleep: rejectedDelete.sleep,
+          token,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(String(caught)).toContain("indeterminate");
+      for (const sensitive of [
+        token,
+        "Bad credentials",
+        "/installation/repositories",
+        "/installation/token",
+        ...(rejectedDeleteCase.sensitive ?? []),
+      ]) {
+        expect(String(caught)).not.toContain(sensitive);
+      }
+      expect(rejectedDelete.calls).toEqual(["DELETE /installation/token"]);
+      if (deleteObservation.body !== "overflow") {
+        expect(rejectedDelete.sourceChunks.every((chunk) =>
+          chunk.every((value) => value === 0))).toBe(true);
+      } else {
+        expect(rejectedDelete.cancelledBodies()).toBe(1);
+      }
+    }
+
+    for (const deleteObservation of [
+      observation(204, { body: "empty", networkFailure: "pending" }),
+      observation(204, { body: "pending" }),
+    ] as const) {
+      const pendingHarness = createRevocationHarness(stableDenials, { deleteObservation });
+      let caught: unknown;
+      try {
+        await revokeReleaseAppTokenWithConvergence({
+          apiUrl: new URL("https://api.github.com/"),
+          createTimeoutSignal: () => AbortSignal.timeout(1),
+          expiresAt: response.expires_at,
+          fetchImplementation: pendingHarness.fetchImplementation,
+          now: pendingHarness.now,
+          sleep: pendingHarness.sleep,
+          token,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(String(caught)).toContain("indeterminate");
+      expect(String(caught)).not.toContain(token);
+      expect(pendingHarness.calls).toEqual(["DELETE /installation/token"]);
+    }
+    for (const observations of [
+      [observation(401, { networkFailure: "pending" })],
+      [observation(401, { body: "pending" })],
+    ] as const) {
+      const pendingHarness = createRevocationHarness(observations, {
+        deleteObservation: observation(204, { body: "empty" }),
+      });
+      let caught: unknown;
+      try {
+        await revokeReleaseAppTokenWithConvergence({
+          apiUrl: new URL("https://api.github.com/"),
+          createTimeoutSignal: () => AbortSignal.timeout(1),
+          expiresAt: response.expires_at,
+          fetchImplementation: pendingHarness.fetchImplementation,
+          now: pendingHarness.now,
+          sleep: pendingHarness.sleep,
+          token,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(String(caught)).toContain("indeterminate");
+      expect(String(caught)).not.toContain(token);
+      expect(pendingHarness.calls).toEqual([
+        "DELETE /installation/token",
+        "GET /installation/repositories",
+      ]);
+    }
+
+    const missedSlots = await runRevocationCase([
+      observation(200, { fetchLatencyMilliseconds: 9_000 }),
+      observation(401, { body: "empty" }),
+      observation(401, { body: "text" }),
+    ]);
+    expect(missedSlots.receipt.observationCount).toBe(3);
+    expect(missedSlots.harness.callTimes.slice(1)).toEqual([1, 16_001, 24_001]);
+
+    for (const invalidClock of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      -1,
+      Number.MAX_SAFE_INTEGER + 1,
+    ] as const) {
+      const clockHarness = createRevocationHarness(stableDenials, {
+        nowSamples: [invalidClock],
+      });
+      await expect(revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: clockHarness.createTimeoutSignal,
+        expiresAt: response.expires_at,
+        fetchImplementation: clockHarness.fetchImplementation,
+        now: clockHarness.now,
+        sleep: clockHarness.sleep,
+        token,
+      })).rejects.toThrow("clock is invalid");
+      expect(clockHarness.calls).toEqual(["DELETE /installation/token"]);
+    }
+    const throwingClock = createRevocationHarness(stableDenials);
+    await expect(revokeReleaseAppTokenWithConvergence({
+      apiUrl: new URL("https://api.github.com/"),
+      createTimeoutSignal: throwingClock.createTimeoutSignal,
+      expiresAt: response.expires_at,
+      fetchImplementation: throwingClock.fetchImplementation,
+      now() { throw new Error(`clock leaked ${token}`); },
+      sleep: throwingClock.sleep,
+      token,
+    })).rejects.toThrow("clock read failed");
+    expect(throwingClock.calls).toEqual(["DELETE /installation/token"]);
+
+    const deletionCompletionEvents: string[] = [];
+    const deletionCompletionHarness = createRevocationHarness(stableDenials, {
+      auditEvents: deletionCompletionEvents,
+      deleteObservation: observation(204, { body: "empty", date: "malformed" }),
+      nowSamples: [0],
+    });
+    await expect(revokeReleaseAppTokenWithConvergence({
+      apiUrl: new URL("https://api.github.com/"),
+      createTimeoutSignal: deletionCompletionHarness.createTimeoutSignal,
+      expiresAt: response.expires_at,
+      fetchImplementation: deletionCompletionHarness.fetchImplementation,
+      now: deletionCompletionHarness.now,
+      sleep: deletionCompletionHarness.sleep,
+      token,
+    })).rejects.toThrow("revocation authority time proof is malformed");
+    expect(deletionCompletionHarness.calls).toEqual(["DELETE /installation/token"]);
+    expect(deletionCompletionEvents).toEqual([
+      "header:location",
+      "header:content-length",
+      "header:content-length",
+      "clock",
+      "header:date",
+    ]);
+
+    const boundary = await runRevocationCase([
+      ...Array.from({ length: 8 }, () => observation(200)),
+      observation(401, { body: "text" }),
+      observation(401, { body: "empty", bodyLatencyMilliseconds: 1_000, fetchLatencyMilliseconds: 0 }),
+    ]);
+    expect(boundary.receipt).toEqual({
+      converged: true,
+      observationCount: 10,
+      propagationObserved: true,
+      stableDenials: 2,
+    });
+    await expect(runRevocationCase([
+      ...Array.from({ length: 8 }, () => observation(200)),
+      observation(401),
+      observation(401, { bodyLatencyMilliseconds: 1_001, fetchLatencyMilliseconds: 0 }),
+    ])).rejects.toThrow("completed outside its deadline");
+    await expect(runRevocationCase([
+      observation(401, { date: "Sun, 30 Aug 2026 02:00:00 GMT" }),
+      observation(401),
+    ])).rejects.toThrow("denied revocation observation is malformed");
+
+    const oneSecondBeforeExpiry = "Sun, 30 Aug 2026 01:59:59 GMT";
+    const acceptedDeleteDate = await runRevocationCase(stableDenials, {
+      deleteObservation: observation(204, {
+        body: "empty",
+        date: oneSecondBeforeExpiry,
+      }),
+    });
+    expect(acceptedDeleteDate.receipt).toEqual(firstTwoDenialsReceipt);
+    const acceptedAuthorizedDate = await runRevocationCase([
+      observation(200, { date: oneSecondBeforeExpiry }),
+      observation(401, { body: "empty", date: oneSecondBeforeExpiry }),
+      observation(401, { body: "text", date: oneSecondBeforeExpiry }),
+    ]);
+    expect(acceptedAuthorizedDate.receipt).toEqual({
+      converged: true,
+      observationCount: 3,
+      propagationObserved: true,
+      stableDenials: 2,
+    });
+    const acceptedDeniedDate = await runRevocationCase([
+      observation(401, { body: "empty", date: oneSecondBeforeExpiry }),
+      observation(401, { body: "text", date: oneSecondBeforeExpiry }),
+    ]);
+    expect(acceptedDeniedDate.receipt).toEqual(firstTwoDenialsReceipt);
+    for (const [label, observations, overrides] of [
+      [
+        "revocation authority time proof is malformed",
+        stableDenials,
+        {
+          deleteObservation: observation(204, {
+            body: "empty",
+            date: "Sun, 30 Aug 2026 02:00:00 GMT",
+          }),
+        },
+      ],
+      [
+        "authorized revocation observation is malformed",
+        [observation(200, { date: "Sun, 30 Aug 2026 02:00:00 GMT" })],
+        {},
+      ],
+      [
+        "denied revocation observation is malformed",
+        [observation(401, {
+          body: "empty",
+          date: "Sun, 30 Aug 2026 02:00:00 GMT",
+        })],
+        {},
+      ],
+    ] as const) {
+      const equalityBoundary = createRevocationHarness(observations, overrides);
+      await expect(revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: equalityBoundary.createTimeoutSignal,
+        expiresAt: response.expires_at,
+        fetchImplementation: equalityBoundary.fetchImplementation,
+        now: equalityBoundary.now,
+        sleep: equalityBoundary.sleep,
+        token,
+      })).rejects.toThrow(label);
+    }
+
+    for (const [expiresAt, deleteObservation] of [
+      ["malformed", observation(204, { body: "empty" })],
+      [response.expires_at, observation(204, { body: "empty", date: "malformed" })],
+      [response.expires_at, observation(204, { body: "empty", omitDate: true })],
+    ] as const) {
+      const invalidAuthority = createRevocationHarness(stableDenials, { deleteObservation });
+      await expect(revokeReleaseAppTokenWithConvergence({
+        apiUrl: new URL("https://api.github.com/"),
+        createTimeoutSignal: invalidAuthority.createTimeoutSignal,
+        expiresAt,
+        fetchImplementation: invalidAuthority.fetchImplementation,
+        now: invalidAuthority.now,
+        sleep: invalidAuthority.sleep,
+        token,
+      })).rejects.toThrow("revocation authority time proof is malformed");
+      expect(invalidAuthority.calls).toEqual(["DELETE /installation/token"]);
+    }
+
+    const impreciseDeadline = createRevocationHarness(stableDenials, {
+      initialClock: Number.MAX_SAFE_INTEGER - 30_000,
+    });
+    await expect(revokeReleaseAppTokenWithConvergence({
+      apiUrl: new URL("https://api.github.com/"),
+      createTimeoutSignal: impreciseDeadline.createTimeoutSignal,
+      expiresAt: response.expires_at,
+      fetchImplementation: impreciseDeadline.fetchImplementation,
+      now: impreciseDeadline.now,
+      sleep: impreciseDeadline.sleep,
+      token,
+    })).rejects.toThrow("outside the precise clock range");
+    expect(impreciseDeadline.calls).toEqual(["DELETE /installation/token"]);
+
     const revokedAfterFailure: string[] = [];
     await expect(withReleaseAppToken({
       environment,
@@ -2411,7 +3791,10 @@ fi
       mask() {},
       async mint() { return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" }; },
       nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
-      async revoke(input: Readonly<{ token: string }>) { revokedAfterFailure.push(input.token); },
+      async revoke(input: Readonly<{ token: string }>) {
+        revokedAfterFailure.push(input.token);
+        return firstTwoDenialsReceipt;
+      },
     }, async () => {
       throw new Error("simulated leased push failure");
     })).rejects.toThrow("simulated leased push failure");
@@ -2435,6 +3818,7 @@ fi
       nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
       async revoke(input: Readonly<{ token: string }>) {
         malformedTokenRevocations.push(input.token);
+        return firstTwoDenialsReceipt;
       },
     }, async () => "unreachable")).rejects.toThrow("permissions are not exactly");
     expect(malformedTokenRevocations).toEqual([token]);
@@ -2460,6 +3844,180 @@ fi
         "Error: simulated revoke failure",
       ]);
     }
+
+    const convergenceAggregateHarness = createRevocationHarness(
+      Array.from({ length: 10 }, () => observation(200)),
+    );
+    const convergenceAggregateSetupCalls: string[] = [];
+    let convergenceAggregateOperations = 0;
+    let convergenceAggregateMints = 0;
+    try {
+      await withReleaseAppToken({
+        environment,
+        async inspect() {
+          convergenceAggregateSetupCalls.push("GET /app");
+          return appIdentity;
+        },
+        async inspectInstallation() {
+          convergenceAggregateSetupCalls.push("GET /app/installations/12345");
+          return installation;
+        },
+        mask() {},
+        async mint() {
+          convergenceAggregateMints += 1;
+          convergenceAggregateSetupCalls.push("POST /app/installations/12345/access_tokens");
+          return { body: response, serverDate: "Sun, 30 Aug 2026 01:00:00 GMT" };
+        },
+        nowMilliseconds() { return Date.parse("2026-08-30T01:00:00Z"); },
+        async revoke(input: Readonly<{ apiUrl: URL; expiresAt: string; token: string }>) {
+          await revokeReleaseAppTokenWithConvergence({
+            ...input,
+            createTimeoutSignal: convergenceAggregateHarness.createTimeoutSignal,
+            fetchImplementation: convergenceAggregateHarness.fetchImplementation,
+            now: convergenceAggregateHarness.now,
+            sleep: convergenceAggregateHarness.sleep,
+          });
+        },
+      }, async () => {
+        convergenceAggregateOperations += 1;
+        throw new Error("simulated leased push failure before convergence");
+      });
+      throw new Error("combined operation and convergence unexpectedly succeeded");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors.map((item) => String(item))).toEqual([
+        "Error: simulated leased push failure before convergence",
+        "Error: release App token revocation did not converge within the bounded operational window",
+      ]);
+    }
+    expect(convergenceAggregateMints).toBe(1);
+    expect(convergenceAggregateOperations).toBe(1);
+    expect(convergenceAggregateSetupCalls).toEqual([
+      "GET /app",
+      "GET /app/installations/12345",
+      "POST /app/installations/12345/access_tokens",
+    ]);
+    expect(convergenceAggregateHarness.calls).toEqual([
+      "DELETE /installation/token",
+      ...Array.from({ length: 10 }, () => "GET /installation/repositories"),
+    ]);
+    expect([
+      ...convergenceAggregateSetupCalls,
+      ...convergenceAggregateHarness.calls,
+    ]).toHaveLength(14);
+    expect(convergenceAggregateHarness.calls.filter((call) =>
+      call === "DELETE /installation/token")).toHaveLength(1);
+
+    const deferredPromotionDeployment = providerDeployment(
+      10,
+      "2026-08-29T13:00:00Z",
+      { sha: providerPreviousSha },
+    );
+    const deferredPromotionBaselineApi = new ProviderApiFixture({
+      deployments: [[deferredPromotionDeployment]],
+      refSha: providerPreviousSha,
+      serverDates: [providerBaselineServerDate, providerBaselineServerDate],
+      statuses: terminalBaselineStatus(10, "2026-08-29T13:01:00Z"),
+    });
+    const deferredPromotionBaseline = await createProviderBaseline({
+      api: deferredPromotionBaselineApi,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+    });
+    const productionRefRead =
+      `GET /repos/${providerRepository}/git/ref/heads/website-production`;
+
+    const deferredPromotionApi = new ProviderApiFixture({
+      deployments: [[deferredPromotionDeployment]],
+      refSha: providerPreviousSha,
+      serverDates: [providerPromotionServerDate],
+      statuses: terminalBaselineStatus(10, "2026-08-29T13:01:00Z"),
+    });
+    const originalDeferredAdvance = deferredPromotionApi.advanceRef.bind(deferredPromotionApi);
+    const deferredPromotionEvents: string[] = [];
+    let settleDeferredAdvance: (() => void) | undefined;
+    const deferredAdvance = new Promise<void>((resolve) => { settleDeferredAdvance = resolve; });
+    Object.defineProperty(deferredPromotionApi, "advanceRef", {
+      value: async (...args: Parameters<ProviderApiFixture["advanceRef"]>) => {
+        deferredPromotionEvents.push("advance-pending");
+        await deferredAdvance;
+        deferredPromotionEvents.push("advance-settled");
+        await originalDeferredAdvance(...args);
+      },
+    });
+    let deferredPromotionSettled = false;
+    const deferredPromotionResult = promoteWebsiteProduction({
+      api: deferredPromotionApi,
+      baselineReceipt: deferredPromotionBaseline,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    }).finally(() => { deferredPromotionSettled = true; });
+    for (let attempt = 0; attempt < 32 && deferredPromotionEvents.length === 0; attempt += 1) {
+      await Promise.resolve();
+    }
+    expect(deferredPromotionEvents).toEqual(["advance-pending"]);
+    expect(deferredPromotionSettled).toBe(false);
+    expect(deferredPromotionApi.calls.filter((call) => call === productionRefRead)).toHaveLength(2);
+    settleDeferredAdvance?.();
+    await expect(deferredPromotionResult).resolves.toMatchObject({ mode: "advanced" });
+    expect(deferredPromotionEvents).toEqual(["advance-pending", "advance-settled"]);
+    expect(deferredPromotionApi.calls.filter((call) => call === productionRefRead)).toHaveLength(3);
+
+    const rejectedPromotionApi = new ProviderApiFixture({
+      deployments: [[deferredPromotionDeployment]],
+      refSha: providerPreviousSha,
+      serverDates: [providerPromotionServerDate],
+      statuses: terminalBaselineStatus(10, "2026-08-29T13:01:00Z"),
+    });
+    let rejectDeferredAdvance: ((reason: Error) => void) | undefined;
+    const rejectedAdvance = new Promise<void>((_resolve, reject) => {
+      rejectDeferredAdvance = reject;
+    });
+    Object.defineProperty(rejectedPromotionApi, "advanceRef", {
+      value: async () => rejectedAdvance,
+    });
+    const rejectedPromotion = promoteWebsiteProduction({
+      api: rejectedPromotionApi,
+      baselineReceipt: deferredPromotionBaseline,
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    });
+    for (let attempt = 0; attempt < 32; attempt += 1) await Promise.resolve();
+    expect(rejectedPromotionApi.calls.filter((call) => call === productionRefRead)).toHaveLength(2);
+    rejectDeferredAdvance?.(new Error("simulated deferred writer failure"));
+    await expect(rejectedPromotion).rejects.toThrow("simulated deferred writer failure");
+    expect(rejectedPromotionApi.calls.filter((call) => call === productionRefRead)).toHaveLength(2);
+
+    const providerSource = await readFile(providerOutcomeHelperUrl, "utf8");
+    const promotionStart = providerSource.indexOf("export async function promoteWebsiteProduction");
+    const promotionEnd = providerSource.indexOf("\nexport ", promotionStart + 1);
+    const promotionSource = providerSource.slice(
+      promotionStart,
+      promotionEnd < 0 ? undefined : promotionEnd,
+    );
+    expect(promotionSource.indexOf("await api.advanceRef(")).toBeGreaterThan(0);
+    expect(promotionSource.indexOf("await api.advanceRef("))
+      .toBeLessThan(promotionSource.indexOf("const promotedSha = await readProductionRef("));
+    const productionAdvanceStart = providerSource.indexOf("async advanceRef(repository");
+    const productionAdvanceEnd = providerSource.indexOf("\n  }\n}", productionAdvanceStart);
+    const productionAdvanceSource = providerSource.slice(productionAdvanceStart, productionAdvanceEnd);
+    expect(providerSource.match(
+      /^import \{ withReleaseAppTokenFromEnvironment \} from "\.\/release-app-token\.mjs";$/gmu,
+    ) ?? []).toHaveLength(1);
+    expect(providerSource.match(/await withReleaseAppTokenFromEnvironment\(/gu) ?? [])
+      .toHaveLength(1);
+    expect(productionAdvanceSource.trimEnd()).toBe(`async advanceRef(repository, expectedOldSha, verifiedSha, verifiedTag) {
+    await withReleaseAppTokenFromEnvironment(this.#environment, async (token) => {
+      advanceWebsiteProductionRefFromEnvironment({
+        environment: Object.freeze({ WRENCH_RELEASE_APP_TOKEN: token }),
+        expectedOldSha,
+        repository,
+        verifiedSha,
+        verifiedTag,
+      });
+    });`);
 
     for (const overrides of [
       { GITHUB_API_URL: "https://github.example.invalid" },
@@ -4811,7 +6369,15 @@ fi
       "first fetches only the verified tag through the fixed HTTPS",
       "peels that fetched object locally",
       "does not check out or execute\ntagged code",
-      "App token is revoked before the exact production-ref post-read",
+      "exactly one nonredirecting\n`DELETE /installation/token` request",
+      "half-open request-start window `[start, deadline)`",
+      "HTTP 401 on two distinct scheduled reads",
+      "Request,\nbody, and sleep latency are charged to the same window",
+      "missed absolute slot\nis skipped instead of triggering a burst",
+      "every observation that can\nstart before the deadline remains authorized",
+      "Wrench fail-closed policy, not a GitHub revocation-propagation SLA",
+      "No action is\nretried",
+      "exact production-ref post-read begins only after convergence",
       "every\n`WRENCH_RELEASE_APP_*` value removed",
       "workflow never creates, deletes, force-moves, or\nrecreates the branch",
       "exactly 20 observation slots anchored to that start at offsets zero through\n19 minutes",
@@ -4829,8 +6395,8 @@ fi
       "five bounded release\npages plus the empty sentinel page",
       "use at most 278 REST calls",
       "leaving 722 calls",
-      "promotion helper itself uses at most 13 read-only REST\ncalls",
-      "four App-authentication requests",
+      "promotion helper itself uses at most 13 read-only REST calls",
+      "at most fourteen App REST requests",
       "240-point ceiling and 760 points of headroom",
       "Read-only GitHub responses are capped at 8 MiB",
       "App\nidentity, installation, token, and revocation responses are streamed under a\n1 MiB cap",
@@ -4903,6 +6469,14 @@ fi
     expect(agents).toContain("Mirror the production lifecycle and App-only update rules exactly");
     expect(agents).toContain("separately reviewed temporary current-main source");
     expect(agents).toContain("Keep the production helper hard-bound to `website-production`");
+    expect(agents).toContain("exactly one empty-204 revocation request");
+    expect(agents).toContain("two stable authorization denials");
+    expect(agents).toContain("ten-slot, 30-second monotonic operational window before the exact ref post-read");
+    expect(agents).toContain("not a GitHub propagation SLA");
+    expect(agents).toContain("cap the App path at fourteen REST requests");
+    expect(agents).toContain("canonical GitHub `Date` headers strictly before the minted `expires_at`");
+    expect(agents).toContain("`propagationObserved=false` means the first two probes were the stable 401 pair");
+    expect(agents).toContain("`propagationObserved=true` means at least one exact 200 preceded the final two stable 401s");
     expect(agents).not.toContain("provisional source and initial App registration");
     expect(agents).not.toContain("contents-only writer");
     expect(agents).toContain("Require bounded read-only jobs");
@@ -4955,7 +6529,13 @@ fi
     expect(websiteAgents).not.toContain("initial provisional permission configuration");
     expect(websiteAgents).not.toContain("provider window orchestration headroom");
     expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");
-    expect(websiteAgents).toContain("token revocation and exact ref readback");
+    expect(websiteAgents).toContain("exactly one empty-204 token revocation");
+    expect(websiteAgents).toContain("ten absolute offsets inside a 30-second half-open request-start window");
+    expect(websiteAgents).toContain("Every accepted 200 or 401 also requires a canonical pre-expiry `Date`");
+    expect(websiteAgents).toContain("`propagationObserved=false` means those were the first two probes");
+    expect(websiteAgents).toContain("while `true` means at least one exact 200 preceded the final two 401s");
+    expect(websiteAgents).toContain("Two stable HTTP 401 observations must converge before the exact ref readback");
+    expect(websiteAgents).toContain("not a GitHub propagation SLA");
     expect(websiteAgents).toContain("initial success observation plus two stable");
     expect(websiteAgents).not.toContain("audit every retained Production deployment status");
     expect(websiteAgents).not.toContain("every baseline deployment's REST status history");
@@ -4988,1076 +6568,6 @@ fi
     expect(skillInstallGuide).toContain("If the coordinate is not public, stop");
     expect(readme).not.toContain("not currently published on npm");
     expect(readme).not.toContain("registries are not supported install paths");
-  });
-});
-
-describe("single-use release App canary", () => {
-  const startSha = "a".repeat(40);
-  const targetSha = "b".repeat(40);
-  const baselineSha = "c".repeat(40);
-  const workflowSha = "d".repeat(40);
-  const lifecycleRulesetId = 500;
-  const updateRulesetId = 501;
-  const productionFreezeRulesetId = 502;
-  const rulesetCreatedAt = "2026-08-29T21:20:47.112-04:00";
-  const providerUpdatedAt = "2026-08-30T19:58:27.117-04:00";
-  const lifecycleUpdatedAt = "2026-08-30T23:58:27.117Z";
-  const updateUpdatedAt = "2026-08-30T23:58:27.117Z";
-  const productionFreezeUpdatedAt = "2026-08-30T23:58:28.117Z";
-
-  function canaryEnvironment(sha = workflowSha): Record<string, string> {
-    return {
-      GITHUB_ACTOR: "0thernet",
-      GITHUB_ACTOR_ID: "894119",
-      GITHUB_API_URL: "https://api.github.com",
-      GITHUB_EVENT_NAME: "workflow_dispatch",
-      GITHUB_REF: "refs/heads/main",
-      GITHUB_REF_PROTECTED: "true",
-      GITHUB_REPOSITORY: "hraness/wrench",
-      GITHUB_REPOSITORY_ID: "1316443113",
-      GITHUB_REPOSITORY_OWNER: "hraness",
-      GITHUB_RUN_ATTEMPT: "1",
-      GITHUB_RUN_ID: "33299900001",
-      GITHUB_SHA: sha,
-      GITHUB_TRIGGERING_ACTOR: "0thernet",
-      GITHUB_WORKFLOW: "Prove release App canary",
-      GITHUB_WORKFLOW_REF:
-        "hraness/wrench/.github/workflows/release-app-canary.yml@refs/heads/main",
-      GITHUB_WORKFLOW_SHA: sha,
-      WRENCH_RELEASE_APP_ID: "700",
-      WRENCH_RELEASE_LIFECYCLE_RULESET_ID: String(lifecycleRulesetId),
-      WRENCH_RELEASE_LIFECYCLE_RULESET_UPDATED_AT: lifecycleUpdatedAt,
-      WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID: String(productionFreezeRulesetId),
-      WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT: productionFreezeUpdatedAt,
-      WRENCH_RELEASE_UPDATE_RULESET_ID: String(updateRulesetId),
-      WRENCH_RELEASE_UPDATE_RULESET_UPDATED_AT: updateUpdatedAt,
-    };
-  }
-
-  function applicableRules(): ReadonlyArray<Record<string, unknown>> {
-    const common = {
-      ruleset_source: "hraness/wrench",
-      ruleset_source_type: "Repository",
-    } as const;
-    return [
-      { ...common, ruleset_id: lifecycleRulesetId, type: "creation" },
-      { ...common, ruleset_id: lifecycleRulesetId, type: "deletion" },
-      { ...common, ruleset_id: lifecycleRulesetId, type: "non_fast_forward" },
-      {
-        ...common,
-        ruleset_id: updateRulesetId,
-        type: "update",
-      },
-    ];
-  }
-
-  function productionApplicableRules(): ReadonlyArray<Record<string, unknown>> {
-    const common = {
-      ruleset_source: "hraness/wrench",
-      ruleset_source_type: "Repository",
-    } as const;
-    return [
-      ...applicableRules(),
-      { ...common, ruleset_id: productionFreezeRulesetId, type: "creation" },
-      { ...common, ruleset_id: productionFreezeRulesetId, type: "deletion" },
-      { ...common, ruleset_id: productionFreezeRulesetId, type: "non_fast_forward" },
-      { ...common, ruleset_id: productionFreezeRulesetId, type: "update" },
-    ];
-  }
-
-  function workflowRunHistory(sha = workflowSha, count = 1): Record<string, unknown> {
-    const run = {
-      actor: { id: 894119, login: "0thernet", type: "User" },
-      event: "workflow_dispatch",
-      head_branch: "main",
-      head_sha: sha,
-      id: 33299900001,
-      path: ".github/workflows/release-app-canary.yml",
-      repository: { full_name: "hraness/wrench", id: 1316443113 },
-      run_attempt: 1,
-      status: "in_progress",
-      triggering_actor: { id: 894119, login: "0thernet", type: "User" },
-      workflow_id: 900,
-    };
-    return {
-      total_count: count,
-      workflow_runs: count === 1 ? [run] : [run, { ...run, id: 33299900002 }],
-    };
-  }
-
-  function ruleset(
-    id: number,
-    kind: "freeze" | "lifecycle" | "update",
-    lifecycleOrder: readonly string[] = ["deletion", "non_fast_forward", "creation"],
-  ): Record<string, unknown> {
-    return {
-      _links: {
-        html: { href: `https://github.com/hraness/wrench/rules/${String(id)}` },
-        self: { href: `https://api.github.com/repos/hraness/wrench/rulesets/${String(id)}` },
-      },
-      conditions: {
-        ref_name: {
-          exclude: [],
-          include: [
-            ...(kind === "freeze"
-              ? ["refs/heads/website-production"]
-              : [
-                  "refs/heads/website-production",
-                  "refs/heads/website-production-canary",
-                ]),
-          ],
-        },
-      },
-      created_at: rulesetCreatedAt,
-      current_user_can_bypass: "never",
-      enforcement: "active",
-      id,
-      name: kind === "lifecycle"
-        ? "Immutable website-production lifecycle"
-        : kind === "freeze"
-          ? "Temporary website-production activation freeze"
-          : "Wrench release App update exception",
-      node_id: `RRS_fixture_${String(id)}`,
-      rules: kind === "lifecycle"
-        ? lifecycleOrder.map(type => ({ type }))
-        : kind === "freeze"
-          ? [
-              { type: "creation" },
-              { type: "deletion" },
-              { type: "non_fast_forward" },
-              { type: "update" },
-            ]
-          : [{ type: "update" }],
-      source: "hraness/wrench",
-      source_type: "Repository",
-      target: "branch",
-      updated_at: kind === "freeze"
-        ? "2026-08-30T19:58:28.117-04:00"
-        : providerUpdatedAt,
-    };
-  }
-
-  class CanaryApiFixture {
-    readonly calls: string[] = [];
-    #index = -1;
-    readonly #states: ReadonlyArray<Readonly<{
-      canarySha: string;
-      productionSha: string;
-      serverDate: string;
-      workflowSha: string;
-    }>>;
-
-    constructor(states: ReadonlyArray<Readonly<{
-      canarySha: string;
-      productionSha: string;
-      serverDate: string;
-      workflowSha: string;
-    }>>) {
-      this.#states = states;
-    }
-
-    async getWithServerDate(endpoint: string): Promise<Readonly<{
-      body: Record<string, unknown>;
-      serverDate: string;
-    }>> {
-      this.calls.push(`GET+Date ${endpoint}`);
-      this.#index += 1;
-      const state = this.#states[this.#index];
-      if (state === undefined) throw new Error("Unexpected snapshot read");
-      return {
-        body: { default_branch: "main", full_name: "hraness/wrench", id: 1316443113 },
-        serverDate: state.serverDate,
-      };
-    }
-
-    async get(endpoint: string): Promise<Record<string, unknown> | ReadonlyArray<Record<string, unknown>>> {
-      this.calls.push(`GET ${endpoint}`);
-      if (
-        endpoint === "/repos/hraness/wrench/actions/workflows/release-app-canary.yml/runs" +
-          "?event=workflow_dispatch&per_page=2"
-      ) {
-        const workflow = this.#states[Math.max(this.#index, 0)]?.workflowSha;
-        if (workflow === undefined) throw new Error("Missing workflow fixture state");
-        return workflowRunHistory(workflow);
-      }
-      const state = this.#states[this.#index];
-      if (state === undefined) throw new Error("Snapshot Date read must happen first");
-      if (endpoint === "/repos/hraness/wrench/git/ref/heads/main") {
-        return { object: { sha: state.workflowSha, type: "commit" }, ref: "refs/heads/main" };
-      }
-      if (endpoint === "/repos/hraness/wrench/git/ref/heads/website-production") {
-        return {
-          object: { sha: state.productionSha, type: "commit" },
-          ref: "refs/heads/website-production",
-        };
-      }
-      if (endpoint === "/repos/hraness/wrench/git/ref/heads/website-production-canary") {
-        return {
-          object: { sha: state.canarySha, type: "commit" },
-          ref: "refs/heads/website-production-canary",
-        };
-      }
-      if (endpoint === "/repos/hraness/wrench/rules/branches/website-production-canary") {
-        return applicableRules();
-      }
-      if (endpoint === "/repos/hraness/wrench/rules/branches/website-production") {
-        return productionApplicableRules();
-      }
-      if (endpoint === `/repos/hraness/wrench/rulesets/${String(lifecycleRulesetId)}`) {
-        return ruleset(lifecycleRulesetId, "lifecycle");
-      }
-      if (endpoint === `/repos/hraness/wrench/rulesets/${String(updateRulesetId)}`) {
-        return ruleset(updateRulesetId, "update");
-      }
-      if (endpoint === `/repos/hraness/wrench/rulesets/${String(productionFreezeRulesetId)}`) {
-        return ruleset(productionFreezeRulesetId, "freeze");
-      }
-      throw new Error(`Unexpected endpoint ${endpoint}`);
-    }
-  }
-
-  async function writeFixture(path: string, content: string): Promise<void> {
-    await mkdir(join(path, ".."), { recursive: true });
-    await writeFile(path, content);
-  }
-
-  async function createTopologyFixture(): Promise<Readonly<{
-    baselineSha: string;
-    directory: string;
-    startSha: string;
-    targetSha: string;
-    workflowSha: string;
-  }>> {
-    const directory = await mkdtemp(join(tmpdir(), "wrench-canary-topology-"));
-    await run(["git", "init", "--quiet"], directory);
-    await run(["git", "config", "user.name", "Canary Fixture"], directory);
-    await run(["git", "config", "user.email", "canary@example.invalid"], directory);
-    const baselineFiles = [
-      ".github/workflows/website-production.yml",
-      "docs/publishing.md",
-      "scripts/npm-stage-workflow.test.ts",
-    ];
-    for (const path of baselineFiles) {
-      await writeFixture(join(directory, path), `P ${path}\n`);
-    }
-    await writeFixture(
-      join(directory, "vercel.json"),
-      `${JSON.stringify({ git: { deploymentEnabled: { "website-production-canary": false } } }, null, 2)}\n`,
-    );
-    await run(["git", "add", "."], directory);
-    await run(["git", "commit", "--quiet", "-m", "P"], directory);
-    const fixtureStart = (await runOutput(["git", "rev-parse", "HEAD"], directory)).trim();
-
-    await writeFixture(
-      join(directory, ".github/workflows/website-production.yml"),
-      "C .github/workflows/website-production.yml\n",
-    );
-    await run(["git", "add", "."], directory);
-    await run(["git", "commit", "--quiet", "-m", "C"], directory);
-    const fixtureTarget = (await runOutput(["git", "rev-parse", "HEAD"], directory)).trim();
-
-    await writeFixture(join(directory, "README.md"), "B current-main baseline\n");
-    await writeFixture(
-      join(directory, "vercel.json"),
-      `${JSON.stringify({
-        git: {
-          deploymentEnabled: {
-            main: true,
-            "website-production-canary": false,
-          },
-        },
-      }, null, 2)}\n`,
-    );
-    await run(["git", "add", "."], directory);
-    await run(["git", "commit", "--quiet", "-m", "B"], directory);
-    const fixtureBaseline = (await runOutput(["git", "rev-parse", "HEAD"], directory)).trim();
-
-    await writeFixture(
-      join(directory, ".github/workflows/release-app-canary.yml"),
-      "name: Prove release App canary\n",
-    );
-    await writeFixture(join(directory, "docs/publishing.md"), "D docs/publishing.md\n");
-    await writeFixture(
-      join(directory, "scripts/npm-stage-workflow.test.ts"),
-      "D scripts/npm-stage-workflow.test.ts\n",
-    );
-    await writeFixture(join(directory, "scripts/release-app-canary.mjs"), "// D\n");
-    await run(["git", "add", "."], directory);
-    await run(["git", "commit", "--quiet", "-m", "D"], directory);
-    const fixtureWorkflow = (await runOutput(["git", "rev-parse", "HEAD"], directory)).trim();
-    return {
-      baselineSha: fixtureBaseline,
-      directory,
-      startSha: fixtureStart,
-      targetSha: fixtureTarget,
-      workflowSha: fixtureWorkflow,
-    };
-  }
-
-  test("keeps unresolved P/C sentinels unpublishable and binds one exact dispatch", () => {
-    expect(() => parseCanaryCoordinate({
-      startSha: CANARY_START_SENTINEL,
-      targetSha,
-    })).toThrow("placeholders have not been replaced");
-    expect(() => parseCanaryCoordinate({
-      startSha,
-      targetSha: CANARY_TARGET_SENTINEL,
-    })).toThrow("placeholders have not been replaced");
-    expect(fixedCanaryCoordinate).toEqual({
-      startSha: "6d9096b0fabbc03ede0741ec4931fbe19127440c",
-      targetSha: "0bf88a064233635e0c5485c61f9c533974a7dca4",
-    });
-    expect(parseCanaryCoordinate(fixedCanaryCoordinate)).toEqual(fixedCanaryCoordinate);
-    expect(parseCanaryCoordinate({ startSha, targetSha })).toEqual({ startSha, targetSha });
-
-    const environment = canaryEnvironment();
-    const invocation = parseCanaryInvocation(environment);
-    expect(invocation).toEqual({
-      actorId: 894119,
-      repository: "hraness/wrench",
-      repositoryId: 1316443113,
-      runId: 33299900001,
-      workflowSha,
-    });
-    expect(parseSingleCanaryRun(workflowRunHistory(), invocation)).toBe(900);
-    expect(() => parseSingleCanaryRun(workflowRunHistory(workflowSha, 2), invocation))
-      .toThrow("not one unique first and only workflow run");
-    for (const malformed of [
-      { GITHUB_ACTOR: "another-writer" },
-      { GITHUB_ACTOR_ID: "1" },
-      { GITHUB_TRIGGERING_ACTOR: "another-writer" },
-      { GITHUB_RUN_ATTEMPT: "2" },
-      { GITHUB_REF: "refs/heads/topic" },
-      { GITHUB_REF_PROTECTED: "false" },
-      { GITHUB_WORKFLOW_SHA: startSha },
-    ]) {
-      expect(() => parseCanaryInvocation({ ...environment, ...malformed })).toThrow();
-    }
-  });
-
-  test("requires exact canary controls plus one production-only freeze", () => {
-    expect(parseApplicableRules([...applicableRules()].reverse())).toEqual({
-      lifecycleRulesetId,
-      updateRulesetId,
-    });
-    expect(parseApplicableRules([
-      ...applicableRules().slice(0, 3),
-      {
-        ...applicableRules()[3],
-        parameters: { update_allows_fetch_and_merge: false },
-      },
-    ])).toEqual({ lifecycleRulesetId, updateRulesetId });
-    const canaryProjection = { lifecycleRulesetId, updateRulesetId };
-    expect(parseProductionApplicableRules(
-      [...productionApplicableRules()].reverse(),
-      canaryProjection,
-    )).toEqual({
-      freezeRulesetId: productionFreezeRulesetId,
-      lifecycleRulesetId,
-      updateRulesetId,
-    });
-    expect(() => parseProductionApplicableRules(applicableRules(), canaryProjection))
-      .toThrow("mirrored four controls plus four freeze controls");
-    expect(() => parseProductionApplicableRules([
-      ...productionApplicableRules().slice(0, -1),
-      { ...productionApplicableRules()[7], ruleset_id: lifecycleRulesetId },
-    ], canaryProjection)).toThrow();
-    expect(() => parseProductionApplicableRules([
-      ...productionApplicableRules(),
-      {
-        ...productionApplicableRules()[0],
-        ruleset_id: productionFreezeRulesetId,
-      },
-    ], canaryProjection)).toThrow();
-    expect(() => parseApplicableRules(applicableRules().slice(1))).toThrow("exactly four");
-    for (const parameters of [
-      { update_allows_fetch_and_merge: true },
-      { update_allows_fetch_and_merge: "false" },
-      { extra: false, update_allows_fetch_and_merge: false },
-    ]) {
-      expect(() => parseApplicableRules([
-        ...applicableRules().slice(0, 3),
-        { ...applicableRules()[3], parameters },
-      ])).toThrow();
-    }
-    expect(() => parseApplicableRules([
-      ...applicableRules(),
-      {
-        ruleset_id: lifecycleRulesetId,
-        ruleset_source: "hraness/wrench",
-        ruleset_source_type: "Repository",
-        type: "required_signatures",
-      },
-    ])).toThrow();
-  });
-
-  test("accepts omitted false/default update parameters but rejects any other shape", () => {
-    const input = {
-      id: updateRulesetId,
-      kind: "update",
-      name: "Wrench release App update exception",
-    } as const;
-    const expected = {
-      createdAt: "2026-08-30T01:20:47.112Z",
-      id: updateRulesetId,
-      name: "Wrench release App update exception",
-      nodeId: `RRS_fixture_${String(updateRulesetId)}`,
-      updatedAt: updateUpdatedAt,
-    };
-    expect(parseRuleset(ruleset(updateRulesetId, "update"), input)).toEqual(expected);
-    expect(parseRuleset({
-      ...ruleset(updateRulesetId, "update"),
-      rules: [{ parameters: { update_allows_fetch_and_merge: false }, type: "update" }],
-    }, input)).toEqual(expected);
-    for (const parameters of [
-      { update_allows_fetch_and_merge: true },
-      { update_allows_fetch_and_merge: "false" },
-      { extra: false, update_allows_fetch_and_merge: false },
-    ]) {
-      expect(() => parseRuleset({
-        ...ruleset(updateRulesetId, "update"),
-        rules: [{ parameters, type: "update" }],
-      }, input)).toThrow();
-    }
-    const freezeInput = {
-      id: productionFreezeRulesetId,
-      kind: "freeze",
-      name: "Temporary website-production activation freeze",
-    } as const;
-    expect(parseRuleset(ruleset(productionFreezeRulesetId, "freeze"), freezeInput))
-      .toMatchObject({
-        id: productionFreezeRulesetId,
-        name: "Temporary website-production activation freeze",
-        updatedAt: productionFreezeUpdatedAt,
-      });
-    expect(() => parseRuleset({
-      ...ruleset(productionFreezeRulesetId, "freeze"),
-      conditions: ruleset(lifecycleRulesetId, "lifecycle").conditions,
-    }, freezeInput)).toThrow("exact reviewed refs");
-    expect(() => parseRuleset({
-      ...ruleset(productionFreezeRulesetId, "freeze"),
-      rules: [
-        { type: "creation" },
-        { type: "deletion" },
-        { type: "non_fast_forward" },
-        { parameters: { update_allows_fetch_and_merge: true }, type: "update" },
-      ],
-    }, freezeInput)).toThrow("allows fetch-and-merge");
-  });
-
-  test("accepts the exact lifecycle rule set in every provider order", () => {
-    const permutations = [
-      ["creation", "deletion", "non_fast_forward"],
-      ["creation", "non_fast_forward", "deletion"],
-      ["deletion", "creation", "non_fast_forward"],
-      ["deletion", "non_fast_forward", "creation"],
-      ["non_fast_forward", "creation", "deletion"],
-      ["non_fast_forward", "deletion", "creation"],
-    ] as const;
-    for (const permutation of permutations) {
-      expect(parseRuleset(ruleset(lifecycleRulesetId, "lifecycle", permutation), {
-        id: lifecycleRulesetId,
-        kind: "lifecycle",
-        name: "Immutable website-production lifecycle",
-      })).toEqual({
-        createdAt: "2026-08-30T01:20:47.112Z",
-        id: lifecycleRulesetId,
-        name: "Immutable website-production lifecycle",
-        nodeId: `RRS_fixture_${String(lifecycleRulesetId)}`,
-        updatedAt: lifecycleUpdatedAt,
-      });
-    }
-    expect(() => parseRuleset({
-      ...ruleset(lifecycleRulesetId, "lifecycle"),
-      rules: [{ type: "deletion" }, { type: "non_fast_forward" }, { type: "deletion" }],
-    }, {
-      id: lifecycleRulesetId,
-      kind: "lifecycle",
-      name: "Immutable website-production lifecycle",
-    })).toThrow("exact rule set");
-  });
-
-  test("canonicalizes provider ruleset timestamps without broadening other timestamps", () => {
-    expect(parseRulesetTimestamp(rulesetCreatedAt)).toBe("2026-08-30T01:20:47.112Z");
-    expect(parseRulesetTimestamp(providerUpdatedAt)).toBe(lifecycleUpdatedAt);
-    expect(parseRulesetTimestamp("2026-08-30T19:58:27.1-04:00"))
-      .toBe("2026-08-30T23:58:27.100Z");
-    expect(parseRulesetTimestamp("2026-08-30T19:58:27.12-04:00"))
-      .toBe("2026-08-30T23:58:27.120Z");
-    expect(parseRulesetTimestamp("2026-08-30T23:58:27Z"))
-      .toBe("2026-08-30T23:58:27Z");
-    expect(parseRulesetTimestampFingerprint(lifecycleUpdatedAt)).toBe(lifecycleUpdatedAt);
-    expect(() => parseRulesetTimestampFingerprint(providerUpdatedAt))
-      .toThrow("canonical UTC ruleset timestamp fingerprint");
-    expect(() => parseRulesetTimestampFingerprint("2026-08-30T23:58:27.1Z"))
-      .toThrow("canonical UTC ruleset timestamp fingerprint");
-    for (const malformed of [
-      "2026-02-30T19:58:27.117-04:00",
-      "2026-08-30 19:58:27.117-04:00",
-      "2026-08-30T19:58:27.1177-04:00",
-      "2026-08-30T19:58:27.117-24:00",
-      "2026-08-30T19:58:27.117-0400",
-      "2026-08-30T19:58:27.117z",
-      "2026-08-30T19:58:27.117",
-    ]) {
-      expect(() => parseRulesetTimestamp(malformed)).toThrow();
-    }
-  });
-
-  test("canonicalizes the checked HTTP Date parser output at the canary boundary", () => {
-    const body = JSON.stringify({ default_branch: "main", full_name: "hraness/wrench", id: 1316443113 });
-    const parsed = parseIncludedGitHubResponse(
-      `HTTP/2.0 200 OK\r\ndate: Sun, 30 Aug 2026 05:05:00 GMT\r\ncontent-type: application/json\r\n\r\n${body}\n`,
-    );
-    expect(parsed.serverDate).toBe("2026-08-30T05:05:00.000Z");
-    expect(parseGitHubServerTimestamp(parsed.serverDate)).toBe("2026-08-30T05:05:00Z");
-    expect(parseGitHubServerTimestamp("2026-08-30T05:05:00Z"))
-      .toBe("2026-08-30T05:05:00Z");
-    for (const malformed of [
-      "2026-08-30T05:05:00.001Z",
-      "2026-08-30T05:05:00.000+00:00",
-      "2026-02-30T05:05:00.000Z",
-    ]) {
-      expect(() => parseGitHubServerTimestamp(malformed)).toThrow();
-    }
-  });
-
-  test("uses one fixed canary lease, proves its stale rejection, and removes askpass", () => {
-    const arguments_ = canaryPushArguments(startSha, targetSha);
-    const staleArguments = canaryPushArguments(startSha, workflowSha);
-    expect(arguments_).toContain(
-      `--force-with-lease=refs/heads/website-production-canary:${startSha}`,
-    );
-    expect(arguments_).toContain(`${targetSha}:refs/heads/website-production-canary`);
-    expect(arguments_.filter((value) => value.startsWith("--force-with-lease="))).toHaveLength(1);
-    expect(arguments_.filter((value) => value === "push")).toHaveLength(1);
-    expect(arguments_).not.toContain("--force");
-    expect(arguments_.join(" ")).not.toContain("refs/heads/main");
-    expect(arguments_.join(" ")).not.toContain("refs/heads/website-production:");
-    expect(arguments_.join(" ")).not.toContain("*");
-
-    const calls: Array<Readonly<{
-      args: readonly string[];
-      askpass: string;
-      token: string;
-    }>> = [];
-    let askpass = "";
-    const result = advanceCanaryRef({
-      spawnImplementation(file: string, args: readonly string[], options: { env: Record<string, string> }) {
-        expect(file).toBe("/usr/bin/git");
-        askpass = options.env.GIT_ASKPASS;
-        expect(statSync(askpass).mode & 0o777).toBe(0o700);
-        expect(readFileSync(askpass, "utf8")).toContain("$WRENCH_RELEASE_APP_TOKEN");
-        calls.push({ args, askpass, token: options.env.WRENCH_RELEASE_APP_TOKEN });
-        return calls.length === 1
-          ? { error: undefined, status: 0, stderr: "", stdout: "ok P..C\n" }
-          : { error: undefined, status: 1, stderr: "stale info\n", stdout: "" };
-      },
-      startSha,
-      targetSha,
-      token: "secret-installation-token",
-      workflowSha,
-    });
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.args).toEqual(arguments_);
-    expect(calls[1]?.args).toEqual(staleArguments);
-    expect(calls.every((call) => call.token === "secret-installation-token")).toBe(true);
-    expect(calls.every((call) => !call.args.join(" ").includes("secret-installation-token"))).toBe(true);
-    expect(existsSync(askpass)).toBe(false);
-    expect(result.pushOutputSha256).toMatch(/^[0-9a-f]{64}$/u);
-    expect(result.staleLeaseOutputSha256).toMatch(/^[0-9a-f]{64}$/u);
-
-    expect(() => advanceCanaryRef({
-      spawnImplementation() {
-        return { error: undefined, status: 0, stderr: "", stdout: "ok\n" };
-      },
-      startSha,
-      targetSha,
-      token: "secret-installation-token",
-      workflowSha,
-    })).toThrow("stale canary lease unexpectedly succeeded");
-  });
-
-  test("rejects the distinct stale P to D lease in a real Git remote and leaves canary at C", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "wrench-release-canary-lease-"));
-    const remote = join(directory, "remote.git");
-    const source = join(directory, "source");
-    try {
-      await run(["git", "init", "--bare", remote], directory);
-      await run(["git", "init", source], directory);
-      await run(["git", "config", "user.name", "Release canary fixture"], source);
-      await run(["git", "config", "user.email", "canary@example.invalid"], source);
-      const value = join(source, "value.txt");
-      await writeFile(value, "P\n");
-      await run(["git", "add", "value.txt"], source);
-      await run(["git", "commit", "-m", "P"], source);
-      const fixtureP = (await runOutput(["git", "rev-parse", "HEAD"], source)).trim();
-      await writeFile(value, "C\n");
-      await run(["git", "commit", "-am", "C"], source);
-      const fixtureC = (await runOutput(["git", "rev-parse", "HEAD"], source)).trim();
-      await writeFile(value, "D\n");
-      await run(["git", "commit", "-am", "D"], source);
-      const fixtureD = (await runOutput(["git", "rev-parse", "HEAD"], source)).trim();
-      await run([
-        "git",
-        "push",
-        remote,
-        `${fixtureP}:refs/heads/website-production-canary`,
-      ], source);
-
-      const result = advanceCanaryRef({
-        spawnImplementation(
-          file: string,
-          args: readonly string[],
-          options: Parameters<typeof spawnSync>[2],
-        ) {
-          const mapped = args.map((argument) => argument === "https://github.com/hraness/wrench.git"
-            ? remote
-            : argument);
-          return spawnSync(file, mapped, { ...options, cwd: source });
-        },
-        startSha: fixtureP,
-        targetSha: fixtureC,
-        token: "local-fixture-token",
-        workflowSha: fixtureD,
-      });
-      expect(result.pushOutputSha256).toMatch(/^[0-9a-f]{64}$/u);
-      expect(result.staleLeaseOutputSha256).toMatch(/^[0-9a-f]{64}$/u);
-      expect((await runOutput([
-        "git",
-        "--git-dir",
-        remote,
-        "rev-parse",
-        "refs/heads/website-production-canary",
-      ], directory)).trim()).toBe(fixtureC);
-    } finally {
-      await chmod(directory, 0o700).catch(() => undefined);
-      await rm(directory, { force: true, recursive: true });
-    }
-  });
-
-  test("requires revoked-token reuse to receive an exact non-redirecting 401", async () => {
-    const requests: Array<Readonly<{ input: string; init: RequestInit }>> = [];
-    await expect(assertRevokedTokenCannotBeReused(
-      "revoked-token",
-      async (input: string | URL | Request, init?: RequestInit) => {
-        requests.push({ input: String(input), init: init ?? {} });
-        return new Response('{"message":"Bad credentials"}', { status: 401 });
-      },
-    )).resolves.toBeUndefined();
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.input).toBe("https://api.github.com/installation/repositories");
-    expect(requests[0]?.init.method).toBe("GET");
-    expect(JSON.stringify(requests[0]?.init)).toContain("revoked-token");
-    await expect(assertRevokedTokenCannotBeReused(
-      "still-live",
-      async () => new Response("{}", { status: 200 }),
-    )).rejects.toThrow("returned HTTP 200");
-  });
-
-  test("binds exact P to C and current-main B to D edges with the complete protocol", async () => {
-    const fixture = await createTopologyFixture();
-    try {
-      const coordinate = { startSha: fixture.startSha, targetSha: fixture.targetSha };
-      const topologyReads = new Map<string, ReturnType<typeof spawnSync>>();
-      const cachedTopologySpawn = (
-        file: string,
-        args: readonly string[],
-        options: unknown,
-      ): ReturnType<typeof spawnSync> => {
-        const key = JSON.stringify(args);
-        const cached = topologyReads.get(key);
-        if (cached !== undefined) return cached;
-        const result = spawnSync(file, args, options as Parameters<typeof spawnSync>[2]);
-        topologyReads.set(key, result);
-        return result;
-      };
-      expect(assertCanaryGitTopology({
-        coordinate,
-        cwd: fixture.directory,
-        spawnImplementation: cachedTopologySpawn,
-        workflowSha: fixture.workflowSha,
-      })).toEqual({
-        baselineSha: fixture.baselineSha,
-        ...coordinate,
-        workflowSha: fixture.workflowSha,
-      });
-      expect(await runOutput([
-        "git",
-        "show",
-        `${fixture.startSha}:vercel.json`,
-      ], fixture.directory)).not.toBe(await runOutput([
-        "git",
-        "show",
-        `${fixture.baselineSha}:vercel.json`,
-      ], fixture.directory));
-      expect(() => assertCanaryGitTopology({
-        coordinate,
-        cwd: fixture.directory,
-        spawnImplementation(file: string, args: readonly string[], options: unknown) {
-          if (args[0] === "merge-base" && args[1] === "--is-ancestor") {
-            return { error: undefined, status: 1, stderr: "", stdout: "" };
-          }
-          return cachedTopologySpawn(file, args, options);
-        },
-        workflowSha: fixture.workflowSha,
-      })).toThrow("canary Git topology read failed");
-
-      const productionSha = "e".repeat(40);
-      const preflightApi = new CanaryApiFixture([{
-        canarySha: fixture.startSha,
-        productionSha,
-        serverDate: "2026-08-30T05:05:00Z",
-        workflowSha: fixture.workflowSha,
-      }]);
-      const environment = canaryEnvironment(fixture.workflowSha);
-      const preflight = await preflightCanary({
-        api: preflightApi,
-        coordinate,
-        cwd: fixture.directory,
-        environment,
-        spawnImplementation: cachedTopologySpawn,
-      });
-      const receipt = encodeCanaryReceipt(preflight);
-      expect(decodeCanaryReceipt(receipt)).toEqual(preflight);
-      expect(preflightApi.calls).toEqual([
-        "GET /repos/hraness/wrench/actions/workflows/release-app-canary.yml/runs" +
-          "?event=workflow_dispatch&per_page=2",
-        "GET+Date /repos/hraness/wrench",
-        "GET /repos/hraness/wrench/git/ref/heads/main",
-        "GET /repos/hraness/wrench/git/ref/heads/website-production-canary",
-        "GET /repos/hraness/wrench/git/ref/heads/website-production",
-        "GET /repos/hraness/wrench/rules/branches/website-production-canary",
-        "GET /repos/hraness/wrench/rules/branches/website-production",
-        `GET /repos/hraness/wrench/rulesets/${String(lifecycleRulesetId)}`,
-        `GET /repos/hraness/wrench/rulesets/${String(updateRulesetId)}`,
-        `GET /repos/hraness/wrench/rulesets/${String(productionFreezeRulesetId)}`,
-      ]);
-
-      const proveApi = new CanaryApiFixture([
-        {
-          canarySha: fixture.startSha,
-          productionSha,
-          serverDate: "2026-08-30T05:06:00Z",
-          workflowSha: fixture.workflowSha,
-        },
-        {
-          canarySha: fixture.startSha,
-          productionSha,
-          serverDate: "2026-08-30T05:06:01Z",
-          workflowSha: fixture.workflowSha,
-        },
-        {
-          canarySha: fixture.targetSha,
-          productionSha,
-          serverDate: "2026-08-30T05:07:00Z",
-          workflowSha: fixture.workflowSha,
-        },
-      ]);
-      let pushes = 0;
-      let tokenOperation = false;
-      const evidence = await proveCanary({
-        api: proveApi,
-        coordinate,
-        cwd: fixture.directory,
-        environment,
-        fetchImplementation: async () => new Response("{}", { status: 401 }),
-        preflightReceipt: receipt,
-        spawnImplementation(file: string, args: readonly string[], options: unknown) {
-          if (args.includes("push")) {
-            pushes += 1;
-            return pushes === 1
-              ? { error: undefined, status: 0, stderr: "", stdout: "ok P..C\n" }
-              : { error: undefined, status: 1, stderr: "stale info\n", stdout: "" };
-          }
-          return cachedTopologySpawn(file, args, options);
-        },
-        async withToken(_environment: Record<string, string>, operation: (
-          token: string,
-          identity: Record<string, unknown>,
-        ) => Promise<unknown>) {
-          tokenOperation = true;
-          return operation("fixture-token", {
-            appId: 700,
-            appSlug: "wrench-prod-ref-writer-1316443113",
-            clientId: "Iv1.fixture",
-            expiresAt: "2026-08-30T06:06:00Z",
-            installationId: 701,
-            repositoryId: 1316443113,
-          });
-        },
-      });
-      expect(tokenOperation).toBe(true);
-      expect(pushes).toBe(2);
-      expect(evidence).toMatchObject({
-        actorId: 894119,
-        baselineSha: fixture.baselineSha,
-        canaryAfter: fixture.targetSha,
-        canaryBefore: fixture.startSha,
-        productionSha,
-        productionFreezeRuleset: {
-          id: productionFreezeRulesetId,
-          name: "Temporary website-production activation freeze",
-        },
-        repositoryId: 1316443113,
-        runId: 33299900001,
-        schema: "wrench-release-app-canary-evidence/v1",
-        writeBoundServerDate: "2026-08-30T05:06:01Z",
-        workflowSha: fixture.workflowSha,
-      });
-      const encodedEvidence = encodeCanaryEvidence(evidence);
-      expect(decodeCanaryEvidence(encodedEvidence)).toEqual(evidence);
-      const evidenceLine = canaryEvidenceLogLine(evidence);
-      expect(evidenceLine).toBe(`${CANARY_EVIDENCE_LOG_MARKER}${encodedEvidence}`);
-      expect(parseCanaryEvidenceLog(
-        `2026-08-30T05:07:01.1234567Z ${evidenceLine}\n`,
-      )).toEqual(evidence);
-
-      const summaryPath = join(fixture.directory, "canary-summary.md");
-      let publishedLog = "";
-      expect(publishCanaryEvidence({
-        coordinate,
-        encodedEvidence,
-        environment,
-        summaryPath,
-        writeImplementation(value: string) {
-          publishedLog += value;
-        },
-      })).toEqual(evidence);
-      expect(publishedLog).toBe(`${evidenceLine}\n`);
-      expect(await readFile(summaryPath, "utf8")).toBe(
-        "## Wrench release App canary proof\n\n" +
-          "Validated bounded evidence (also retained in this job's downloadable log):\n\n" +
-          `\`${evidenceLine}\`\n`,
-      );
-      expect(publishedLog).not.toContain("fixture-token");
-      let reconciliationLog = "";
-      expect(() => publishCanaryEvidence({
-        appendImplementation() {
-          throw new Error("summary unavailable");
-        },
-        coordinate,
-        encodedEvidence,
-        environment,
-        summaryPath,
-        writeImplementation(value: string) {
-          reconciliationLog += value;
-        },
-      })).toThrow("summary unavailable");
-      expect(reconciliationLog).toBe(`${evidenceLine}\n`);
-
-      expect(() => parseCanaryEvidenceLog("no proof here\n"))
-        .toThrow("one unique proof marker");
-      expect(() => parseCanaryEvidenceLog(`${evidenceLine}\n${evidenceLine}\n`))
-        .toThrow("one unique proof marker");
-      expect(() => parseCanaryEvidenceLog(`prefix ${evidenceLine}\n`))
-        .toThrow("marker is malformed");
-      expect(() => parseCanaryEvidenceLog("x".repeat(4 * 1024 * 1024 + 1)))
-        .toThrow("not bounded text");
-      expect(() => decodeCanaryEvidence("A".repeat(Math.ceil(16 * 1024 * 4 / 3) + 1)))
-        .toThrow("not one bounded canonical base64url value");
-      const noncanonicalEvidence = Buffer.from(JSON.stringify(Object.fromEntries(
-        Object.entries(evidence).reverse(),
-      )), "utf8").toString("base64url");
-      expect(() => decodeCanaryEvidence(noncanonicalEvidence)).toThrow("JSON is not canonical");
-      const expandedEvidence = Buffer.from(JSON.stringify({ ...evidence, token: "must-not-leak" }), "utf8")
-        .toString("base64url");
-      expect(() => decodeCanaryEvidence(expandedEvidence)).toThrow("unexpected shape");
-      expect(() => publishCanaryEvidence({
-        coordinate: { ...coordinate, targetSha: fixture.workflowSha },
-        encodedEvidence,
-        environment,
-        summaryPath,
-      })).toThrow("does not belong to this exact run and P/C/B/D coordinate");
-      expect(proveApi.calls).toEqual([
-        ...preflightApi.calls,
-        ...preflightApi.calls,
-        ...preflightApi.calls,
-      ]);
-      expect(proveApi.calls.every((call) => call.startsWith("GET"))).toBe(true);
-
-      const driftApi = new CanaryApiFixture([{
-        canarySha: fixture.targetSha,
-        productionSha,
-        serverDate: "2026-08-30T05:06:00Z",
-        workflowSha: fixture.workflowSha,
-      }]);
-      await expect(proveCanary({
-        api: driftApi,
-        coordinate,
-        cwd: fixture.directory,
-        environment,
-        fetchImplementation: async () => new Response("{}", { status: 401 }),
-        preflightReceipt: receipt,
-        spawnImplementation: cachedTopologySpawn,
-        async withToken() {
-          throw new Error("token mint must not begin after pre-read drift");
-        },
-      })).rejects.toThrow("pre-mutation control snapshot drifted");
-
-      const writeDriftApi = new CanaryApiFixture([
-        {
-          canarySha: fixture.startSha,
-          productionSha,
-          serverDate: "2026-08-30T05:06:00Z",
-          workflowSha: fixture.workflowSha,
-        },
-        {
-          canarySha: fixture.startSha,
-          productionSha,
-          serverDate: "2026-08-30T05:06:01Z",
-          workflowSha: startSha,
-        },
-      ]);
-      let writeDriftPushes = 0;
-      await expect(proveCanary({
-        api: writeDriftApi,
-        coordinate,
-        cwd: fixture.directory,
-        environment,
-        fetchImplementation: async () => new Response("{}", { status: 401 }),
-        preflightReceipt: receipt,
-        spawnImplementation(file: string, args: readonly string[], options: unknown) {
-          if (args.includes("push")) writeDriftPushes += 1;
-          return cachedTopologySpawn(file, args, options);
-        },
-        async withToken(_environment: Record<string, string>, operation: (
-          token: string,
-          identity: Record<string, unknown>,
-        ) => Promise<unknown>) {
-          return operation("fixture-token", {
-            appId: 700,
-            appSlug: "wrench-prod-ref-writer-1316443113",
-            clientId: "Iv1.fixture",
-            expiresAt: "2026-08-30T06:06:00Z",
-            installationId: 701,
-            repositoryId: 1316443113,
-          });
-        },
-      })).rejects.toThrow("immediate pre-write control snapshot drifted");
-      expect(writeDriftPushes).toBe(0);
-    } finally {
-      await rm(fixture.directory, { force: true, recursive: true });
-    }
-  });
-
-  test("keeps the workflow input-free, read-only, temporary, and cleanup-bound", async () => {
-    const [workflow, helper, guide] = await Promise.all([
-      readFile(releaseAppCanaryWorkflowUrl, "utf8"),
-      readFile(releaseAppCanaryHelperUrl, "utf8"),
-      readFile(publishingGuideUrl, "utf8"),
-    ]);
-    expect(workflow).toContain("on:\n  workflow_dispatch:\n");
-    expect(workflow).not.toContain("inputs:");
-    expect(workflow).not.toContain("contents: write");
-    expect(workflow).not.toContain("actions: write");
-    expect(workflow.match(/actions: read/gmu) ?? []).toHaveLength(3);
-    expect(workflow.match(/contents: read/gmu) ?? []).toHaveLength(3);
-    expect(workflow.match(/environment: \{ name: production-ref-writer-key, deployment: false \}/gmu) ?? [])
-      .toHaveLength(1);
-    expect(workflow.match(/^          fetch-depth: 1$/gmu) ?? []).toHaveLength(2);
-    expect(workflow.match(/^          fetch-tags: false$/gmu) ?? []).toHaveLength(2);
-    expect(workflow.match(/^          persist-credentials: false$/gmu) ?? []).toHaveLength(2);
-    expect(workflow.match(/^          ref: \$\{\{ github\.sha \}\}$/gmu) ?? []).toHaveLength(2);
-    expect(workflow).not.toContain("fetch-depth: 0");
-    expect(workflow.match(/^      - name: Fetch only bounded governed main history$/gmu) ?? [])
-      .toHaveLength(2);
-    expect(workflow.match(/^          git fetch --force --no-tags --prune --no-recurse-submodules --depth=32 \\$/gmu) ?? [])
-      .toHaveLength(2);
-    expect(workflow.match(/^            https:\/\/github\.com\/hraness\/wrench\.git \\$/gmu) ?? [])
-      .toHaveLength(2);
-    expect(workflow.match(/^            \+refs\/heads\/main:refs\/remotes\/origin\/main$/gmu) ?? [])
-      .toHaveLength(2);
-    expect(workflow.match(/git for-each-ref --format='%\(refname\)' refs\/heads refs\/remotes refs\/tags/gmu) ?? [])
-      .toHaveLength(4);
-    expect(workflow.match(/test "\$\(git rev-list --all --count\)" -le 32/gmu) ?? [])
-      .toHaveLength(2);
-    expect(workflow.match(/git cat-file -e 6d9096b0fabbc03ede0741ec4931fbe19127440c\^\{commit\}/gmu) ?? [])
-      .toHaveLength(2);
-    expect(workflow.match(/git cat-file -e 0bf88a064233635e0c5485c61f9c533974a7dca4\^\{commit\}/gmu) ?? [])
-      .toHaveLength(2);
-    expect(workflow).not.toContain("git fetch --all");
-    expect(workflow).not.toContain("+refs/heads/*");
-    expect(workflow.match(/node \.\/scripts\/release-app-canary\.mjs preflight/gmu) ?? [])
-      .toHaveLength(1);
-    expect(workflow.match(/node \.\/scripts\/release-app-canary\.mjs prove/gmu) ?? [])
-      .toHaveLength(1);
-    expect(workflow.match(/node \.\/scripts\/release-app-canary\.mjs publish-evidence/gmu) ?? [])
-      .toHaveLength(1);
-    const publishStep = workflow.slice(
-      workflow.indexOf("      - name: Publish retrievable bounded canary evidence"),
-    );
-    expect(publishStep).toContain("CANARY_EVIDENCE: ${{ steps.canary.outputs.evidence }}");
-    expect(publishStep).toContain("GITHUB_RUN_ID: ${{ github.run_id }}");
-    expect(publishStep).toContain("GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}");
-    expect(publishStep).not.toContain("WRENCH_RELEASE_APP_PRIVATE_KEY");
-    expect(publishStep).not.toContain("WRENCH_RELEASE_APP_CLIENT_ID");
-    expect(publishStep).not.toContain("PREFLIGHT_RECEIPT");
-    expect(workflow).toContain("GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}");
-    expect(workflow).toContain("GITHUB_WORKFLOW_SHA: ${{ github.workflow_sha }}");
-    expect(workflow).toContain("WRENCH_RELEASE_APP_PRIVATE_KEY: ${{ secrets.WRENCH_RELEASE_APP_PRIVATE_KEY }}");
-    expect(workflow).toContain(
-      "WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID: " +
-        "${{ vars.WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID }}",
-    );
-    expect(workflow).toContain(
-      "WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT: " +
-        "${{ vars.WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT }}",
-    );
-    expect(workflow).toContain("cancel-in-progress: false");
-    expect(workflow).not.toContain("workflow_run:");
-    expect(workflow).not.toContain("pull_request:");
-    expect(helper).toContain("withReleaseAppTokenFromEnvironment");
-    expect(helper).not.toContain("advanceWebsiteProductionRef");
-    expect(helper).toContain("temporary canary P/C placeholders have not been replaced");
-    expect(helper).toContain("const CANARY_BRANCH = \"website-production-canary\"");
-    expect(helper).toContain("temporary canary is not one unique first and only workflow run");
-    expect(helper).toContain("canary lease failed without an exact stale-lease rejection");
-    expect(helper).toContain("https://api.github.com/installation/repositories");
-    expect(helper).toContain("revoked release App token reuse returned HTTP");
-    expect(helper).toContain("WRENCH_RELEASE_APP_CANARY_EVIDENCE_V1=");
-    expect(helper).toContain("canary evidence log does not contain one unique proof marker");
-    expect(helper).toContain("current-main baseline B must be distinct from P, C, and D");
-    expect(helper).toContain("B and D do not retain one byte-identical Vercel canary exclusion");
-    expect(helper).toContain("mirrored four controls plus four freeze controls");
-    expect(releaseAppTokenRequestBody()).toEqual({
-      permissions: {
-        contents: "write",
-        metadata: "read",
-        workflows: "write",
-      },
-      repository_ids: [1316443113],
-    });
-    expect(JSON.stringify(releaseAppTokenRequestBody())).not.toContain("administration");
-    expect(guide).toContain("single-use exception");
-    expect(guide).toContain("production writer boundary");
-    expect(guide).toContain("`P` remains exact\ncommit `6d9096b0fabbc03ede0741ec4931fbe19127440c`");
-    expect(guide).toContain("`0bf88a064233635e0c5485c61f9c533974a7dca4`, the direct child of `P`");
-    expect(guide).toContain("direct child of the then-current green\nmain baseline `B`");
-    expect(guide).toContain("`vercel.json` must be byte-identical between `P` and `C`, and separately between\n`B` and `D`");
-    expect(guide).toContain("Temporary website-production activation freeze");
-    expect(guide).toContain("exactly four applicable rules on the canary ref");
-    expect(guide).toContain("plus exactly four controls from this one captured freeze");
-    expect(guide).toContain("`metadata:read`, `contents:write`, and\n`workflows:write`");
-    expect(guide).toContain("ordinary\n`0thernet` non-force `P` to `C` denial");
-    expect(guide).toContain("never rerun it or reset/delete the persistent\ncanary");
-    expect(guide).toContain("Retain the canary at `C`");
-    expect(guide).toContain("All six ruleset-fingerprint variables used by this temporary protocol are\nadministrator-provisioned proof inputs, not durable App configuration");
-    expect(guide).toContain("canonical source, target refs,\nenforcement, bypass actors, rules, node ID, creation time, and update time");
-    for (const variable of [
-      "WRENCH_RELEASE_LIFECYCLE_RULESET_ID",
-      "WRENCH_RELEASE_LIFECYCLE_RULESET_UPDATED_AT",
-      "WRENCH_RELEASE_UPDATE_RULESET_ID",
-      "WRENCH_RELEASE_UPDATE_RULESET_UPDATED_AT",
-      "WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID",
-      "WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT",
-    ] as const) {
-      expect(guide).toContain(`\`${variable}\``);
-    }
-    expect(guide).toContain("replace this temporary protocol prose and its tests with the\nretained, evidence-bound result");
-    expect(guide).toContain("delete all six temporary\nruleset-fingerprint variables by exact name");
-    expect(guide).toContain("exactly the four reviewed App ID, client ID, slug, and installation ID\nvariables plus the single private key secret");
-    expect(guide).toContain("reviewer, `prevent_self_review` setting, and disabled admin bypass unchanged");
   });
 });
 
