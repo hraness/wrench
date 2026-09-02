@@ -424,6 +424,9 @@ describe("wrench.rip static site", () => {
     expect(builtCss).toContain(".hraness-marketing-hero {");
     expect(builtCss).toContain("@media (pointer: coarse)");
     for (const css of [sourceCss, builtCss]) {
+      expect(css).toMatch(
+        /\.wrench-product-hero\s*\{[^{}]*\bgrid-column:\s*1\s*\/\s*-1\s*;/u,
+      );
       const providerMarkDisplay = cssPropertyValues(css, ".provider-mark", "display");
       expect(providerMarkDisplay.length).toBeGreaterThan(0);
       expect(providerMarkDisplay).not.toContain("none");
