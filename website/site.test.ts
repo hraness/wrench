@@ -858,6 +858,14 @@ describe("wrench.rip static site", () => {
     expect(privacy?.html).toContain("The CLI and SDK do not send wrench.rip analytics");
     expect(privacy?.html).toContain("wrench auth remove ID --yes");
     expect(privacy?.html).toContain("it is not a hostile native-code sandbox");
+    expect(privacy?.html).toContain(
+      "transient full copies of the private Photos and Contacts SQLite databases",
+    );
+    expect(privacy?.html).toContain("Those copies can include unselected columns and raw blobs");
+    expect(privacy?.html).toContain("The privacy exclusions apply only to the returned JSON");
+    expect(privacy?.html).toContain(
+      "does not open, copy, or ask Photos to materialize referenced photo or video asset files",
+    );
 
     const providerCapabilities = pages.find((page) =>
       page.definition.canonicalPath === "/provider-capabilities/");
@@ -901,6 +909,20 @@ describe("wrench.rip static site", () => {
     expect(providerCapabilities?.html).toContain("Supported actions by service");
     expect(providerCapabilities?.html).toContain("Official API");
     expect(providerCapabilities?.html).toContain(`<code>contacts.list</code>`);
+    expect(providerCapabilities?.html).toContain(
+      "transient full copies of the current macOS account's private Photos and Contacts SQLite databases",
+    );
+    expect(providerCapabilities?.html).toContain("can include unselected columns and raw blobs");
+    expect(providerCapabilities?.html).toContain("The listed exclusions apply only to the returned JSON");
+    expect(providerCapabilities?.html).toContain(
+      "does not open, copy, or ask Photos to materialize referenced photo or video asset files",
+    );
+    expect(providerCapabilities?.html).toContain("distinct <code>ZASSET</code>-row counts");
+    expect(providerMarkdown).toContain("unselected columns and raw blobs");
+    expect(providerMarkdown).toContain("exclusions apply only to the returned JSON");
+    expect(providerMarkdown).toContain(
+      "does not open, copy, or ask Photos to materialize referenced photo or video asset files",
+    );
     expect(providerCapabilities?.html).not.toMatch(/observed|capture-required|reservation|completeness|adapter/iu);
     expect(providerCapabilities?.html).not.toContain("Telegram");
     expect(providerCapabilities?.html).not.toContain("{{PROVIDER_CAPABILITY");

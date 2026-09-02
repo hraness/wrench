@@ -84,12 +84,13 @@ interval. The export does not claim an atomic instant across Photos and
 Contacts or completed iCloud and Contacts synchronization. Absence is not
 deletion evidence.
 
-Wrench does not open or ask Photos to materialize referenced photo or video
-asset files. A `VACUUM INTO` capture is nevertheless a full private SQLite
-database copy and can contain source fields outside the reviewed query. Names,
+Wrench does not open, copy, or ask Photos to materialize referenced photo or
+video asset files. A `VACUUM INTO` capture is nevertheless a full private
+Photos or Contacts SQLite database copy and can include unselected columns and
+raw blobs. The privacy exclusions apply only to the returned JSON: names,
 paths, images, encoded media, thumbnails, locations, raw blobs, credentials,
 faceprint templates, face crops, and unmatched clusters are not selected or
-projected into the returned JSON. The returned cluster identifiers and counts
+projected. The returned cluster identifiers and counts
 are private biometric-derived metadata as well as relationship evidence. Keep
 the artifact outside Git and shared output paths.
 

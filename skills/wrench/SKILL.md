@@ -48,9 +48,10 @@ automation.
 - Export exact local Apple Photos contact evidence: follow
   [Apple Photos contact evidence](references/apple-photos.md). This source has
   no auth or network authority. Its cluster identifiers and counts are private
-  biometric-derived metadata. It does not open or ask Photos to materialize
-  referenced photo or video asset files, and the returned JSON excludes images,
-  crops, and faceprint templates.
+  biometric-derived metadata. It does not open, copy, or ask Photos to
+  materialize referenced photo or video asset files. Its transient `VACUUM
+  INTO` copies are full private SQLite databases that can include unselected
+  columns and raw blobs; the exclusions apply only to the returned JSON.
 - Read or act on a live conversation: follow
   [agentic messaging](references/messaging.md). Keep one exact provider route,
   use private artifacts for prose and capability references, and never expose a
