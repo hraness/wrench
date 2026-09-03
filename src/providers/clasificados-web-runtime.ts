@@ -59,7 +59,7 @@ function decodeLatin1(bytes: Uint8Array, label: string): string {
   if (bytes.byteLength === 0) {
     throw new Error(`${label} was empty`);
   }
-  return new TextDecoder("latin1").decode(bytes);
+  return Buffer.from(bytes).toString("latin1");
 }
 
 async function boundedBytes(

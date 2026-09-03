@@ -160,7 +160,7 @@ const identities = Object.freeze({
   "clasificados-web": {
     schemaVersion: 1,
     pluginVersion: "1.0.0",
-    implementationSha256: "b80634ed3ddc00dafcd0b7792266554f95aa5081f500431336bbcfcf691d804e",
+    implementationSha256: "98717ceca70e578ca4c3afb1bbac129b56656b687fdb3adf9fdccde5d41f2bd7",
     legacyCurrentReadImplementationSha256: [],
     legacyReadImplementationSha256: null,
     legacyE71ReadImplementationSha256: null,

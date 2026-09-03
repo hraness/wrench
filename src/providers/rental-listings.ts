@@ -193,16 +193,6 @@ function boundedInteger(
   return integer;
 }
 
-function optionalBoundedInteger(
-  value: unknown,
-  label: string,
-  minimum: number,
-  maximum: number,
-): number | undefined {
-  if (value === undefined) return undefined;
-  return boundedInteger(value, label, minimum, maximum);
-}
-
 function exactObservedAt(value: string): string {
   if (
     !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)
@@ -248,12 +238,12 @@ export function parseRentalListingsSearchInput(
     ...(input.beds_min === undefined
       ? {}
       : {
-        beds_min: optionalBoundedInteger(input.beds_min, "input.beds_min", 0, BEDS_MAXIMUM),
+        beds_min: boundedInteger(input.beds_min, "input.beds_min", 0, BEDS_MAXIMUM),
       }),
     ...(input.max_price === undefined
       ? {}
       : {
-        max_price: optionalBoundedInteger(
+        max_price: boundedInteger(
           input.max_price,
           "input.max_price",
           1,
@@ -404,9 +394,9 @@ export function projectRentalListing(input: {
       "listing street address",
       STREET_MAX_LENGTH,
     ),
-    zip: input.zip,
-    coordinates: input.coordinates,
-    buildingText: input.buildingText,
+    zip: input.zip ?? null,
+    coordinates: input.coordinates ?? null,
+    buildingText: input.buildingText ?? null,
   });
   return Object.freeze({
     id,
