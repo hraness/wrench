@@ -272,14 +272,17 @@ Live ruleset `21832074` targets exactly `refs/heads/website-production` and
 `refs/heads/website-production-canary`. It has no bypass actors,
 `current_user_can_bypass=never`, and exact creation, deletion, and
 non-fast-forward rules. Live ruleset `21887484` targets the same refs with one
-update restriction and no bypass actors. Together they freeze both refs against
-creation, deletion, non-fast-forward movement, and ordinary updates while the
-dedicated writer proof is incomplete. The dedicated App installation and
-`production-ref-writer-key` environment exist, but the App-only update bypass
-and positive and negative canary proofs remain mandatory reconciliation work.
-Do not describe the writer as active until that out-of-band setup and evidence
-are complete. GitHub Actions App Integration 15368 is not the production writer
-and must not be configured as the update-rule bypass.
+update restriction and exactly GitHub App Integration `4783991` with
+`bypass_mode=always`. Together they reject creation, deletion,
+non-fast-forward movement, and ordinary-user updates while admitting only the
+reviewer-gated release App's leased fast-forward. The single-use positive and
+negative canary proof completed successfully in run `33691443614`. GitHub
+Actions App Integration `15368` is not the production writer and must never be
+configured as the update-rule bypass. These retained identifiers and the
+completed run are evidence, never standing mutation authority. Fresh
+administrator readback before every required fast-forward must reconfirm the
+exact rules, refs, sole App bypass, installation scope, and key environment;
+any drift leaves production unchanged.
 
 Checked-in `CODEOWNERS` assigns source ownership and notification for the
 workflow, Release helper, and publishing policy paths. It does not claim live or
@@ -371,113 +374,90 @@ selected for the installation with the administrator identity, prove that the
 unique result is `hraness/wrench` at ID `1316443113`, and retain the exact
 readback with the canary evidence.
 
-The exact permission set remains unready until one `P` to `C` transition on
-persistent ref `refs/heads/website-production-canary` proves a
-leased fast-forward where `C` contains the real workflow-file changes. Create
-that canary ref once at `P` before its creation rule becomes active, then retain
-it at `C`; the transition is single-use, and the ref must never be reset,
-deleted, or repurposed. Its no-bypass creation, deletion, and non-fast-forward
-rules and its App-only update rule must exactly mirror the production layers. A
-separately reviewed temporary workflow loaded from exact current `main` may run
-the bounded proof, but it must be removed after its exact run, ref, ruleset,
-rule-suite, token-revocation, and ordinary-actor denial evidence is retained.
-The production helper remains hard-bound to `website-production` and must not be
-made caller-selectable for the canary. The release remains unready for
-production activation or final product merge until that proof passes. Never
-broaden the App silently or during a failed canary.
+The exact permission set was proven by the single-use `P` to `C` transition on
+persistent ref `refs/heads/website-production-canary`. It moved the ref from
+`6d9096b0fabbc03ede0741ec4931fbe19127440c` to
+`0bf88a064233635e0c5485c61f9c533974a7dca4`, whose workflow-file change is the
+real production promotion path. Retain the canary at that exact `C`; never
+reset, delete, or repurpose it. Keep the mirrored no-bypass lifecycle rules and
+App-only update rule intact. The temporary proof source is removed after its
+evidence is retained. The production helper remains hard-bound to
+`website-production` and must not be made caller-selectable for the canary.
+Never broaden the App silently.
 
-The temporary **Prove release App canary** workflow is the single-use exception
-to the production writer boundary. It has no inputs and accepts only the first
-`workflow_dispatch` attempt by `0thernet` (`actor_id=894119`) from exact
-protected current `main` in Wrench repository ID `1316443113`. `P` remains exact
-commit `6d9096b0fabbc03ede0741ec4931fbe19127440c`. `C` remains exact commit
-`0bf88a064233635e0c5485c61f9c533974a7dca4`, the direct child of `P` whose only
-changed path is `.github/workflows/website-production.yml`. The temporary
-workflow commit `D` must instead be a direct child of the then-current green
-main baseline `B`; `C` must be an ancestor of `B`. The exact `B` to `D` delta
-contains only `.github/workflows/release-app-canary.yml`, `docs/publishing.md`,
-`scripts/npm-stage-workflow.test.ts`, and `scripts/release-app-canary.mjs`.
-`vercel.json` must be byte-identical between `P` and `C`, and separately between
-`B` and `D`. All four commits must keep
-`git.deploymentEnabled.website-production-canary=false`. This paired check
-allows unrelated reviewed main evolution without weakening the canary preview
-exclusion or pretending that `C` remains the parent of a later `D`.
+### Release App canary evidence
 
-Before the dispatch, create one production-only active ruleset named
-`Temporary website-production activation freeze`. It must target only
-`refs/heads/website-production`, have no bypass actors, and contain exactly
-creation, deletion, non-fast-forward, and update restrictions, with
-fetch-and-merge updates disabled. Capture its response ID, node ID,
-`created_at`, `updated_at`, and canonical administrator JSON before retrying any
-uncertain create. Store its exact ID and canonical UTC `updated_at` in temporary
-`production-ref-writer-key` variables
-`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID` and
-`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT`. The canary helper
-requires exactly four applicable rules on the canary ref from the mirrored
-lifecycle and update layers. Production must expose those same four controls
-plus exactly four controls from this one captured freeze. It reads and
-fingerprints all three detailed rulesets before, immediately around, and after
-the write. Read-only workflow responses cannot disclose bypass actors, so the
-administrator readback must separately prove no bypass on the lifecycle and
-freeze rulesets and exactly the dedicated Wrench App Integration with
-`bypass_mode=always`, never `exempt`, on the mirrored update ruleset.
+The single-use proof is complete and must never be rerun. Workflow
+`345799741`, run `33691443614`, attempt 1 completed successfully. Preflight job
+`100450846693` and proof job `100450916193` ran from workflow commit
+`fb876445334bb74abcb3592a5aaae2672c7b2d96` (`D`) over green baseline
+`0238c239b53c1249e220bc7dfec192dcd491422e` (`B`). The persistent canary
+advanced exactly once from `6d9096b0fabbc03ede0741ec4931fbe19127440c`
+(`P`) to its direct child `0bf88a064233635e0c5485c61f9c533974a7dca4`
+(`C`), while production remained
+`33309c470336127228b959e2aaa54138247b9684`.
 
-All six ruleset-fingerprint variables used by this temporary protocol are
-administrator-provisioned proof inputs, not durable App configuration. Before
-setting them, the administrator must read each detailed repository ruleset by
-its captured response ID and retain the canonical source, target refs,
-enforcement, bypass actors, rules, node ID, creation time, and update time. The
-environment values are only the exact ID and canonical UTC `updated_at` pairs
-for the lifecycle, mirrored update, and production-only freeze rulesets:
+The canonical record uses schema `wrench-release-app-canary-evidence/v2`. It
+binds actor `894119`, repository `1316443113`, App `4783991`, slug
+`wrench-prod-ref-writer-1316443113`, client ID `Iv23lintMtwGdKiwV6gq`, and
+installation `158077029`. The App registration, installation, and minted token
+were limited to Wrench with exactly `metadata:read`, `contents:write`, and
+`workflows:write`. The canonical decoded evidence JSON including its trailing
+newline has SHA-256
+`b3b285d8d8965851595ff991ba4a4ffa327b605350c161fca36dc09a32b5bb27`;
+the downloaded prove-job log has SHA-256
+`eb79ede7214e1b3085d7f787cd91df8b23f9150f805c13d5e5675df934b70510`.
+
+The evidence fingerprints lifecycle ruleset `21832074`
+(`RRS_lACqUmVwb3NpdG9yec5Od1PpzgFNIYo`, created
+`2026-08-30T01:20:47.112Z`, updated `2026-08-30T23:58:27.117Z`), update
+ruleset `21887484` (`RRS_lACqUmVwb3NpdG9yec5Od1PpzgFN-fw`, created
+`2026-08-31T00:15:02.504Z`, updated `2026-09-02T22:35:03.118Z`), and the
+activation freeze `22149969` (`RRS_lACqUmVwb3NpdG9yec5Od1PpzgFR-1E`,
+created `2026-09-02T22:33:42.087Z`, updated
+`2026-09-02T22:33:42.128Z`). Their canonical administrator projection
+digests are respectively
+`fcdb750dccfd3685e69e0f20fc8944c1dbb319cf5f48cbf531bc071bdc237c55`,
+`aba327ae2e7e6a0b3193c7791fb0f1f1814b57b08044cfc0804ff2836c6427a8`,
+and `52bd8190d6715c213ac624fcfe6f6194492fa379083f61af7cc1056698917773`.
+
+Ordinary-user denial Rule Suite `3922909251` bound actor `894119`, failed the
+`P` to `C` update, and has canonical SHA-256
+`35083b54ff700c0f549f5027c2b7cd2b8e0fa9fac30f3012e923d025f4aa13b3`.
+App Rule Suite `3922938237` bound bot `323289432`, admitted the same update
+only through Integration `4783991` with `bypass_mode=always`, and has canonical
+SHA-256 `324df21b32978fce1c5fbd45612dc02ecd45abbb148d713b76d7b9efebc11a6c`.
+Environment `20895709932` admitted the exact run; its approval projection
+digest is `d7ee98109c7e8326c8dc71d51c487c92b3c5bf8f308d816defc258574ee2a4cf`.
+The App and installation-summary projection digests are
+`accdf2f7f9a831ea0f42aef6d13b7b11d10d65ba19db3452cda2240037e6e918`
+and `12d2124d310e7fb12785de710d112285c2403ca2ea5624c526a98bbc860d028d`.
+
+GitHub server time bounded the proof at `2026-09-02T22:40:56Z`, the write at
+`2026-09-02T22:41:00Z`, and the terminal read at
+`2026-09-02T22:41:06Z`. The successful push output digest is
+`93f5eaa8169aa38b358f7eb3e80b30f80f0cb3fd4eb3d37fe6ac60673b02f9fd`;
+the rejected stale-lease output digest is
+`ca646017da1c8e57ef915b6b76e4e808a41a1e0492454ca0b0c3176f7a504b8a`.
+One empty HTTP 204 revocation converged immediately to two stable HTTP 401
+denials: `converged=true`, `observationCount=2`,
+`propagationObserved=false`, and `stableDenials=2`.
+
+The temporary canary workflow and helper are absent from maintained source.
+Keep `website-production-canary` at exact `C`, preserve the lifecycle and
+App-only update rulesets, and retain these evidence coordinates. After this
+cleanup reaches exact `main` with green CI, delete the six temporary ruleset
+fingerprint environment variables:
 `WRENCH_RELEASE_LIFECYCLE_RULESET_ID`,
 `WRENCH_RELEASE_LIFECYCLE_RULESET_UPDATED_AT`,
 `WRENCH_RELEASE_UPDATE_RULESET_ID`,
 `WRENCH_RELEASE_UPDATE_RULESET_UPDATED_AT`,
 `WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID`, and
-`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT`. Any missing, extra,
-noncanonical, or provenance-mismatched value blocks the proof.
-
-Freeze all other repository mutation before proof. Record one ordinary
-`0thernet` non-force `P` to `C` denial and its unique failed Rule Suite while
-the persistent canary remains at `P`. Then dispatch the temporary workflow
-exactly once from `D` and approve its one `production-ref-writer-key` admission.
-The helper binds the unique workflow history, exact `main=D`, unchanged
-production ref, `canary=P`, and every control fingerprint before minting a
-token. The shared token helper proves the App, selected installation, and minted
-token close to exactly `metadata:read`, `contents:write`, and
-`workflows:write`, with no Administration or other permission and only Wrench
-repository ID `1316443113`. A private `GIT_ASKPASS` operation performs the one
-explicit leased `P` to `C` fast-forward and proves a separate stale `P` to `D`
-lease cannot mutate the ref. The shared token helper then sends exactly one
-empty-body HTTP 204 revocation request and requires two stable nonredirecting
-HTTP 401 responses from the exact installation-repositories endpoint inside
-the shared ten-slot, 30-second maximum observation window. Only after that
-convergence does it expose a sanitized, immutable
-revocation receipt through `onRevoked`; the canary never captures the raw token
-for a separate reuse request. The canary includes that exact four-field receipt
-as `releaseAppRevocation` in its canonical v2 evidence while keeping the
-complete App path at no more than fourteen REST requests. Terminal reads require
-`main=D`, production unchanged, canary `C`,
-and all three rulesets unchanged.
-
-Retain the canonical evidence record, downloaded prove-job log, App and
-installation readbacks, ordinary-denial and App-bypass Rule Suites, environment
-admission, ruleset administrator projections, GitHub run identity, and their
-SHA-256 digests. The App Rule Suite must bind the dedicated App bot, exact `P`
-before and `C` after, the failed update restriction admitted only through its
-App bypass, and passing destructive rules. Any ambiguous mutation or evidence
-gap invalidates the proof; never rerun it or reset/delete the persistent
-canary. A separate checked cleanup PR must delete the temporary workflow and
-helper and replace this temporary protocol prose and its tests with the
-retained, evidence-bound result. Retain the canary at `C`, the mirrored
-permanent rulesets, and the production-only freeze. After that cleanup is
-merged and its exact-main CI is green, delete all six temporary
-ruleset-fingerprint variables by exact name. Read the environment back and
-require exactly the four reviewed App ID, client ID, slug, and installation ID
-variables plus the single private key secret, with its main-only branch policy,
-reviewer, `prevent_self_review` setting, and disabled admin bypass unchanged.
-Remove the production freeze later only by its captured ID after a fresh
-release-owner audit; uncertainty leaves production safely frozen.
+`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT`. Require the environment
+to contain only the four reviewed App identity variables plus its single
+private-key secret.
+Remove activation freeze ruleset `22149969` only by that captured ID after a
+fresh release-owner audit. Uncertainty leaves production frozen.
 
 The minted token must carry a bounded one-hour expiry and fit the streamed
 response parser. The helper masks it and passes it only through a private
