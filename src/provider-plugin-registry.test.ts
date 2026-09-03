@@ -286,7 +286,7 @@ describe("provider plugin definition and registry", () => {
       "listings.search",
     ]);
     expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
-      .toBe("98717ceca70e578ca4c3afb1bbac129b56656b687fdb3adf9fdccde5d41f2bd7");
+      .toBe("fda5a8870cfd235df6419c15541c8ddb1345c15a801c1264e58339d9e9c53828");
     expect(providerPluginRegistry.legacyContractImplementationHashes(
       binding,
       "listings.search",

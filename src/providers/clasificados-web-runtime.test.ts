@@ -56,7 +56,12 @@ describe("Clasificados public listings runtime", () => {
       });
       expect(init.signal).toBeInstanceOf(AbortSignal);
       expect(timeoutMs).toBe(60_000);
-      const pueblo = url.searchParams.get("RentalsPueblos") ?? "San Juan - Hato Rey";
+      const encoded = /(?:\?|&)RentalsPueblos=([^&]*)/u.exec(url.search)?.[1]
+        ?? "San+Juan+-+Hato+Rey";
+      const pueblo = encoded.replace(/\+/gu, " ").replace(
+        /%([0-9A-Fa-f]{2})/gu,
+        (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)),
+      );
       const id = String(1_900_000 + urls.length);
       return Promise.resolve(new Response(Buffer.from(page(pueblo, id), "latin1"), {
         status: 200,
@@ -73,6 +78,8 @@ describe("Clasificados public listings runtime", () => {
     expect(urls.every((url) => url.includes("RentalsPueblos="))).toBe(true);
     expect(urls.every((url) => url.includes("HighPrice=5500"))).toBe(true);
     expect(urls.every((url) => !url.includes("RESPueblos="))).toBe(true);
+    expect(urls.some((url) => url.includes("R%EDo+Piedras"))).toBe(true);
+    expect(urls.some((url) => url.includes("R%C3%ADo+Piedras"))).toBe(false);
     expect(result).toMatchObject({
       status: "succeeded",
       dispatchStarted: false,

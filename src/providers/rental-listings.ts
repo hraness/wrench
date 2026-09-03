@@ -193,6 +193,22 @@ function boundedInteger(
   return integer;
 }
 
+function boundedHalfStep(
+  value: unknown,
+  label: string,
+  minimum: number,
+  maximum: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${label} must be a bounded half-step count`);
+  }
+  const scaled = value * 2;
+  if (!Number.isSafeInteger(scaled) || value < minimum || value > maximum) {
+    throw new Error(`${label} must be a bounded half-step count`);
+  }
+  return value;
+}
+
 function exactObservedAt(value: string): string {
   if (
     !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)
@@ -403,7 +419,7 @@ export function projectRentalListing(input: {
     url: boundedString(input.url, "listing URL", 512),
     rent: boundedInteger(input.rent, "listing rent", 1, RENT_MAXIMUM),
     beds: boundedInteger(input.beds, "listing beds", 0, BEDS_MAXIMUM),
-    baths: boundedInteger(input.baths, "listing baths", 0, BATHS_MAXIMUM),
+    baths: boundedHalfStep(input.baths, "listing baths", 0, BATHS_MAXIMUM),
     streetAddress: verified.streetAddress,
     zip: verified.zip,
     neighborhood: verified.neighborhood,

@@ -114,6 +114,51 @@ const oneBedroomCard = classifiedRow({
   lon: "-66.048",
 });
 
+const halfBathCard = classifiedRow({
+  id: "1974001",
+  name: "Mirador del Parque Calle Italia 100",
+  price: "2800",
+  description: "Remodeled apartment",
+  beds: "3",
+  baths: "2 1/2",
+  pueblo: "San Juan - Hato Rey",
+  barrio: "Condado",
+  lat: "18.4203835",
+  lon: "-66.0451047",
+});
+
+const studioWithoutBedsIcon = `<!-- Start: Classified row -->
+<div itemscope="itemscope" itemtype="https://schema.org/place">
+<meta itemprop="name" content="Estudio en Baldrich" />
+<span itemprop="offers" itemscope="itemscope" itemtype="https://schema.org/Offer">
+<meta itemprop="price" content="850" />
+</span>
+<meta itemprop="description" content="Efficiency in Baldrich" />
+</div>
+<a href="/UDRentalsDetail.asp?ReForRentAdID=1974002"><span class="link-blue-color">Estudio</span></a>
+<img src="https://imgcache.clasificadosonline.com/UDClasMedia/ArteMobile/icon_bano.png" style="vertical-align: middle;" border="0" />
+1
+<a href="UDRentalsListingAdv.asp?RentalsPueblos=San Juan - Hato Rey"><span>San Juan - Hato Rey</span></a>
+<input type="hidden" class="Lat" value="18.4203835" />
+<input type="hidden" class="Lon" value="-66.0451047" />
+<input type="hidden" class="DetailUrl" value="https://www.clasificadosonline.com/UDRentalsDetail.asp?ReForRentAdID=1974002" />
+<input type="hidden" class="Price" value="850" />
+<input type="hidden" class="BarrioCond" value="Baldrich" />
+`;
+
+const unreadableBathsCard = classifiedRow({
+  id: "1974003",
+  name: "Broken bath glyph",
+  price: "2000",
+  description: "Calle Cervantes 10",
+  beds: "2",
+  baths: "??",
+  pueblo: "San Juan - Hato Rey",
+  barrio: "Hato Rey",
+  lat: "18.4203835",
+  lon: "-66.0451047",
+});
+
 const listPage = (cards: string): string =>
   `<html><title>Alquiler San Juan</title><form action="UDRentalsListingAdv.asp?RentalsPueblos=San+Juan+-+Hato+Rey">${cards}</form></html>`;
 
@@ -139,6 +184,12 @@ describe("Clasificados location mapping", () => {
       max_price: 5500,
     }).href).toBe(
       "https://www.clasificadosonline.com/UDRentalsListingAdv.asp?RentalsPueblos=San+Juan+-+Hato+Rey&Category=Apartamento&HighPrice=5500",
+    );
+    expect(clasificadosListUrl("San Juan - Río Piedras", {
+      location: "Río Piedras",
+      max_price: 5500,
+    }).href).toBe(
+      "https://www.clasificadosonline.com/UDRentalsListingAdv.asp?RentalsPueblos=San+Juan+-+R%EDo+Piedras&Category=Apartamento&HighPrice=5500",
     );
     expect(clasificadosDetailUrl("1974934")).toBe(
       "https://www.clasificadosonline.com/UDRentalsDetail.asp?ReForRentAdID=1974934",
@@ -173,6 +224,27 @@ describe("Clasificados card projection", () => {
     expect(() => projectClasificadosListingCard(caguasLeakCard))
       .toThrow("Clasificados card is outside the requested San Juan locality");
   });
+
+  test("reads half baths and studios that omit the bedroom icon", () => {
+    expect(projectClasificadosListingCard(halfBathCard)).toMatchObject({
+      id: "1974001",
+      rent: 2800,
+      beds: 3,
+      baths: 2.5,
+      streetAddress: "Calle Italia 100",
+      neighborhood: { name: "Hato Rey", source: "coordinates" },
+    });
+    expect(projectClasificadosListingCard(studioWithoutBedsIcon)).toMatchObject({
+      id: "1974002",
+      rent: 850,
+      beds: 0,
+      baths: 1,
+    });
+  });
+
+  test("does not treat a condominio name as a street address", () => {
+    expect(projectClasificadosListingCard(santurceCard).streetAddress).toBeNull();
+  });
 });
 
 describe("Clasificados list search projection", () => {
@@ -184,7 +256,11 @@ describe("Clasificados list search projection", () => {
       },
       {
         pueblo: "San Juan - Santurce",
-        html: listPage(santurceCard + oneBedroomCard),
+        html: listPage(santurceCard),
+      },
+      {
+        pueblo: "San Juan - Río Piedras",
+        html: listPage(oneBedroomCard),
       },
     ], {
       location: "San Juan, PR",
@@ -194,7 +270,7 @@ describe("Clasificados list search projection", () => {
     expect(result).toMatchObject({
       schemaVersion: 1,
       provider: "clasificados",
-      completeness: "complete",
+      completeness: "partial",
       target: { kind: "search", location: "San Juan, PR" },
     });
     expect(result.listings.map((listing) => listing.id)).toEqual([
@@ -204,6 +280,19 @@ describe("Clasificados list search projection", () => {
     ]);
     expect(result.listings.find((listing) => listing.id === "1974934")?.neighborhood)
       .toEqual({ name: "Hato Rey", source: "known-address" });
+  });
+
+  test("keeps readable cards when one sibling card is unreadable", () => {
+    const result = projectClasificadosListingsSearch([{
+      pueblo: "San Juan - Hato Rey",
+      html: listPage(aquablueCard + unreadableBathsCard + studioWithoutBedsIcon),
+    }], {
+      location: "Hato Rey",
+      beds_min: 2,
+      max_price: 5500,
+    }, "2026-09-03T18:00:00.000Z");
+    expect(result.completeness).toBe("partial");
+    expect(result.listings.map((listing) => listing.id)).toEqual(["1974934"]);
   });
 });
 

@@ -90,9 +90,9 @@ export const CLASIFICADOS_LISTINGS_SEARCH_CONTRACT: WebSessionContract =
   });
 
 const STREET_PATTERN =
-  /\b(?:calle|ave(?:nida)?\.?|av\.?|urb(?:anizaci[oó]n)?\.?|cond(?:ominio)?\.?)\s+[^,]{2,80}/iu;
+  /\b(?:calle|ave(?:nida)?\.?|av\.?)\s+[A-Za-zÁÉÍÓÚÑáéíóúñ0-9.']+(?:\s+[A-Za-zÁÉÍÓÚÑáéíóúñ0-9.']+){0,5}(?:\s+\d{1,5})?/iu;
 const NUMBERED_STREET_PATTERN =
-  /\b\d{1,5}\s+(?:calle|ave(?:nida)?\.?|av\.?|luis\s+mu[nñ]oz\s+rivera)\b[^,]{0,60}/iu;
+  /\b\d{1,5}\s+(?:calle|ave(?:nida)?\.?|av\.?|luis\s+mu[nñ]oz\s+rivera)(?:\s+[A-Za-zÁÉÍÓÚÑáéíóúñ0-9.']+){0,4}/iu;
 
 function foldLocation(value: string): string {
   return value
@@ -142,21 +142,53 @@ export function clasificadosPueblosForLocation(
   throw new Error("listings.search location is not one reviewed Puerto Rico rental locality");
 }
 
+function encodeLatin1QueryComponent(value: string): string {
+  let encoded = "";
+  for (const character of value) {
+    const code = character.codePointAt(0);
+    if (code === undefined || code > 255) {
+      throw new Error("Clasificados query value is outside the reviewed latin-1 set");
+    }
+    if (
+      (code >= 0x30 && code <= 0x39)
+      || (code >= 0x41 && code <= 0x5a)
+      || (code >= 0x61 && code <= 0x7a)
+      || character === "-"
+      || character === "."
+      || character === "_"
+    ) {
+      encoded += character;
+      continue;
+    }
+    if (character === " ") {
+      encoded += "+";
+      continue;
+    }
+    encoded += `%${code.toString(16).toUpperCase().padStart(2, "0")}`;
+  }
+  return encoded;
+}
+
+function clasificadosFormQuery(
+  fields: Readonly<Record<string, string>>,
+): string {
+  return Object.entries(fields)
+    .map(([key, value]) => `${key}=${encodeLatin1QueryComponent(value)}`)
+    .join("&");
+}
+
 export function clasificadosListUrl(
   pueblo: ClasificadosPueblo,
   input: RentalListingsSearchInput,
   offset = 0,
 ): URL {
-  const url = new URL(CLASIFICADOS_LIST_PATH, CLASIFICADOS_ORIGIN);
-  url.searchParams.set("RentalsPueblos", pueblo);
-  url.searchParams.set("Category", "Apartamento");
-  if (input.max_price !== undefined) {
-    url.searchParams.set("HighPrice", String(input.max_price));
-  }
-  if (offset > 0) {
-    url.searchParams.set("offset", String(offset));
-  }
-  return url;
+  const query = clasificadosFormQuery({
+    RentalsPueblos: pueblo,
+    Category: "Apartamento",
+    ...(input.max_price === undefined ? {} : { HighPrice: String(input.max_price) }),
+    ...(offset > 0 ? { offset: String(offset) } : {}),
+  });
+  return new URL(`${CLASIFICADOS_LIST_PATH}?${query}`, CLASIFICADOS_ORIGIN);
 }
 
 export function clasificadosSearchTargetUrl(
@@ -225,20 +257,39 @@ function hiddenClassValue(html: string, className: string): string | null {
 function afterIcon(html: string, iconFile: string): string | null {
   const index = html.indexOf(iconFile);
   if (index < 0) return null;
-  const after = html.slice(index + iconFile.length);
-  const match = />\s*([^<]+)/u.exec(after);
+  const tagEnd = html.indexOf(">", index);
+  if (tagEnd < 0) return null;
+  const match = /^\s*([^<\r\n]+)/u.exec(html.slice(tagEnd + 1));
   if (match?.[1] === undefined) return null;
   const value = collapseWhitespace(match[1]);
   return value.length > 0 ? value : null;
 }
 
 function parseCount(value: string, label: string): number {
-  if (/^(?:estudio|efficiency)$/iu.test(value)) return 0;
-  const match = /^([0-9]{1,2})(?:\.[05])?$/u.exec(value);
+  if (/^(?:estudio|efficiency|studio)$/iu.test(value)) return 0;
+  const half = /^([0-9]{1,2})\s+1\/2$/u.exec(value);
+  if (half?.[1] !== undefined) return Number(half[1]) + 0.5;
+  const match = /^([0-9]{1,2})(?:\.(5|0|00))?$/u.exec(value);
   if (match?.[1] === undefined) {
     throw new Error(`${label} was not a reviewed room count`);
   }
-  return Number(match[1]);
+  return match[2] === "5" ? Number(match[1]) + 0.5 : Number(match[1]);
+}
+
+function parseBeds(value: string): number {
+  const beds = parseCount(value, "Clasificados beds");
+  if (!Number.isSafeInteger(beds)) {
+    throw new Error("Clasificados beds was not a reviewed room count");
+  }
+  return beds;
+}
+
+function inferStudioBeds(
+  title: string | null,
+  description: string | null,
+): number | null {
+  const text = [title, description].filter((part) => part !== null).join(" ");
+  return /(?:estudio|efficiency|studio)/iu.test(text) ? 0 : null;
 }
 
 function puebloFromCard(html: string): string | null {
@@ -285,12 +336,14 @@ function extractStreetAddress(
   title: string | null,
   description: string | null,
 ): string | null {
-  const text = [title, description].filter((part) => part !== null).join(" ");
-  const numbered = NUMBERED_STREET_PATTERN.exec(text);
-  if (numbered?.[0] !== undefined) return collapseWhitespace(numbered[0]);
-  const named = STREET_PATTERN.exec(text);
-  if (named?.[0] === undefined) return null;
-  return collapseWhitespace(named[0]);
+  for (const text of [title, description]) {
+    if (text === null) continue;
+    const numbered = NUMBERED_STREET_PATTERN.exec(text);
+    if (numbered?.[0] !== undefined) return collapseWhitespace(numbered[0]);
+    const named = STREET_PATTERN.exec(text);
+    if (named?.[0] !== undefined) return collapseWhitespace(named[0]);
+  }
+  return null;
 }
 
 function cardChunks(html: string): readonly string[] {
@@ -314,7 +367,8 @@ export function projectClasificadosListingCard(
   const title = metaContent(html, "name");
   const priceText = hiddenClassValue(html, "Price") ?? metaContent(html, "price");
   const description = metaContent(html, "description");
-  const bedsText = afterIcon(html, "icon_cuartos.png");
+  const bedsText = afterIcon(html, "icon_cuartos.png")
+    ?? (inferStudioBeds(title, description) === 0 ? "Efficiency" : null);
   const bathsText = afterIcon(html, "icon_bano.png");
   const rawLat = hiddenClassValue(html, "Lat");
   const rawLon = hiddenClassValue(html, "Lon");
@@ -334,22 +388,40 @@ export function projectClasificadosListingCard(
   }
   const id = listingIdFromCard(html, rawDetail);
   const rent = Number(priceText.replace(/[^0-9]/gu, ""));
-  const coordinates = rawLat !== null && rawLon !== null
-    ? rentalListingCoordinates(Number(rawLat), Number(rawLon))
-    : null;
+  let coordinates = null;
+  if (rawLat !== null && rawLon !== null) {
+    try {
+      coordinates = rentalListingCoordinates(Number(rawLat), Number(rawLon));
+    } catch {
+      coordinates = null;
+    }
+  }
   const streetAddress = extractStreetAddress(title, description);
   const zip = extractPuertoRicoZip(`${title} ${description ?? ""}`);
   return projectRentalListing({
     id,
     url: exactDetailUrl(id, rawDetail),
     rent,
-    beds: parseCount(bedsText, "Clasificados beds"),
+    beds: parseBeds(bedsText),
     baths: parseCount(bathsText, "Clasificados baths"),
     streetAddress,
     zip,
     coordinates,
     buildingText: [title, description].filter((part) => part !== null).join(" "),
   });
+}
+
+function skippableCardError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message === "Clasificados card pueblo did not match the requested list"
+    || error.message === "Clasificados card is outside the requested San Juan locality"
+    || error.message === "Clasificados card was missing a reviewed listing field"
+    || error.message === "Clasificados beds was not a reviewed room count"
+    || error.message === "Clasificados baths was not a reviewed room count"
+    || error.message === "Clasificados card did not bind one pueblo"
+    || error.message === "Clasificados card did not bind one listing identifier"
+    || error.message === "Clasificados card detail URL was invalid"
+    || error.message === "Clasificados card detail URL drifted";
 }
 
 export function projectClasificadosListPage(
@@ -359,34 +431,42 @@ export function projectClasificadosListPage(
 ): {
   readonly listings: readonly RentalListing[];
   readonly pageFull: boolean;
+  readonly skippedCard: boolean;
 } {
   if (!/<!--\s*Start:\s*Classified row\s*-->/u.test(html)) {
     if (/UDRentalsListingAdv\.asp/u.test(html) || /RentalsPueblos/u.test(html)) {
-      return Object.freeze({ listings: Object.freeze([]), pageFull: false });
+      return Object.freeze({
+        listings: Object.freeze([]),
+        pageFull: false,
+        skippedCard: false,
+      });
     }
     throw new Error("Clasificados list page did not match the reviewed rental-list contract");
   }
   const listings: RentalListing[] = [];
-  for (const chunk of cardChunks(html)) {
+  const chunks = cardChunks(html);
+  let readable = 0;
+  let skippedCard = false;
+  for (const chunk of chunks) {
     try {
       const listing = projectClasificadosListingCard(chunk, expectedPueblo);
+      readable += 1;
       if (listingMatchesSearchFilters(listing, input)) listings.push(listing);
     } catch (error) {
-      if (
-        error instanceof Error
-        && (
-          error.message === "Clasificados card pueblo did not match the requested list"
-          || error.message === "Clasificados card is outside the requested San Juan locality"
-        )
-      ) {
+      if (skippableCardError(error)) {
+        skippedCard = true;
         continue;
       }
       throw error;
     }
   }
+  if (chunks.length > 0 && readable === 0) {
+    throw new Error("Clasificados list page did not project any reviewed listing cards");
+  }
   return Object.freeze({
     listings: Object.freeze(listings),
-    pageFull: cardChunks(html).length >= CLASIFICADOS_PAGE_SIZE,
+    pageFull: chunks.length >= CLASIFICADOS_PAGE_SIZE,
+    skippedCard,
   });
 }
 
@@ -401,9 +481,11 @@ export function projectClasificadosListingsSearch(
   const listings: RentalListing[] = [];
   const ids = new Set<string>();
   let pageFull = false;
+  let skippedCard = false;
   for (const page of pages) {
     const projected = projectClasificadosListPage(page.html, page.pueblo, input);
     pageFull = pageFull || projected.pageFull;
+    skippedCard = skippedCard || projected.skippedCard;
     for (const listing of projected.listings) {
       if (ids.has(listing.id)) continue;
       ids.add(listing.id);
@@ -415,7 +497,7 @@ export function projectClasificadosListingsSearch(
     location: input.location,
     url: clasificadosSearchTargetUrl(input.location, input),
     observedAt,
-    completeness: pageFull ? "partial" : "complete",
+    completeness: pageFull || skippedCard ? "partial" : "complete",
     listings,
   });
 }

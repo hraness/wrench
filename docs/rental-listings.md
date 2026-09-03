@@ -49,18 +49,24 @@ runtime therefore binds latitude and longitude from the list card only.
 ## Completeness
 
 San Juan is five ClasificadosOnline pueblos, not one island-wide search.
-`location=San Juan, PR` walks those five reviewed list pages. Completeness is
-`partial` when any page is full, when a page is truncated, or when a card is
-skipped because it is not a San Juan listing. Completeness is `complete` only
-when every requested pueblo page is a short, fully projected page.
+`location=San Juan, PR` walks those five reviewed list pages. The pueblo query
+uses the page's latin-1 form encoding, so `Río Piedras` is `R%EDo`, not UTF-8.
+Completeness is `partial` when any page is full, when a card is skipped because
+it is not a San Juan listing, or when a card is missing a reviewed field.
+Completeness is `complete` only when every requested pueblo page is a short,
+fully projected page. Bath counts keep a reviewed half-step (`2 1/2` is `2.5`).
+Studios that omit the bedroom icon and name themselves estudio, efficiency, or
+studio project as zero bedrooms.
 
 ## Live probe
 
 A live ClasificadosOnline probe on 2026-09-03 for San Juan two-bedroom rentals
-at or below $5500 returned real Hato Rey, Condado / Miramar, Santurce, Río
-Piedras, and Old San Juan rows, including Aquablue at 48 Luis Muñoz Rivera with
-neighborhood `Hato Rey` from the reviewed address override rather than the
-listing title. Replay that probe with:
+at or below $5500 returned 43 structured rows with canonical detail URLs,
+including Hato Rey, Condado / Miramar, Santurce, Río Piedras, and Old San Juan
+neighborhoods derived from coordinates or known-address overrides. First-page
+pueblo results were full, so completeness was `partial`. Aquablue at 48 Luis
+Muñoz Rivera is covered by the recorded fixture: the override binds Hato Rey
+`00918` even when the title says Condado. Replay the live probe with:
 
 ```bash
 wrench clasificados-web listings.search \

@@ -120,6 +120,17 @@ describe("rental listing projection", () => {
     })).toThrow("rental listings search repeated one listing");
   });
 
+  test("accepts half-step baths", () => {
+    expect(projectRentalListing({
+      id: "1974001",
+      url: "https://www.clasificadosonline.com/UDRentalsDetail.asp?ReForRentAdID=1974001",
+      rent: 2800,
+      beds: 3,
+      baths: 2.5,
+      zip: "00918",
+    }).baths).toBe(2.5);
+  });
+
   test("applies beds_min and max_price filters", () => {
     const listing = { beds: 2, rent: 3500 };
     expect(listingMatchesSearchFilters(listing, {
