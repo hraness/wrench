@@ -178,6 +178,15 @@ The tag is a release request. Wait for the read-only verification job to
 rebuild and compare the exact public npm tarball, then verify that the GitHub
 Release is non-draft, immutable, and Latest.
 
+Release verification starts from a depth-one, credential-free checkout of the
+requested tag. `scripts/release-ref-authority.ts` reads only the exact remote
+`main` ref and the bounded `refs/tags/v*` inventory. The combined inventory must
+be canonical UTF-8, at most 64 KiB and 500 rows, and stable across two reads.
+The helper imports only those governed refs with tags disabled and without
+writing `FETCH_HEAD`. Wrench release tags are lightweight direct commit tags;
+an annotated requested tag, a newer stable tag of either kind, a moved ref, or
+a tag, checkout, and current-`main` mismatch fails closed.
+
 ## Stage a later version
 
 1. Merge a monotonically greater stable version to `main`. A push that changes
@@ -196,6 +205,15 @@ The read-only classifier compares the current and prior `package.json` files. A
 manifest edit with an unchanged version succeeds without running the verify or
 OIDC jobs. A prerelease, malformed version, downgrade, unavailable push base, or
 non-current `main` commit fails closed.
+
+Both classifier and verifier use an exact depth-one, no-tag, credential-free
+checkout of the event commit. The classifier binds the advertised `main` tip
+twice. For a push, it imports only governed `main` history under a temporary
+private ref, requires GitHub's exact nonzero `before` commit to be present and
+an ancestor of the advertised tip, removes the ref, and reads the prior
+manifest by object ID. This supports a multi-commit push without importing any
+unrelated ref. Manual recovery has no prior commit. Neither path uses a broad
+ref fetch, a forced refspec, or `FETCH_HEAD` as authority.
 
 If the automatic run did not start or failed before npm accepted the stage,
 dispatch **Stage npm package** from the current `main` branch. Manual recovery
@@ -233,10 +251,13 @@ git push origin refs/tags/v0.16.3
 
 The staging workflow runs on GitHub-hosted runners with Node 24, npm 11.19.0,
 Bun 1.3.14, disabled package-manager caching, and no stored npm token. It binds
-the verified artifact to the current `main` commit, refetches `main` before
-staging, and aborts if that commit is no longer the default-branch head. The
-main-only `npm-stage` environment applies only to the terminal OIDC job and has
-no required deployment reviewers.
+the verified artifact to the current `main` commit. The checkout-free terminal
+OIDC job takes two exact `ls-remote` observations of `main` and the prospective
+tag, requires the main row to remain the verified commit and both exact tag
+lookups to remain empty, and caps their combined canonical inventory at 64 KiB
+and 500 rows. It does not initialize or fetch a repository, execute checked-out
+scripts, or use `FETCH_HEAD`. The main-only `npm-stage` environment applies only
+to this terminal job and has no required deployment reviewers.
 
 `scripts/package-budget.ts` owns the shared packed-byte, unpacked-byte, and
 file-count ceilings used by artifact inspection and the clean-consumer smoke.
@@ -347,6 +368,14 @@ must be an ancestor of the current-main workflow source. Manual recovery carries
 no upstream SHA. Both paths check out the exact current-main source, bind the
 package version from the peeled tag commit and the newest stable tag, and verify
 the immutable asset-free Latest Release before any provider or ref work.
+
+That promotion checkout is depth one with tags and credentials disabled. The
+same bounded release-ref helper imports only exact advertised `main` and the
+requested lightweight tag, without writing `FETCH_HEAD`, then proves the tag is
+the newest stable tag and an ancestor of current-main workflow source. Every
+later promotion job checks out only the already-verified workflow SHA at depth
+one with tags disabled; provider and App/CAS authority remain separate from Git
+ref discovery.
 
 Before any key-gated job starts, a read-only job records a bounded, complete
 snapshot of GitHub's Production deployments. Authenticated GitHub

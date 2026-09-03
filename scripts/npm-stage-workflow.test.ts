@@ -919,6 +919,14 @@ describe("npm publication contract", () => {
     const verifyJob = workflow.slice(verifyStart, stageStart);
     const stageJob = workflow.slice(stageStart);
 
+    expect(workflow.match(/actions\/checkout@/gu) ?? []).toHaveLength(2);
+    expect(workflow.match(/fetch-depth: 1/gu) ?? []).toHaveLength(2);
+    expect(workflow.match(/fetch-tags: false/gu) ?? []).toHaveLength(2);
+    expect(workflow.match(/persist-credentials: false/gu) ?? []).toHaveLength(2);
+    expect(workflow).not.toContain("fetch-depth: 0");
+    expect(workflow).not.toContain("git fetch --force");
+    expect(workflow).not.toContain("git fetch --tags");
+
     for (const required of [
       "push:\n    branches:\n      - main\n    paths:\n      - package.json",
       "workflow_dispatch:",
@@ -942,16 +950,18 @@ describe("npm publication contract", () => {
       "name: Classify current default-branch package",
       "BEFORE_SHA: ${{ github.event.before }}",
       "github.event.repository.default_branch",
-      "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH",
+      "fetch-depth: 1",
+      "fetch-tags: false",
+      "ref: ${{ github.sha }}",
+      './scripts/release-ref-authority.ts stage-current "$GITHUB_SHA"',
+      './scripts/release-ref-authority.ts stage-push "$GITHUB_SHA" "$BEFORE_SHA"',
       'git show "$default_head:package.json"',
       "read_manifest_version",
       "Current package manifest must name @hraness/wrench and use a stable semantic version",
       'case "$GITHUB_EVENT_NAME" in',
       "workflow_dispatch)",
       "push)",
-      'git cat-file -e "$BEFORE_SHA^{commit}"',
-      'git merge-base --is-ancestor "$BEFORE_SHA" "$default_head"',
-      'git show "$BEFORE_SHA:package.json"',
+      'git show "$previous_sha:package.json"',
       '[[ "$current_version" == "$previous_version" ]]',
       "package.json changed without a version change; npm staging is not required",
       'OLD_VERSION="$previous_version" NEW_VERSION="$current_version" node -e',
@@ -982,7 +992,12 @@ describe("npm publication contract", () => {
       "npm@11.19.0",
       "github.event.repository.default_branch",
       "EXPECTED_SOURCE_SHA: ${{ needs.classify.outputs.source_sha }}",
-      "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH",
+      "fetch-depth: 1",
+      "fetch-tags: false",
+      "ref: ${{ needs.classify.outputs.source_sha }}",
+      './scripts/release-ref-authority.ts stage-current "$EXPECTED_SOURCE_SHA"',
+      "name: Verify unpublished package identity\n        env:\n          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}",
+      'tag-absent "v$package_version" "$GITHUB_SHA"',
       "bun install --frozen-lockfile --ignore-scripts",
       "bun run check",
       "git status --porcelain --untracked-files=all -- dist bun.lock",
@@ -1002,7 +1017,7 @@ describe("npm publication contract", () => {
 
     expect(verifyJob).not.toContain("id-token: write");
     expect(verifyJob).not.toContain("npm stage publish");
-    expect(verifyJob.match(/git fetch --no-tags origin/gu) ?? []).toHaveLength(1);
+    expect(verifyJob).not.toContain("git fetch");
     expect(verifyJob.match(/npm view /gu) ?? []).toHaveLength(2);
 
     for (const required of [
@@ -1056,16 +1071,19 @@ describe("npm publication contract", () => {
       "EXPECTED_TARBALL_SHA256: ${{ steps.artifact.outputs.sha256 }}",
       "EXPECTED_VERSION: ${{ steps.package_identity.outputs.version }}",
       "TARBALL: ${{ steps.artifact.outputs.tarball }}",
-      'git init --quiet "$current_main"',
-      '"https://github.com/$GITHUB_REPOSITORY.git"',
-      'default_head="$(git -C "$current_main" rev-parse FETCH_HEAD)"',
-      '"$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA"',
-      'tag_error="$RUNNER_TEMP/wrench-current-tag-error.txt"',
-      "git ls-remote --exit-code --refs --tags",
+      '"$GITHUB_REPOSITORY" != "hraness/wrench"',
+      '"$DEFAULT_BRANCH" != "main"',
+      'repository_url="https://github.com/hraness/wrench.git"',
+      'git ls-remote --refs "$repository_url"',
+      '"refs/heads/main"',
+      'git ls-remote --refs --tags "$repository_url"',
       '"refs/tags/v$EXPECTED_VERSION"',
-      'case "$tag_status" in',
-      "Tag v$EXPECTED_VERSION was created after package verification",
-      "Could not prove that remote tag v$EXPECTED_VERSION is absent",
+      "totalBytes > 64 * 1024 || totalRows > 500",
+      'const expectedMainRow = `${expectedMain}\\trefs/heads/main\\n`;',
+      'firstMain !== expectedMainRow || secondMain !== expectedMainRow',
+      'firstTag !== "" || secondTag !== ""',
+      '"$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA"',
+      "Tag ${expectedTag} exists at the terminal staging boundary",
       'current_tarball_sha256="$(sha256sum "$TARBALL"',
       '"$current_tarball_sha256" != "$EXPECTED_TARBALL_SHA256"',
       "npm stage publish \"$TARBALL\"",
@@ -1085,7 +1103,10 @@ describe("npm publication contract", () => {
     expect(stageJob).not.toContain("setup-bun@");
     expect(stageJob).not.toMatch(/\bbun\b/u);
     expect(stageJob).not.toContain("./scripts/");
-    expect(stageJob.match(/git -C "\$current_main" fetch/gu) ?? []).toHaveLength(1);
+    expect(stageJob).not.toContain("git init");
+    expect(stageJob).not.toContain("git fetch");
+    expect(stageJob).not.toContain("FETCH_HEAD");
+    expect(stageJob.match(/git ls-remote --refs/gu) ?? []).toHaveLength(2);
     expect(stageJob.match(/npm stage publish/gu) ?? []).toHaveLength(1);
 
     expect(workflow).not.toContain("secrets.NPM_TOKEN");
@@ -1114,16 +1135,16 @@ describe("npm publication contract", () => {
 
     const downloadIndex = stageJob.indexOf("actions/download-artifact@");
     const firstHashIndex = stageJob.indexOf('actual_sha256="$(sha256sum "$tarball"');
-    const fetchIndex = stageJob.indexOf('git -C "$current_main" fetch');
-    const fetchedHeadIndex = stageJob.indexOf("rev-parse FETCH_HEAD");
-    const tagLookupIndex = stageJob.indexOf("git ls-remote --exit-code --refs --tags");
+    const firstMainLookupIndex = stageJob.indexOf('git ls-remote --refs "$repository_url"');
+    const tagLookupIndex = stageJob.indexOf('git ls-remote --refs --tags "$repository_url"');
+    const snapshotCheckIndex = stageJob.indexOf("totalBytes > 64 * 1024 || totalRows > 500");
     const secondHashIndex = stageJob.indexOf('current_tarball_sha256="$(sha256sum "$TARBALL"');
     const stageIndex = stageJob.indexOf('npm stage publish "$TARBALL"');
     expect(firstHashIndex).toBeGreaterThan(downloadIndex);
-    expect(fetchIndex).toBeGreaterThan(firstHashIndex);
-    expect(fetchedHeadIndex).toBeGreaterThan(fetchIndex);
-    expect(tagLookupIndex).toBeGreaterThan(fetchedHeadIndex);
-    expect(secondHashIndex).toBeGreaterThan(tagLookupIndex);
+    expect(firstMainLookupIndex).toBeGreaterThan(firstHashIndex);
+    expect(tagLookupIndex).toBeGreaterThan(firstMainLookupIndex);
+    expect(snapshotCheckIndex).toBeGreaterThan(tagLookupIndex);
+    expect(secondHashIndex).toBeGreaterThan(snapshotCheckIndex);
     expect(stageIndex).toBeGreaterThan(secondHashIndex);
   });
 
@@ -1133,12 +1154,43 @@ describe("npm publication contract", () => {
     const directory = await mkdtemp(join(tmpdir(), "wrench-stage-classify-"));
     const binaryDirectory = join(directory, "bin");
     const gitStub = join(binaryDirectory, "git");
+    const nodeStub = join(binaryDirectory, "node");
     const githubOutput = join(directory, "github-output.txt");
     const beforeSha = "b".repeat(40);
     const currentSha = "c".repeat(40);
 
     try {
       await mkdir(binaryDirectory, { recursive: true });
+      await writeFile(nodeStub, `#!/bin/bash
+set -euo pipefail
+if [[ "\${1-}" == "--experimental-strip-types" && \
+      "\${2-}" == "./scripts/release-ref-authority.ts" ]]; then
+  case "\${3-}" in
+    stage-current)
+      [[ "\${4-}" == "$CURRENT_SHA" ]]
+      printf 'source_sha=%s\n' "$CURRENT_SHA"
+      ;;
+    stage-push)
+      if [[ "\${4-}" != "$CURRENT_SHA" || ! "\${5-}" =~ ^[a-f0-9]{40}$ || \
+            "\${5-}" == "0000000000000000000000000000000000000000" ]]; then
+        echo 'Push event has an invalid prior default-branch commit' >&2
+        exit 1
+      fi
+      if [[ "$BEFORE_STATUS" != "ancestor" ]]; then
+        echo "Push base \${5-} is not an available ancestor of $CURRENT_SHA" >&2
+        exit 1
+      fi
+      printf 'source_sha=%s\nprevious_sha=%s\n' "$CURRENT_SHA" "\${5-}"
+      ;;
+    *)
+      echo "unexpected authority mode: \${3-}" >&2
+      exit 1
+      ;;
+  esac
+else
+  PATH="$ORIGINAL_PATH" exec node "$@"
+fi
+`, "utf8");
       await writeFile(gitStub, `#!/bin/bash
 set -euo pipefail
 case "\${1-}" in
@@ -1175,7 +1227,7 @@ case "\${1-}" in
     ;;
 esac
 `, "utf8");
-      await chmod(gitStub, 0o755);
+      await Promise.all([chmod(gitStub, 0o755), chmod(nodeStub, 0o755)]);
 
       const manifest = (version: string): string => JSON.stringify({
         name: "@hraness/wrench",
@@ -1190,7 +1242,9 @@ esac
         GITHUB_EVENT_NAME: "push",
         GITHUB_OUTPUT: githubOutput,
         GITHUB_REF: "refs/heads/main",
+        GITHUB_REPOSITORY: "hraness/wrench",
         GITHUB_SHA: currentSha,
+        ORIGINAL_PATH: process.env.PATH ?? "",
         PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
         PREVIOUS_MANIFEST: manifest("0.16.0"),
         RUNNER_TEMP: directory,
@@ -1329,7 +1383,22 @@ esac
     try {
       await mkdir(binaryDirectory, { recursive: true });
       await writeFile(tarball, "reviewed tarball fixture\n", "utf8");
-      await writeFile(gitStub, `#!/bin/bash\nset -euo pipefail\nprintf 'git %s\\n' "$*" >> "$COMMAND_LOG"\nif [[ "\${1-}" == "ls-remote" ]]; then\n  case "$GIT_TAG_STATUS" in\n    absent) exit 2 ;;\n    present) printf '%s\\trefs/tags/v0.15.1\\n' "$GITHUB_SHA"; exit 0 ;;\n    failure) echo 'simulated remote lookup failure' >&2; exit 128 ;;\n  esac\nfi\nif [[ "$*" == *"rev-parse FETCH_HEAD"* ]]; then\n  printf '%s\\n' "$GITHUB_SHA"\nfi\n`, "utf8");
+      await writeFile(gitStub, `#!/bin/bash
+set -euo pipefail
+printf 'git %s\n' "$*" >> "$COMMAND_LOG"
+if [[ "$*" == "ls-remote --refs https://github.com/hraness/wrench.git refs/heads/main" ]]; then
+  printf '%s\trefs/heads/main\n' "$GITHUB_SHA"
+elif [[ "$*" == "ls-remote --refs --tags https://github.com/hraness/wrench.git refs/tags/v0.15.1" ]]; then
+  case "$GIT_TAG_STATUS" in
+    absent) exit 0 ;;
+    present) printf '%s\trefs/tags/v0.15.1\n' "$GITHUB_SHA" ;;
+    failure) echo 'simulated remote lookup failure' >&2; exit 128 ;;
+  esac
+else
+  echo "unexpected git command: $*" >&2
+  exit 1
+fi
+`, "utf8");
       await writeFile(sha256Stub, `#!/bin/bash\nset -euo pipefail\nprintf 'sha256sum %s\\n' "$*" >> "$COMMAND_LOG"\nprintf '%s  %s\\n' "$EXPECTED_TARBALL_SHA256" "$1"\n`, "utf8");
       await writeFile(npmStub, `#!/bin/bash\nset -euo pipefail\nprintf 'npm %s\\n' "$*" >> "$COMMAND_LOG"\nprintf 'published\\n' > "$PUBLISH_MARKER"\n`, "utf8");
       await Promise.all([chmod(gitStub, 0o755), chmod(npmStub, 0o755), chmod(sha256Stub, 0o755)]);
@@ -1352,12 +1421,16 @@ esac
       expect(absent.exitCode).toBe(0);
       expect(await readFile(publishMarker, "utf8")).toBe("published\n");
       const commands = await readFile(commandLog, "utf8");
-      const fetchIndex = commands.indexOf("fetch --quiet --no-tags --depth=1");
-      const tagIndex = commands.indexOf("git ls-remote --exit-code --refs --tags");
+      const mainIndex = commands.indexOf(
+        "git ls-remote --refs https://github.com/hraness/wrench.git refs/heads/main",
+      );
+      const tagIndex = commands.indexOf(
+        "git ls-remote --refs --tags https://github.com/hraness/wrench.git refs/tags/v0.15.1",
+      );
       const hashIndex = commands.indexOf("sha256sum");
       const publishIndex = commands.indexOf("npm stage publish");
-      expect(fetchIndex).toBeGreaterThan(-1);
-      expect(tagIndex).toBeGreaterThan(fetchIndex);
+      expect(mainIndex).toBeGreaterThan(-1);
+      expect(tagIndex).toBeGreaterThan(mainIndex);
       expect(hashIndex).toBeGreaterThan(tagIndex);
       expect(publishIndex).toBeGreaterThan(hashIndex);
 
@@ -1368,8 +1441,8 @@ esac
         expect(rejected.exitCode).not.toBe(0);
         expect(`${rejected.stdout}${rejected.stderr}`).toContain(
           tagStatus === "present"
-            ? "Tag v0.15.1 was created after package verification"
-            : "Could not prove that remote tag v0.15.1 is absent",
+            ? "Tag v0.15.1 exists at the terminal staging boundary"
+            : "simulated remote lookup failure",
         );
         expect(await Bun.file(publishMarker).exists()).toBe(false);
       }
@@ -1578,11 +1651,20 @@ esac
       "Verify exact immutable release coordinate",
     );
 
+    expect(workflow.match(/actions\/checkout@/gu) ?? []).toHaveLength(5);
+    expect(workflow.match(/fetch-depth: 1/gu) ?? []).toHaveLength(5);
+    expect(workflow.match(/fetch-tags: false/gu) ?? []).toHaveLength(5);
+    expect(workflow.match(/persist-credentials: false/gu) ?? []).toHaveLength(5);
+    expect(workflow).not.toContain("fetch-depth: 0");
+    expect(identityScript).not.toContain("git tag --list");
+    expect(identityScript).not.toContain("FETCH_HEAD");
+
     expect(identityScript).toContain('"$head_commit" != "$RECOVERY_WORKFLOW_SHA"');
     expect(identityScript).toContain('"$REQUESTED_RELEASE_SHA" != "$tag_commit"');
     expect(identityScript).toContain(
-      'git merge-base --is-ancestor "$tag_commit" "$head_commit"',
+      './scripts/release-ref-authority.ts promotion "$REQUESTED_TAG"',
     );
+    expect(identityScript).not.toContain("git merge-base");
     expect(identityScript).toContain('git show "${tag_commit}:package.json"');
     expect(identityScript).toContain("printf 'sha=%s\\n' \"$tag_commit\"");
     expect(identityScript).toContain(
@@ -1639,6 +1721,8 @@ esac
     const directory = await mkdtemp(join(tmpdir(), "wrench-promotion-identity-"));
     const output = join(directory, "github-output.txt");
     const helperDirectory = join(directory, "scripts");
+    const binaryDirectory = join(directory, "bin");
+    const nodeStub = join(binaryDirectory, "node");
     const checkedGit = (arguments_: readonly string[]): string => {
       const result = Bun.spawnSync(["git", ...arguments_], {
         cwd: directory,
@@ -1653,6 +1737,29 @@ esac
       checkedGit(["config", "user.name", "Wrench promotion test"]);
       checkedGit(["config", "user.email", "test@example.invalid"]);
       await mkdir(helperDirectory, { recursive: true });
+      await mkdir(binaryDirectory, { recursive: true });
+      await writeFile(nodeStub, `#!/bin/bash
+set -euo pipefail
+if [[ "\${1-}" == "--experimental-strip-types" && \
+      "\${2-}" == "./scripts/release-ref-authority.ts" && \
+      "\${3-}" == "promotion" ]]; then
+  [[ "$GITHUB_REPOSITORY" == "hraness/wrench" && "$DEFAULT_BRANCH" == "main" ]]
+  tag="\${4-}"
+  workflow_sha="\${5-}"
+  expected_release_sha="\${6-}"
+  head_sha="$(PATH="$ORIGINAL_PATH" git rev-parse --verify 'HEAD^{commit}')"
+  tag_sha="$(PATH="$ORIGINAL_PATH" git rev-parse --verify "refs/tags/$tag^{commit}")"
+  [[ "$head_sha" == "$workflow_sha" ]]
+  PATH="$ORIGINAL_PATH" git merge-base --is-ancestor "$tag_sha" "$workflow_sha"
+  if [[ -n "$expected_release_sha" && "$expected_release_sha" != "$tag_sha" ]]; then
+    exit 1
+  fi
+  printf 'sha=%s\ntag=%s\nmain_sha=%s\n' "$tag_sha" "$tag" "$workflow_sha"
+else
+  PATH="$ORIGINAL_PATH" exec node "$@"
+fi
+`, "utf8");
+      await chmod(nodeStub, 0o755);
       await writeFile(
         join(directory, "package.json"),
         '{"name":"@hraness/wrench","version":"0.16.2"}\n',
@@ -1687,6 +1794,9 @@ esac
           DEFAULT_BRANCH: "main",
           EVENT_NAME: eventName,
           GITHUB_OUTPUT: output,
+          GITHUB_REPOSITORY: "hraness/wrench",
+          ORIGINAL_PATH: process.env.PATH ?? "",
+          PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
           RECOVERY_WORKFLOW_SHA: recoveryWorkflowSha,
           REQUESTED_RELEASE_SHA: requestedReleaseSha,
           REQUESTED_TAG: providerTag,
@@ -1746,6 +1856,16 @@ esac
       readFile(packageArtifactUrl, "utf8"),
       readFile(packageIdentityUrl, "utf8"),
     ]);
+
+    expect(workflow.match(/actions\/checkout@/gu) ?? []).toHaveLength(2);
+    expect(workflow.match(/fetch-depth: 1/gu) ?? []).toHaveLength(2);
+    expect(workflow.match(/fetch-tags: false/gu) ?? []).toHaveLength(2);
+    expect(workflow.match(/persist-credentials: false/gu) ?? []).toHaveLength(2);
+    expect(workflow).not.toContain("fetch-depth: 0");
+    expect(workflow).toContain(
+      './scripts/release-ref-authority.ts release "$REQUESTED_TAG"',
+    );
+    expect(workflow).not.toContain("git tag --list");
 
     for (const required of [
       "Verify exact public npm delivery",

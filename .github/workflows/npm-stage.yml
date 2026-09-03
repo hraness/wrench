@@ -28,8 +28,10 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
@@ -46,13 +48,46 @@ jobs:
             echo "::error::npm staging must run from $DEFAULT_BRANCH"
             exit 1
           fi
-          git fetch --no-tags origin \
-            "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
-          default_head="$(git rev-parse "origin/$DEFAULT_BRANCH")"
-          checked_out_head="$(git rev-parse HEAD)"
-          if [[ ! "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ || \
-                "$GITHUB_SHA" != "$default_head" || \
-                "$checked_out_head" != "$default_head" ]]; then
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch)
+              authority_output="$(node --experimental-strip-types \
+                ./scripts/release-ref-authority.ts stage-current "$GITHUB_SHA")"
+              authority=()
+              while IFS= read -r line; do authority+=("$line"); done < <(
+                printf '%s\n' "$authority_output"
+              )
+              if [[ ${#authority[@]} -ne 1 || ! "${authority[0]}" =~ ^source_sha=([a-f0-9]{40})$ ]]; then
+                echo "::error::Current-main staging authority output is malformed"
+                exit 1
+              fi
+              default_head="${BASH_REMATCH[1]}"
+              previous_sha=""
+              ;;
+            push)
+              authority_output="$(node --experimental-strip-types \
+                ./scripts/release-ref-authority.ts stage-push "$GITHUB_SHA" "$BEFORE_SHA")"
+              authority=()
+              while IFS= read -r line; do authority+=("$line"); done < <(
+                printf '%s\n' "$authority_output"
+              )
+              if [[ ${#authority[@]} -ne 2 || \
+                    ! "${authority[0]}" =~ ^source_sha=([a-f0-9]{40})$ ]]; then
+                echo "::error::Push staging authority output is malformed"
+                exit 1
+              fi
+              default_head="${BASH_REMATCH[1]}"
+              if [[ ! "${authority[1]}" =~ ^previous_sha=([a-f0-9]{40})$ ]]; then
+                echo "::error::Push staging prior-source output is malformed"
+                exit 1
+              fi
+              previous_sha="${BASH_REMATCH[1]}"
+              ;;
+            *)
+              echo "::error::Unsupported npm staging event $GITHUB_EVENT_NAME"
+              exit 1
+              ;;
+          esac
+          if [[ "$GITHUB_SHA" != "$default_head" ]]; then
             echo "::error::npm staging must run from current $DEFAULT_BRANCH HEAD $default_head"
             exit 1
           fi
@@ -81,19 +116,8 @@ jobs:
             workflow_dispatch)
               ;;
             push)
-              if [[ ! "$BEFORE_SHA" =~ ^[a-f0-9]{40}$ || \
-                    "$BEFORE_SHA" == 0000000000000000000000000000000000000000 || \
-                    "$BEFORE_SHA" == "$default_head" ]]; then
-                echo "::error::Push event has an invalid prior default-branch commit $BEFORE_SHA"
-                exit 1
-              fi
-              if ! git cat-file -e "$BEFORE_SHA^{commit}" || \
-                 ! git merge-base --is-ancestor "$BEFORE_SHA" "$default_head"; then
-                echo "::error::Push base $BEFORE_SHA is not an available ancestor of $default_head"
-                exit 1
-              fi
               previous_manifest="$RUNNER_TEMP/wrench-previous-package.json"
-              git show "$BEFORE_SHA:package.json" > "$previous_manifest"
+              git show "$previous_sha:package.json" > "$previous_manifest"
               if ! previous_version="$(read_manifest_version "$previous_manifest")"; then
                 echo "::error::Previous package manifest must name @hraness/wrench and use a stable semantic version"
                 exit 1
@@ -114,10 +138,6 @@ jobs:
                 echo "::error::Automatic npm staging requires a version newer than $previous_version, received $current_version"
                 exit 1
               fi
-              ;;
-            *)
-              echo "::error::Unsupported npm staging event $GITHUB_EVENT_NAME"
-              exit 1
               ;;
           esac
 
@@ -140,8 +160,10 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
+          ref: ${{ needs.classify.outputs.source_sha }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.3.14"
@@ -161,14 +183,20 @@ jobs:
             echo "::error::npm staging must run from $DEFAULT_BRANCH"
             exit 1
           fi
-          git fetch --no-tags origin \
-            "refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
-          default_head="$(git rev-parse "origin/$DEFAULT_BRANCH")"
-          checked_out_head="$(git rev-parse HEAD)"
-          if [[ ! "$EXPECTED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ || \
-                "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" || \
-                "$GITHUB_SHA" != "$default_head" || \
-                "$checked_out_head" != "$default_head" ]]; then
+          authority_output="$(node --experimental-strip-types \
+            ./scripts/release-ref-authority.ts stage-current "$EXPECTED_SOURCE_SHA")"
+          authority=()
+          while IFS= read -r line; do authority+=("$line"); done < <(
+            printf '%s\n' "$authority_output"
+          )
+          if [[ ${#authority[@]} -ne 1 || \
+                ! "${authority[0]}" =~ ^source_sha=([a-f0-9]{40})$ ]]; then
+            echo "::error::Verified staging authority output is malformed"
+            exit 1
+          fi
+          default_head="${BASH_REMATCH[1]}"
+          if [[ "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" || \
+                "$GITHUB_SHA" != "$default_head" ]]; then
             echo "::error::npm staging must run from current $DEFAULT_BRANCH HEAD $default_head"
             exit 1
           fi
@@ -182,6 +210,8 @@ jobs:
           node --version
           test "$(npm --version)" = "11.19.0"
       - name: Verify unpublished package identity
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           package_name="$(node -p 'require("./package.json").name')"
@@ -194,10 +224,8 @@ jobs:
             echo "::error::Package version $package_version is not stable semantic version"
             exit 1
           fi
-          if git rev-parse --verify --quiet "refs/tags/v$package_version" >/dev/null; then
-            echo "::error::Create v$package_version only after exact npm delivery is verified"
-            exit 1
-          fi
+          node --experimental-strip-types ./scripts/release-ref-authority.ts \
+            tag-absent "v$package_version" "$GITHUB_SHA" >/dev/null
           if ! npm view "$package_name" name --json \
             --registry=https://registry.npmjs.org >/dev/null; then
             echo "::error::$package_name must be bootstrapped interactively before staged publishing can run"
@@ -376,44 +404,69 @@ jobs:
           TARBALL: ${{ steps.artifact.outputs.tarball }}
         run: |
           set -euo pipefail
-          current_main="$RUNNER_TEMP/wrench-current-main"
-          git init --quiet "$current_main"
-          git -C "$current_main" fetch --quiet --no-tags --depth=1 \
-            "https://github.com/$GITHUB_REPOSITORY.git" \
-            "refs/heads/$DEFAULT_BRANCH"
-          default_head="$(git -C "$current_main" rev-parse FETCH_HEAD)"
-          if [[ "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" || "$GITHUB_SHA" != "$default_head" ]]; then
-            echo "::error::$DEFAULT_BRANCH advanced to $default_head after package verification"
+          if [[ "$GITHUB_REPOSITORY" != "hraness/wrench" || "$DEFAULT_BRANCH" != "main" ]]; then
+            echo "::error::Terminal staging must run for exact Wrench main"
             exit 1
           fi
-          tag_error="$RUNNER_TEMP/wrench-current-tag-error.txt"
-          set +e
-          tag_lookup="$(git ls-remote --exit-code --refs --tags \
-            "https://github.com/$GITHUB_REPOSITORY.git" \
-            "refs/tags/v$EXPECTED_VERSION" 2>"$tag_error")"
-          tag_status=$?
-          set -e
-          case "$tag_status" in
-            0)
-              if [[ -z "$tag_lookup" ]]; then
-                echo "::error::Remote tag lookup succeeded without returning the exact tag"
-              else
-                echo "::error::Tag v$EXPECTED_VERSION was created after package verification"
-              fi
-              exit 1
-              ;;
-            2)
-              if [[ -n "$tag_lookup" ]]; then
-                echo "::error::Remote tag lookup returned an ambiguous absence result"
-                exit 1
-              fi
-              ;;
-            *)
-              cat "$tag_error"
-              echo "::error::Could not prove that remote tag v$EXPECTED_VERSION is absent"
-              exit 1
-              ;;
-          esac
+          repository_url="https://github.com/hraness/wrench.git"
+          for observation in 1 2; do
+            git ls-remote --refs "$repository_url" \
+              "refs/heads/main" > "$RUNNER_TEMP/main-$observation.refs"
+            git ls-remote --refs --tags "$repository_url" \
+              "refs/tags/v$EXPECTED_VERSION" > "$RUNNER_TEMP/tag-$observation.refs"
+          done
+          EXPECTED_MAIN="$EXPECTED_SOURCE_SHA" EXPECTED_TAG="v$EXPECTED_VERSION" \
+            FIRST_MAIN="$RUNNER_TEMP/main-1.refs" SECOND_MAIN="$RUNNER_TEMP/main-2.refs" \
+            FIRST_TAG="$RUNNER_TEMP/tag-1.refs" SECOND_TAG="$RUNNER_TEMP/tag-2.refs" \
+            node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const sha = /^[0-9a-f]{40}$/u;
+          const stableTag = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u;
+          const expectedMain = process.env.EXPECTED_MAIN ?? "";
+          const expectedTag = process.env.EXPECTED_TAG ?? "";
+          if (!sha.test(expectedMain) || !stableTag.test(expectedTag)) {
+            throw new Error("Terminal staging coordinates are malformed");
+          }
+          const paths = [
+            process.env.FIRST_MAIN,
+            process.env.SECOND_MAIN,
+            process.env.FIRST_TAG,
+            process.env.SECOND_TAG,
+          ];
+          if (paths.some((path) => typeof path !== "string" || path.length === 0)) {
+            throw new Error("Terminal staging ref snapshots are missing");
+          }
+          const snapshots = paths.map((path) => readFileSync(path));
+          const totalBytes = snapshots.reduce((sum, value) => sum + value.byteLength, 0);
+          const totalRows = snapshots.reduce(
+            (sum, value) => sum + value.reduce((rows, byte) => rows + (byte === 0x0a ? 1 : 0), 0),
+            0,
+          );
+          if (totalBytes > 64 * 1024 || totalRows > 500) {
+            throw new Error("Terminal staging ref snapshots exceed their fixed bounds");
+          }
+          const decode = (value, label) => {
+            const text = new TextDecoder("utf-8", { fatal: true }).decode(value);
+            if (text.includes("\0") || text.includes("\r")) {
+              throw new Error(`${label} is not canonical`);
+            }
+            return text;
+          };
+          const [firstMain, secondMain, firstTag, secondTag] = snapshots.map(
+            (value, index) => decode(value, `snapshot ${String(index + 1)}`),
+          );
+          const expectedMainRow = `${expectedMain}\trefs/heads/main\n`;
+          if (firstMain !== expectedMainRow || secondMain !== expectedMainRow) {
+            throw new Error("main changed or is malformed at the terminal staging boundary");
+          }
+          if (firstTag !== "" || secondTag !== "") {
+            throw new Error(`Tag ${expectedTag} exists at the terminal staging boundary`);
+          }
+          NODE
+          if [[ "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" ]]; then
+            echo "::error::Verified workflow source moved before staging"
+            exit 1
+          fi
           current_tarball_sha256="$(sha256sum "$TARBALL" | awk '{ print $1 }')"
           if [[ "$current_tarball_sha256" != "$EXPECTED_TARBALL_SHA256" ]]; then
             echo "::error::Downloaded tarball changed after current-$DEFAULT_BRANCH verification"
