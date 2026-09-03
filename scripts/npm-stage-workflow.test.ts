@@ -1998,9 +1998,6 @@ fi
   });
 
   test("keeps provider verification read-only, terminal, and release-authoritative", async () => {
-    expect(existsSync(new URL("../.github/workflows/release-app-canary.yml", import.meta.url)))
-      .toBe(false);
-    expect(existsSync(new URL("./release-app-canary.mjs", import.meta.url))).toBe(false);
     const [releaseWorkflow, workflow, helper, appHelper, writerHelper, codeowners] = await Promise.all([
       readFile(releaseWorkflowUrl, "utf8"),
       readFile(websiteProductionWorkflowUrl, "utf8"),
@@ -6414,10 +6411,12 @@ fi
       "Live ruleset `21832074` targets exactly `refs/heads/website-production` and\n`refs/heads/website-production-canary`",
       "`current_user_can_bypass=never`",
       "exact creation, deletion, and\nnon-fast-forward rules",
-      "retained identifiers and the\ncompleted run are evidence, never standing mutation authority",
-      "Fresh\nadministrator readback before every required fast-forward",
-      "any drift leaves production unchanged",
-      "GitHub\nActions App Integration `15368` is not the production writer",
+      "Live ruleset `21887484` targets the same refs with one\nupdate restriction and exactly one `Integration` bypass for dedicated App",
+      "`4783991` with `bypass_mode=always`",
+      "Production-only freeze ruleset `22149969` adds no-bypass creation,\nupdate, deletion, and non-fast-forward restrictions",
+      "The App-only writer passed the positive and negative canary\nproofs retained below",
+      "production freeze blocks its use until a fresh\nrelease-owner audit",
+      "GitHub Actions App Integration 15368 is not the\nproduction writer",
       "Live Protect-main ruleset `20921911` has no\nbypass actors",
       "assigns source ownership and notification",
       "does not claim live or\nindependent review enforcement",
@@ -6448,26 +6447,28 @@ fi
       "Workflows write is required because an admitted fast-forward may\nintroduce reviewed `.github/workflows` changes",
       "That runtime token\nproof does not prove the installation-wide selected-repository set",
       "privileged setup must exhaustively read every repository\nselected for the installation",
-      "exact permission set was proven by the single-use `P` to `C` transition",
-      "Retain the canary at that exact `C`; never\nreset, delete, or repurpose it",
-      "single-use proof is complete and must never be rerun",
-      "Keep the mirrored no-bypass lifecycle rules and\nApp-only update rule intact",
-      "temporary canary workflow and helper are absent from maintained source",
-      "Uncertainty leaves production frozen",
-      "`WRENCH_RELEASE_LIFECYCLE_RULESET_ID`",
-      "`WRENCH_RELEASE_LIFECYCLE_RULESET_UPDATED_AT`",
-      "`WRENCH_RELEASE_UPDATE_RULESET_ID`",
-      "`WRENCH_RELEASE_UPDATE_RULESET_UPDATED_AT`",
-      "`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID`",
-      "`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT`",
-      "production helper remains hard-bound to\n`website-production`",
-      "`0bf88a064233635e0c5485c61f9c533974a7dca4`, whose workflow-file change is the\nreal production promotion path",
-      "### Release App canary evidence",
-      "`wrench-release-app-canary-evidence/v2`",
-      "`b3b285d8d8965851595ff991ba4a4ffa327b605350c161fca36dc09a32b5bb27`",
-      "`eb79ede7214e1b3085d7f787cd91df8b23f9150f805c13d5e5675df934b70510`",
+      "single-use permission and writer proof completed on 2026-09-02",
+      "`fb876445334bb74abcb3592a5aaae2672c7b2d96` in workflow `345799741`, run\n`33691443614`, attempt 1",
       "Rule Suite `3922909251`",
-      "App Rule Suite `3922938237`",
+      "Rule Suite `3922938237`",
+      "`C=0bf88a064233635e0c5485c61f9c533974a7dca4`",
+      "`33309c470336127228b959e2aaa54138247b9684`",
+      "must never be reset, deleted, or repurposed",
+      "`PRE_CLEANUP_MANIFEST.tsv` SHA-256 is\n`cf899eac777336a06dd3d19c41512ae60d1e19f848fdf709c5284ddf73564815`",
+      "selected installation `158077029`",
+      "packet `SHA256SUMS` SHA-256\n`62449019d3a2c6c5bed4c1f5d25d9a5383f95e865da7335a579e1cbe28f2b148`",
+      "complete `EXECUTION_JOURNAL.jsonl` SHA-256\n`4facee05aa0493bb3f724a47729079fd107f4f2d029a4547d5fcbd0df2fa9560`",
+      "`KEY_PROOF_RECEIPT_V3.json` SHA-256\n`a3d75a3adf39286cab828ea0dd3ac0e3c8242e9a18c73f51f06f20bde0e0e468`",
+      "terminal journal-record digest is\n`9d6c91d29fb8932a6abba9b2f9d4822a153011d0642dd61150a4b9a8bf8da75b`",
+      "These four anchors identify the one-shot key-setup proof",
+      "activation workflow has separate canonical v2 evidence",
+      "`5b5161fbaea60b29bac64881680e7954631c157b2cb5a0a8e84d1dc1b9f415ec`",
+      "`eb930fec28427928a328a89f61874920ebc18694484b0ffd70051d660ca703e8`",
+      "`93f5eaa8169aa38b358f7eb3e80b30f80f0cb3fd4eb3d37fe6ac60673b02f9fd`",
+      "`ca646017da1c8e57ef915b6b76e4e808a41a1e0492454ca0b0c3176f7a504b8a`",
+      "`{converged:true, observationCount:2, propagationObserved:false,\nstableDenials:2}`",
+      "production helper remains hard-bound to `website-production`",
+      "This checked cleanup removes the single-use workflow and helper",
       "`--force-with-lease=refs/heads/website-production:<expected-old>`",
       "first fetches only the verified tag through the fixed HTTPS",
       "peels that fetched object locally",
@@ -6530,6 +6531,22 @@ fi
     ] as const) {
       expect(guide).toContain(required);
     }
+    for (const temporaryFingerprintVariable of [
+      "WRENCH_RELEASE_LIFECYCLE_RULESET_ID",
+      "WRENCH_RELEASE_LIFECYCLE_RULESET_UPDATED_AT",
+      "WRENCH_RELEASE_UPDATE_RULESET_ID",
+      "WRENCH_RELEASE_UPDATE_RULESET_UPDATED_AT",
+      "WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID",
+      "WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT",
+    ] as const) {
+      expect(guide).toContain(`\`${temporaryFingerprintVariable}\``);
+    }
+    expect(existsSync(new URL(
+      "../.github/workflows/release-app-canary.yml",
+      import.meta.url,
+    ))).toBe(false);
+    expect(existsSync(new URL("./release-app-canary.mjs", import.meta.url))).toBe(false);
+    expect(guide).not.toContain("The temporary **Prove release App canary** workflow");
     expect(guide.match(/^## Stage a later version$/gmu)).toHaveLength(1);
     expect(guide).not.toContain("## Publish later versions");
     expect(guide.indexOf(oneTimeBootstrap)).toBeLessThan(guide.indexOf(doNotReuseBootstrap));
@@ -6570,10 +6587,14 @@ fi
     expect(agents).toContain("Workflows write is required because an admitted fast-forward may introduce reviewed `.github/workflows` changes");
     expect(agents).toContain("privileged setup must separately enumerate the installation-wide selected-repository set");
     expect(agents).toContain("`prevent_self_review=false`");
-    expect(agents).toContain("one exact `P` to `C` transition on persistent ref `refs/heads/website-production-canary`");
+    expect(agents).toContain("writer's retained admission proof is workflow run `33691443614`");
+    expect(agents).toContain("ordinary `P` to `C` update was denied");
+    expect(agents).toContain("dedicated App performed the only leased fast-forward");
+    expect(agents).toContain("stale lease was rejected");
+    expect(agents).toContain("Retain persistent canary `refs/heads/website-production-canary` at exact `C=0bf88a064233635e0c5485c61f9c533974a7dca4`");
     expect(agents).toContain("never reset, delete, or repurpose it");
-    expect(agents).toContain("Mirror the production lifecycle and App-only update rules exactly");
-    expect(agents).toContain("separately reviewed temporary current-main source");
+    expect(agents).toContain("Keep the production lifecycle and App-only update rules mirrored on that ref");
+    expect(agents).toContain("keep the single-use canary source removed");
     expect(agents).toContain("Keep the production helper hard-bound to `website-production`");
     expect(agents).toContain("exactly one empty-204 revocation request");
     expect(agents).toContain("two stable authorization denials");
@@ -6602,9 +6623,8 @@ fi
     expect(agents).toContain("Vercel's Production Branch on `website-production`");
     expect(agents).toContain("documented one-time Vercel bootstrap");
     expect(agents).toContain("Live ruleset `21832074` supplies no-bypass creation, deletion, and non-fast-forward protection");
-    expect(agents).toContain("Live ruleset `21887484` supplies their update restriction with exactly GitHub App Integration `4783991`");
-    expect(agents).toContain("successful run `33691443614` proved the App exception and persistent canary");
-    expect(agents).toContain("every reviewer-gated promotion must freshly revalidate");
+    expect(agents).toContain("Live ruleset `21887484` supplies the sole update restriction and exact App `4783991` `Integration` bypass with `bypass_mode=always`");
+    expect(agents).toContain("Production-only freeze ruleset `22149969` retains no-bypass creation, update, deletion, and non-fast-forward restrictions");
     expect(agents).toContain("Checked-in `CODEOWNERS` supplies ownership and notification only");
     expect(agents).toContain("Protect-main has no bypass actors and retains pull-request admission plus the exact Required CI check");
     expect(agents).toContain("`require_code_owner_review=false` until a second eligible independent code owner exists");
@@ -6628,15 +6648,16 @@ fi
     expect(websiteAgents).toContain("Workflows write is required because an admitted fast-forward may introduce reviewed `.github/workflows` changes");
     expect(websiteAgents).toContain("privileged setup separately proves that the installation-wide selected-repository set contains only Wrench");
     expect(websiteAgents).toContain("`prevent_self_review=false`");
-    expect(websiteAgents).toContain("Retain successful run `33691443614` as evidence that one single-use `P` to `C` transition");
+    expect(websiteAgents).toContain("retained admission proof is workflow run `33691443614`");
+    expect(websiteAgents).toContain("dedicated App performed the only leased `P` to `C` fast-forward");
+    expect(websiteAgents).toContain("Keep that ref at exact `C=0bf88a064233635e0c5485c61f9c533974a7dca4`");
     expect(websiteAgents).toContain("never reset, delete, or repurpose it");
-    expect(websiteAgents).toContain("rules that exactly mirror production");
-    expect(websiteAgents).toContain("keep the separately reviewed temporary canary workflow removed");
+    expect(websiteAgents).toContain("keep the single-use canary source removed");
     expect(websiteAgents).toContain("keep the production helper hard-bound to `website-production`");
     expect(websiteAgents).toContain("Live lifecycle rules cover creation, deletion, and non-fast-forward movement on production and canary");
-    expect(websiteAgents).toContain("A separate update rule denies ordinary updates and names only GitHub App Integration `4783991`");
-    expect(websiteAgents).toContain("successful run `33691443614` is the retained canary evidence");
-    expect(websiteAgents).toContain("The evidence never replaces fresh release authority, reviewer admission, lease, revocation, or provider checks");
+    expect(websiteAgents).toContain("A separate update rule denies every updater except exact App `4783991`");
+    expect(websiteAgents).toContain("`Integration` with `bypass_mode=always`");
+    expect(websiteAgents).toContain("Production-only freeze ruleset `22149969` must continue to block every production update");
     expect(websiteAgents).not.toContain("initial provisional permission configuration");
     expect(websiteAgents).not.toContain("provider window orchestration headroom");
     expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");
@@ -6658,12 +6679,19 @@ fi
     expect(websiteReadme).toContain("without executing tagged code");
     expect(websiteReadme).toContain("current-main workflow source must descend\nfrom that release commit");
     expect(websiteReadme).toContain("live no-bypass ruleset protects\ncreation, deletion, and non-fast-forward movement on the production and canary\nrefs");
-    expect(websiteReadme).toContain("second update rule denies ordinary updates and names only GitHub App\nIntegration `4783991` with `bypass_mode=always`");
-    expect(websiteReadme).toContain("Wrench-only App and reviewer-gated writer environment use exactly\n`metadata:read`, `contents:write`, and `workflows:write`");
-    expect(websiteReadme).toContain("workflows write is\nrequired for admitted commits that change checked workflow files");
-    expect(websiteReadme).toContain("Successful run `33691443614`\nretains the positive App-bypass");
-    expect(websiteReadme).toContain("exact workflow-changing `P` to `C` canary");
-    expect(websiteReadme).toContain("Every real\npromotion still requires fresh release authority, reviewer admission, an exact\nlease, revocation convergence, and provider verification");
+    expect(websiteReadme).toContain("second update rule denies every updater except exact App `4783991`");
+    expect(websiteReadme).toContain("`Integration` with `bypass_mode=always`");
+    expect(websiteReadme).toContain("Production-only freeze ruleset\n`22149969` still blocks every production update");
+    expect(websiteReadme).toContain("retained privileged setup proof\nestablishes that private Hraness App `4783991`, through installation\n`158077029`, is installed only on exact repository `hraness/wrench`");
+    expect(websiteReadme).toContain("App\nregistration and each separately repository-narrowed runtime token use exactly\n`metadata:read`, `contents:write`, and `workflows:write`");
+    expect(websiteReadme).toContain("reviewer-gated\nwriter environment holds the key");
+    expect(websiteReadme).toContain("Stable public\nidentifiers and published SHA-256 digests");
+    expect(websiteReadme).toContain("owner-controlled private response evidence");
+    expect(websiteReadme).toContain("do not make those private responses independently\npublic");
+    expect(websiteReadme).not.toContain("Wrench-only App");
+    expect(websiteReadme).toContain("Workflows write is required for admitted\ncommits that change checked workflow files");
+    expect(websiteReadme).toContain("Retained workflow run `33691443614`\nproves the exact\nworkflow-changing leased `P` to `C` canary");
+    expect(websiteReadme).toContain("persistent canary remains at\nexact `C=0bf88a064233635e0c5485c61f9c533974a7dca4`");
     expect(websiteReadme).not.toContain("provisional contents-only App");
     expect(websiteReadme).toContain("A missing branch is a hard\nfailure");
     expect(websiteReadme).toContain("neither workflow recreates it");
@@ -6682,6 +6710,7 @@ fi
     expect(readme).not.toContain("registries are not supported install paths");
   });
 });
+
 
 describe("canonical npm package identity", () => {
   test("accepts transport and metadata-order drift while rejecting metadata, content, mode, and link drift", async () => {

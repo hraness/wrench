@@ -272,17 +272,15 @@ Live ruleset `21832074` targets exactly `refs/heads/website-production` and
 `refs/heads/website-production-canary`. It has no bypass actors,
 `current_user_can_bypass=never`, and exact creation, deletion, and
 non-fast-forward rules. Live ruleset `21887484` targets the same refs with one
-update restriction and exactly GitHub App Integration `4783991` with
-`bypass_mode=always`. Together they reject creation, deletion,
-non-fast-forward movement, and ordinary-user updates while admitting only the
-reviewer-gated release App's leased fast-forward. The single-use positive and
-negative canary proof completed successfully in run `33691443614`. GitHub
-Actions App Integration `15368` is not the production writer and must never be
-configured as the update-rule bypass. These retained identifiers and the
-completed run are evidence, never standing mutation authority. Fresh
-administrator readback before every required fast-forward must reconfirm the
-exact rules, refs, sole App bypass, installation scope, and key environment;
-any drift leaves production unchanged.
+update restriction and exactly one `Integration` bypass for dedicated App
+`4783991` with `bypass_mode=always`. Together they deny ref creation, deletion,
+non-fast-forward movement, and every update except the dedicated App's admitted
+fast-forward. Production-only freeze ruleset `22149969` adds no-bypass creation,
+update, deletion, and non-fast-forward restrictions while production remains
+safely frozen. The App-only writer passed the positive and negative canary
+proofs retained below, but the production freeze blocks its use until a fresh
+release-owner audit. GitHub Actions App Integration 15368 is not the
+production writer and must not be configured as the update-rule bypass.
 
 Checked-in `CODEOWNERS` assigns source ownership and notification for the
 workflow, Release helper, and publishing policy paths. It does not claim live or
@@ -374,90 +372,72 @@ selected for the installation with the administrator identity, prove that the
 unique result is `hraness/wrench` at ID `1316443113`, and retain the exact
 readback with the canary evidence.
 
-The exact permission set was proven by the single-use `P` to `C` transition on
-persistent ref `refs/heads/website-production-canary`. It moved the ref from
-`6d9096b0fabbc03ede0741ec4931fbe19127440c` to
-`0bf88a064233635e0c5485c61f9c533974a7dca4`, whose workflow-file change is the
-real production promotion path. Retain the canary at that exact `C`; never
-reset, delete, or repurpose it. Keep the mirrored no-bypass lifecycle rules and
-App-only update rule intact. The temporary proof source is removed after its
-evidence is retained. The production helper remains hard-bound to
-`website-production` and must not be made caller-selectable for the canary.
-Never broaden the App silently.
+The single-use permission and writer proof completed on 2026-09-02 from exact
+current-main workflow SHA
+`fb876445334bb74abcb3592a5aaae2672c7b2d96` in workflow `345799741`, run
+`33691443614`, attempt 1, dispatched by `0thernet` (`actor_id=894119`).
+An ordinary `0thernet` `P` to `C` update was denied in Rule Suite `3922909251`.
+The dedicated App bot then performed the only admitted leased fast-forward in
+Rule Suite `3922938237`; the update restriction failed and was admitted only by
+the exact App Integration bypass, while the lifecycle rules passed. The canary
+moved from `P=6d9096b0fabbc03ede0741ec4931fbe19127440c` to
+`C=0bf88a064233635e0c5485c61f9c533974a7dca4`. Production remained
+`33309c470336127228b959e2aaa54138247b9684`, and `main` remained the workflow
+SHA. The canary remains at `C` and must never be reset, deleted, or repurposed.
 
-### Release App canary evidence
+The durable pre-cleanup archive's `PRE_CLEANUP_MANIFEST.tsv` SHA-256 is
+`cf899eac777336a06dd3d19c41512ae60d1e19f848fdf709c5284ddf73564815`.
+It binds exact App `4783991` and selected installation `158077029`.
 
-The single-use proof is complete and must never be rerun. Workflow
-`345799741`, run `33691443614`, attempt 1 completed successfully. Preflight job
-`100450846693` and proof job `100450916193` ran from workflow commit
-`fb876445334bb74abcb3592a5aaae2672c7b2d96` (`D`) over green baseline
-`0238c239b53c1249e220bc7dfec192dcd491422e` (`B`). The persistent canary
-advanced exactly once from `6d9096b0fabbc03ede0741ec4931fbe19127440c`
-(`P`) to its direct child `0bf88a064233635e0c5485c61f9c533974a7dca4`
-(`C`), while production remained
-`33309c470336127228b959e2aaa54138247b9684`.
+A separate one-shot key-setup proof for that exact App and installation is
+anchored by the packet `SHA256SUMS` SHA-256
+`62449019d3a2c6c5bed4c1f5d25d9a5383f95e865da7335a579e1cbe28f2b148`,
+the complete `EXECUTION_JOURNAL.jsonl` SHA-256
+`4facee05aa0493bb3f724a47729079fd107f4f2d029a4547d5fcbd0df2fa9560`,
+and the `KEY_PROOF_RECEIPT_V3.json` SHA-256
+`a3d75a3adf39286cab828ea0dd3ac0e3c8242e9a18c73f51f06f20bde0e0e468`.
+Its terminal journal-record digest is
+`9d6c91d29fb8932a6abba9b2f9d4822a153011d0642dd61150a4b9a8bf8da75b`.
+These four anchors identify the one-shot key-setup proof.
+The activation workflow has separate canonical v2 evidence and a
+cleanup-qualified revocation receipt, both recorded below.
 
-The canonical record uses schema `wrench-release-app-canary-evidence/v2`. It
-binds actor `894119`, repository `1316443113`, App `4783991`, slug
-`wrench-prod-ref-writer-1316443113`, client ID `Iv23lintMtwGdKiwV6gq`, and
-installation `158077029`. The App registration, installation, and minted token
-were limited to Wrench with exactly `metadata:read`, `contents:write`, and
-`workflows:write`. The canonical decoded evidence JSON including its trailing
-newline has SHA-256
-`b3b285d8d8965851595ff991ba4a4ffa327b605350c161fca36dc09a32b5bb27`;
-the downloaded prove-job log has SHA-256
-`eb79ede7214e1b3085d7f787cd91df8b23f9150f805c13d5e5675df934b70510`.
+The activation workflow's canonical v2 evidence SHA-256 is
+`5b5161fbaea60b29bac64881680e7954631c157b2cb5a0a8e84d1dc1b9f415ec`.
+The downloaded run-log SHA-256 is
+`eb930fec28427928a328a89f61874920ebc18694484b0ffd70051d660ca703e8`.
+The evidence binds exact App `4783991`, bot `323289432`, selected installation
+`158077029` and repository, the admitted push output SHA-256
+`93f5eaa8169aa38b358f7eb3e80b30f80f0cb3fd4eb3d37fe6ac60673b02f9fd`,
+the stale-lease rejection output SHA-256
+`ca646017da1c8e57ef915b6b76e4e808a41a1e0492454ca0b0c3176f7a504b8a`,
+unchanged control fingerprints, and the activation workflow's
+cleanup-qualified revocation receipt
+`{converged:true, observationCount:2, propagationObserved:false,
+stableDenials:2}`. Lifecycle ruleset `21832074` remained no-bypass. Update
+ruleset `21887484` admitted only App `4783991` as an `Integration` with
+`bypass_mode=always`. Production-only freeze ruleset `22149969` remained
+no-bypass. The production helper remains hard-bound to `website-production`
+and was not reused for the canary.
 
-The evidence fingerprints lifecycle ruleset `21832074`
-(`RRS_lACqUmVwb3NpdG9yec5Od1PpzgFNIYo`, created
-`2026-08-30T01:20:47.112Z`, updated `2026-08-30T23:58:27.117Z`), update
-ruleset `21887484` (`RRS_lACqUmVwb3NpdG9yec5Od1PpzgFN-fw`, created
-`2026-08-31T00:15:02.504Z`, updated `2026-09-02T22:35:03.118Z`), and the
-activation freeze `22149969` (`RRS_lACqUmVwb3NpdG9yec5Od1PpzgFR-1E`,
-created `2026-09-02T22:33:42.087Z`, updated
-`2026-09-02T22:33:42.128Z`). Their canonical administrator projection
-digests are respectively
-`fcdb750dccfd3685e69e0f20fc8944c1dbb319cf5f48cbf531bc071bdc237c55`,
-`aba327ae2e7e6a0b3193c7791fb0f1f1814b57b08044cfc0804ff2836c6427a8`,
-and `52bd8190d6715c213ac624fcfe6f6194492fa379083f61af7cc1056698917773`.
-
-Ordinary-user denial Rule Suite `3922909251` bound actor `894119`, failed the
-`P` to `C` update, and has canonical SHA-256
-`35083b54ff700c0f549f5027c2b7cd2b8e0fa9fac30f3012e923d025f4aa13b3`.
-App Rule Suite `3922938237` bound bot `323289432`, admitted the same update
-only through Integration `4783991` with `bypass_mode=always`, and has canonical
-SHA-256 `324df21b32978fce1c5fbd45612dc02ecd45abbb148d713b76d7b9efebc11a6c`.
-Environment `20895709932` admitted the exact run; its approval projection
-digest is `d7ee98109c7e8326c8dc71d51c487c92b3c5bf8f308d816defc258574ee2a4cf`.
-The App and installation-summary projection digests are
-`accdf2f7f9a831ea0f42aef6d13b7b11d10d65ba19db3452cda2240037e6e918`
-and `12d2124d310e7fb12785de710d112285c2403ca2ea5624c526a98bbc860d028d`.
-
-GitHub server time bounded the proof at `2026-09-02T22:40:56Z`, the write at
-`2026-09-02T22:41:00Z`, and the terminal read at
-`2026-09-02T22:41:06Z`. The successful push output digest is
-`93f5eaa8169aa38b358f7eb3e80b30f80f0cb3fd4eb3d37fe6ac60673b02f9fd`;
-the rejected stale-lease output digest is
-`ca646017da1c8e57ef915b6b76e4e808a41a1e0492454ca0b0c3176f7a504b8a`.
-One empty HTTP 204 revocation converged immediately to two stable HTTP 401
-denials: `converged=true`, `observationCount=2`,
-`propagationObserved=false`, and `stableDenials=2`.
-
-The temporary canary workflow and helper are absent from maintained source.
-Keep `website-production-canary` at exact `C`, preserve the lifecycle and
-App-only update rulesets, and retain these evidence coordinates. After this
-cleanup reaches exact `main` with green CI, delete the six temporary ruleset
-fingerprint environment variables:
+This checked cleanup removes the single-use workflow and helper after retaining
+their run, job log, App and installation readbacks, environment admission,
+administrator ruleset projections, ordinary-denial and App-bypass Rule Suites,
+canonical evidence, and SHA-256 digests. After this cleanup is merged and its
+exact-main CI is green, delete the six temporary lifecycle, update, and freeze
+ruleset fingerprint variables by exact name:
 `WRENCH_RELEASE_LIFECYCLE_RULESET_ID`,
 `WRENCH_RELEASE_LIFECYCLE_RULESET_UPDATED_AT`,
 `WRENCH_RELEASE_UPDATE_RULESET_ID`,
 `WRENCH_RELEASE_UPDATE_RULESET_UPDATED_AT`,
 `WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID`, and
-`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT`. Require the environment
-to contain only the four reviewed App identity variables plus its single
-private-key secret.
-Remove activation freeze ruleset `22149969` only by that captured ID after a
-fresh release-owner audit. Uncertainty leaves production frozen.
+`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT`. Read the environment back and
+require exactly the four reviewed App ID, client ID, slug, and installation ID
+variables plus the single private key secret, with its main-only branch policy,
+reviewer, `prevent_self_review` setting, and disabled admin bypass unchanged.
+Retain both permanent rulesets, the canary at `C`, and the production-only
+freeze. Remove the freeze later only by its captured numeric ID after a fresh
+release-owner audit; uncertainty leaves production safely frozen.
 
 The minted token must carry a bounded one-hour expiry and fit the streamed
 response parser. The helper masks it and passes it only through a private
