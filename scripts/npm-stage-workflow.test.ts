@@ -6413,10 +6413,22 @@ fi
       "exact creation, deletion, and\nnon-fast-forward rules",
       "Live ruleset `21887484` targets the same refs with one\nupdate restriction and exactly one `Integration` bypass for dedicated App",
       "`4783991` with `bypass_mode=always`",
-      "Production-only freeze ruleset `22149969` adds no-bypass creation,\nupdate, deletion, and non-fast-forward restrictions",
-      "The App-only writer passed the positive and negative canary\nproofs retained below",
-      "production freeze blocks its use until a fresh\nrelease-owner audit",
-      "GitHub Actions App Integration 15368 is not the\nproduction writer",
+      "`22149969` is the captured numeric ID of the temporary pre-release\nproduction freeze",
+      "While present, it blocks creation, update, deletion, and\nnon-fast-forward movement of `refs/heads/website-production`",
+      "it does not target\nthe persistent canary",
+      "retained canary proof is evidence, never standing\nmutation authority",
+      "Before every required fast-forward, fresh administrator\nreadback must reconfirm",
+      "exact permanent rulesets and target refs and the sole\nApp `4783991` `Integration` bypass",
+      "App registration\nstill grants exactly `metadata:read`, `contents:write`, and `workflows:write`\nwith no other permission",
+      "installation `158077029` still selects exactly\nrepository `hraness/wrench` at ID `1316443113`",
+      "`production-ref-writer-key` environment must still have `deployment=false`",
+      "main-only branch policy, sole reviewer `0thernet`, `prevent_self_review=false`",
+      "administrator bypass disabled, exactly the four variables",
+      "`WRENCH_RELEASE_APP_ID`, `WRENCH_RELEASE_APP_CLIENT_ID`",
+      "`WRENCH_RELEASE_APP_SLUG`, and `WRENCH_RELEASE_APP_INSTALLATION_ID`",
+      "the `WRENCH_RELEASE_APP_PRIVATE_KEY` secret",
+      "Any drift leaves production\nunchanged",
+      "GitHub Actions App\nIntegration `15368` is not the production writer",
       "Live Protect-main ruleset `20921911` has no\nbypass actors",
       "assigns source ownership and notification",
       "does not claim live or\nindependent review enforcement",
@@ -6461,14 +6473,30 @@ fi
       "`KEY_PROOF_RECEIPT_V3.json` SHA-256\n`a3d75a3adf39286cab828ea0dd3ac0e3c8242e9a18c73f51f06f20bde0e0e468`",
       "terminal journal-record digest is\n`9d6c91d29fb8932a6abba9b2f9d4822a153011d0642dd61150a4b9a8bf8da75b`",
       "These four anchors identify the one-shot key-setup proof",
-      "activation workflow has separate canonical v2 evidence",
-      "`5b5161fbaea60b29bac64881680e7954631c157b2cb5a0a8e84d1dc1b9f415ec`",
-      "`eb930fec28427928a328a89f61874920ebc18694484b0ffd70051d660ca703e8`",
+      "exact base64-decoded `WRENCH_RELEASE_APP_CANARY_EVIDENCE_V2` value emitted\nby workflow run `33691443614`",
+      "ends with its closing `}` byte",
+      "`wrench-release-app-canary-evidence/v2` and has SHA-256\n`b3b285d8d8965851595ff991ba4a4ffa327b605350c161fca36dc09a32b5bb27`",
+      "exact GitHub Actions log bytes downloaded for prove job `100450916193`",
+      "SHA-256\n`eb79ede7214e1b3085d7f787cd91df8b23f9150f805c13d5e5675df934b70510`",
+      "canonical record binds actor `894119`, repository `1316443113`, App\n`4783991`, slug `wrench-prod-ref-writer-1316443113`",
+      "Earlier prose assigned digests\n`5b5161fbaea60b29bac64881680e7954631c157b2cb5a0a8e84d1dc1b9f415ec` and\n`eb930fec28427928a328a89f61874920ebc18694484b0ffd70051d660ca703e8`",
+      "Those\nunowned claims are retracted",
+      "Neither digest is evidence for this canary",
       "`93f5eaa8169aa38b358f7eb3e80b30f80f0cb3fd4eb3d37fe6ac60673b02f9fd`",
       "`ca646017da1c8e57ef915b6b76e4e808a41a1e0492454ca0b0c3176f7a504b8a`",
-      "`{converged:true, observationCount:2, propagationObserved:false,\nstableDenials:2}`",
-      "production helper remains hard-bound to `website-production`",
+      "One empty HTTP 204 revocation converged immediately to two stable HTTP 401\ndenials: `converged=true`, `observationCount=2`,\n`propagationObserved=false`, and `stableDenials=2`",
+      "The production helper\nremains hard-bound to `website-production`",
       "This checked cleanup removes the single-use workflow and helper",
+      "immediately read ruleset `22149969` through the\nauthenticated repository-ruleset endpoint",
+      "Require exact ID `22149969`, name\n`Temporary website-production activation freeze`, node ID",
+      "repository source `hraness/wrench` of\ntype `Repository`, branch target, active enforcement, an empty bypass-actor set",
+      "only `refs/heads/website-production` in its include condition with no exclusions",
+      "exactly the creation, update, deletion, and non-fast-forward rules",
+      "created and updated timestamps must remain `2026-09-02T22:33:42.087Z` and\n`2026-09-02T22:33:42.128Z`",
+      "Only that fresh,\nexact readback permits deletion of ID `22149969`",
+      "require authenticated\nabsence before any fast-forward",
+      "Preserve permanent\nrulesets `21832074` and `21887484` and the canary at `C`",
+      "archived freeze fingerprint remains evidence after\ndeletion",
       "`--force-with-lease=refs/heads/website-production:<expected-old>`",
       "first fetches only the verified tag through the fixed HTTPS",
       "peels that fetched object locally",
@@ -6531,6 +6559,19 @@ fi
     ] as const) {
       expect(guide).toContain(required);
     }
+    expect(guide).not.toContain(
+      "The activation workflow's canonical v2 evidence SHA-256 is\n" +
+        "`5b5161fbaea60b29bac64881680e7954631c157b2cb5a0a8e84d1dc1b9f415ec`",
+    );
+    expect(guide).not.toContain(
+      "The downloaded run-log SHA-256 is\n" +
+        "`eb930fec28427928a328a89f61874920ebc18694484b0ffd70051d660ca703e8`",
+    );
+    expect(guide).not.toContain(
+      "Production-only freeze ruleset `22149969` adds no-bypass creation",
+    );
+    expect(guide).not.toContain("including its trailing newline");
+    expect(guide).not.toContain("App\n`4783991`, bot `323289432`");
     for (const temporaryFingerprintVariable of [
       "WRENCH_RELEASE_LIFECYCLE_RULESET_ID",
       "WRENCH_RELEASE_LIFECYCLE_RULESET_UPDATED_AT",
@@ -6591,6 +6632,14 @@ fi
     expect(agents).toContain("ordinary `P` to `C` update was denied");
     expect(agents).toContain("dedicated App performed the only leased fast-forward");
     expect(agents).toContain("stale lease was rejected");
+    expect(agents).toContain("That proof is never standing mutation authority");
+    expect(agents).toContain("Before every required fast-forward, fresh administrator readback must reconfirm");
+    expect(agents).toContain("exact permanent rulesets and target refs");
+    expect(agents).toContain("sole App `4783991` `Integration` bypass");
+    expect(agents).toContain("App registration's exact `metadata:read`, `contents:write`, and `workflows:write` permission set with no other permission");
+    expect(agents).toContain("installation `158077029` selecting only Wrench repository ID `1316443113`");
+    expect(agents).toContain("`production-ref-writer-key` with `deployment=false`, main-only admission, sole reviewer `0thernet`, `prevent_self_review=false`, administrator bypass disabled, exactly four App identity variables, and exactly one private-key secret");
+    expect(agents).toContain("Any drift leaves production unchanged");
     expect(agents).toContain("Retain persistent canary `refs/heads/website-production-canary` at exact `C=0bf88a064233635e0c5485c61f9c533974a7dca4`");
     expect(agents).toContain("never reset, delete, or repurpose it");
     expect(agents).toContain("Keep the production lifecycle and App-only update rules mirrored on that ref");
@@ -6624,7 +6673,13 @@ fi
     expect(agents).toContain("documented one-time Vercel bootstrap");
     expect(agents).toContain("Live ruleset `21832074` supplies no-bypass creation, deletion, and non-fast-forward protection");
     expect(agents).toContain("Live ruleset `21887484` supplies the sole update restriction and exact App `4783991` `Integration` bypass with `bypass_mode=always`");
-    expect(agents).toContain("Production-only freeze ruleset `22149969` retains no-bypass creation, update, deletion, and non-fast-forward restrictions");
+    expect(agents).toContain("`22149969` is the captured ID of the temporary pre-release production freeze");
+    expect(agents).toContain("While present, it blocks every production-ref mutation");
+    expect(agents).toContain("Immediately before deletion, authenticated readback must prove that exact ID, name, node ID, repository source, production-only branch condition, active enforcement, zero bypass actors, creation/update/deletion/non-fast-forward rules, and captured created/updated timestamps");
+    expect(agents).toContain("Drift leaves it in place");
+    expect(agents).toContain("Delete only that ID and require its authenticated absence before a fast-forward");
+    expect(agents).toContain("archived fingerprint remains evidence, not required live state");
+    expect(agents).not.toContain("Production-only freeze ruleset `22149969` retains no-bypass");
     expect(agents).toContain("Checked-in `CODEOWNERS` supplies ownership and notification only");
     expect(agents).toContain("Protect-main has no bypass actors and retains pull-request admission plus the exact Required CI check");
     expect(agents).toContain("`require_code_owner_review=false` until a second eligible independent code owner exists");
@@ -6646,18 +6701,35 @@ fi
     expect(websiteAgents).toContain("App and each minted token must have exactly `metadata:read`, `contents:write`, and `workflows:write`");
     expect(websiteAgents).toContain("Keep the App and minted token permission set exact at `metadata:read`, `contents:write`, and `workflows:write`");
     expect(websiteAgents).toContain("Workflows write is required because an admitted fast-forward may introduce reviewed `.github/workflows` changes");
-    expect(websiteAgents).toContain("privileged setup separately proves that the installation-wide selected-repository set contains only Wrench");
+    expect(websiteAgents).toContain("privileged setup separately proves that installation `158077029` selects only Wrench repository ID `1316443113`");
     expect(websiteAgents).toContain("`prevent_self_review=false`");
+    expect(websiteAgents).toContain("no administrator bypass, exact `main` admission, and `deployment: false`");
+    expect(websiteAgents).toContain("It must contain exactly `WRENCH_RELEASE_APP_ID`, `WRENCH_RELEASE_APP_CLIENT_ID`, `WRENCH_RELEASE_APP_SLUG`, and `WRENCH_RELEASE_APP_INSTALLATION_ID` as variables and exactly `WRENCH_RELEASE_APP_PRIVATE_KEY` as its only secret");
+    expect(websiteAgents).toContain("Fresh administrator readback must prove this complete App, installation, and environment contract before every required fast-forward");
     expect(websiteAgents).toContain("retained admission proof is workflow run `33691443614`");
     expect(websiteAgents).toContain("dedicated App performed the only leased `P` to `C` fast-forward");
     expect(websiteAgents).toContain("Keep that ref at exact `C=0bf88a064233635e0c5485c61f9c533974a7dca4`");
     expect(websiteAgents).toContain("never reset, delete, or repurpose it");
     expect(websiteAgents).toContain("keep the single-use canary source removed");
     expect(websiteAgents).toContain("keep the production helper hard-bound to `website-production`");
+    expect(websiteAgents).toContain("retained proof never substitutes for fresh ruleset, ref, App, installation, environment, release-authority, lease, revocation, and provider checks");
     expect(websiteAgents).toContain("Live lifecycle rules cover creation, deletion, and non-fast-forward movement on production and canary");
     expect(websiteAgents).toContain("A separate update rule denies every updater except exact App `4783991`");
     expect(websiteAgents).toContain("`Integration` with `bypass_mode=always`");
-    expect(websiteAgents).toContain("Production-only freeze ruleset `22149969` must continue to block every production update");
+    expect(websiteAgents).toContain("`22149969` is the captured ID of the temporary pre-release production freeze");
+    expect(websiteAgents).toContain("While present, it blocks every production update");
+    expect(websiteAgents).toContain("After the required fresh audit, delete only that ID and require its authenticated absence before a fast-forward");
+    expect(websiteAgents).toContain("archived fingerprint remains evidence, not required live state");
+    expect(websiteAgents).toContain("Immediately before deleting temporary freeze `22149969`, an authenticated readback must prove its exact ID, name, node ID, repository source, production-only branch condition, active enforcement, empty bypass-actor set, creation/update/deletion/non-fast-forward rules, and captured created/updated timestamps");
+    expect(websiteAgents).toContain("Drift leaves it in place");
+    expect(websiteAgents).toContain("Delete only that ID, then require authenticated absence while the permanent rulesets and canary remain exact");
+    expect(websiteAgents).toContain("Before every required fast-forward, fresh administrator readback must reconfirm");
+    expect(websiteAgents).toContain("exact permanent rulesets and target refs");
+    expect(websiteAgents).toContain("sole App bypass");
+    expect(websiteAgents).toContain("App registration and Wrench-only selected installation");
+    expect(websiteAgents).toContain("main-only key environment");
+    expect(websiteAgents).toContain("any drift leaves production unchanged");
+    expect(websiteAgents).not.toContain("must continue to block every production update");
     expect(websiteAgents).not.toContain("initial provisional permission configuration");
     expect(websiteAgents).not.toContain("provider window orchestration headroom");
     expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");
@@ -6681,13 +6753,29 @@ fi
     expect(websiteReadme).toContain("live no-bypass ruleset protects\ncreation, deletion, and non-fast-forward movement on the production and canary\nrefs");
     expect(websiteReadme).toContain("second update rule denies every updater except exact App `4783991`");
     expect(websiteReadme).toContain("`Integration` with `bypass_mode=always`");
-    expect(websiteReadme).toContain("Production-only freeze ruleset\n`22149969` still blocks every production update");
+    expect(websiteReadme).toContain("`22149969` is the captured ID of the\ntemporary pre-release production freeze");
+    expect(websiteReadme).toContain("While present, it blocks every\nproduction update");
+    expect(websiteReadme).toContain("Immediately before deletion, an authenticated readback must\nprove its exact ID, name, node ID, repository source, production-only branch\ncondition, active enforcement, empty bypass-actor set");
+    expect(websiteReadme).toContain("creation/update/deletion/non-fast-forward rules, and captured created/updated\ntimestamps");
+    expect(websiteReadme).toContain("Drift leaves it in place. Delete only that ID, and require an\nauthenticated absence readback before production promotion");
     expect(websiteReadme).toContain("retained privileged setup proof\nestablishes that private Hraness App `4783991`, through installation\n`158077029`, is installed only on exact repository `hraness/wrench`");
     expect(websiteReadme).toContain("App\nregistration and each separately repository-narrowed runtime token use exactly\n`metadata:read`, `contents:write`, and `workflows:write`");
     expect(websiteReadme).toContain("reviewer-gated\nwriter environment holds the key");
     expect(websiteReadme).toContain("Stable public\nidentifiers and published SHA-256 digests");
     expect(websiteReadme).toContain("owner-controlled private response evidence");
     expect(websiteReadme).toContain("do not make those private responses independently\npublic");
+    expect(websiteReadme).toContain("Retained evidence is not standing mutation authority");
+    expect(websiteReadme).toContain("Before every\nrequired fast-forward, fresh administrator readback must reconfirm");
+    expect(websiteReadme).toContain("permanent\nrulesets and target refs");
+    expect(websiteReadme).toContain("sole App `4783991` bypass");
+    expect(websiteReadme).toContain("App registration's\nexact `metadata:read`, `contents:write`, and `workflows:write` permissions with\nno others");
+    expect(websiteReadme).toContain("installation `158077029` selecting only Wrench repository ID\n`1316443113`");
+    expect(websiteReadme).toContain("`production-ref-writer-key` environment\nwith `deployment=false`, main-only admission, sole reviewer `0thernet`");
+    expect(websiteReadme).toContain("`prevent_self_review=false`, administrator bypass disabled, exactly the four\nvariables `WRENCH_RELEASE_APP_ID`, `WRENCH_RELEASE_APP_CLIENT_ID`");
+    expect(websiteReadme).toContain("`WRENCH_RELEASE_APP_SLUG`, and `WRENCH_RELEASE_APP_INSTALLATION_ID`, and exactly\nthe `WRENCH_RELEASE_APP_PRIVATE_KEY` secret");
+    expect(websiteReadme).toContain("Every promotion still requires\nfresh release authority, reviewer admission, an exact lease, revocation\nconvergence, and provider verification");
+    expect(websiteReadme).toContain("any drift leaves production unchanged");
+    expect(websiteReadme).not.toContain("still blocks every production update");
     expect(websiteReadme).not.toContain("Wrench-only App");
     expect(websiteReadme).toContain("Workflows write is required for admitted\ncommits that change checked workflow files");
     expect(websiteReadme).toContain("Retained workflow run `33691443614`\nproves the exact\nworkflow-changing leased `P` to `C` canary");
