@@ -498,22 +498,22 @@ describe("Wrench release and promotion ref authority", () => {
       "scripts/release-app-token.mjs",
       "scripts/release-ref-writer.mjs",
     ]);
+  });
 
-    for (const options of [
-      { mainAtRelease: true, requestedTagKind: "annotated" as const },
-    ]) {
-      const rejectedInput = fixture(options);
-      checkoutSha(rejectedInput, rejectedInput.releaseSha);
-      expect(() => verifyReleasePublicationAuthority({
-        expectedMainSha: rejectedInput.mainSha,
-        expectedReleaseSha: rejectedInput.releaseSha,
-        phase: "prewrite",
-        requestedTag: "v1.0.0",
-        runner: runnerFor(rejectedInput).runner,
-        workingDirectory: rejectedInput.work,
-      })).toThrow();
-    }
+  test("rejects an annotated request and a changed terminal advertisement", () => {
+    const rejectedInput = fixture({ mainAtRelease: true, requestedTagKind: "annotated" });
+    checkoutSha(rejectedInput, rejectedInput.releaseSha);
+    expect(() => verifyReleasePublicationAuthority({
+      expectedMainSha: rejectedInput.mainSha,
+      expectedReleaseSha: rejectedInput.releaseSha,
+      phase: "prewrite",
+      requestedTag: "v1.0.0",
+      runner: runnerFor(rejectedInput).runner,
+      workingDirectory: rejectedInput.work,
+    })).toThrow();
 
+    const input = fixture();
+    checkoutSha(input, input.releaseSha);
     let reads = 0;
     const drift = runnerFor(input, {
       mutateResult: (arguments_, _invocation, result) => {
@@ -539,7 +539,9 @@ describe("Wrench release and promotion ref authority", () => {
       runner: drift.runner,
       workingDirectory: input.work,
     })).toThrow("changed at the publication boundary");
+  });
 
+  test("treats a higher raw tag as incomplete in both publication phases", () => {
     const supersededRawTag = fixture({ higherTagKind: "lightweight" });
     checkoutSha(supersededRawTag, supersededRawTag.releaseSha);
     for (const phase of ["prewrite", "postwrite"] as const) {
@@ -556,8 +558,10 @@ describe("Wrench release and promotion ref authority", () => {
         tag: "v1.0.0",
       });
     }
+  });
 
-    for (const phase of ["prewrite", "postwrite"] as const) {
+  for (const phase of ["prewrite", "postwrite"] as const) {
+    test(`rejects release-control drift at ${phase}`, () => {
       for (const driftOptions of [
         { workflowDrift: true },
         { releaseControlDrift: true },
@@ -573,8 +577,8 @@ describe("Wrench release and promotion ref authority", () => {
           workingDirectory: releaseControlDrift.work,
         })).toThrow(`different release-control definitions at ${phase}`);
       }
-    }
-  });
+    });
+  }
 });
 
 describe("Wrench staging ref authority", () => {
