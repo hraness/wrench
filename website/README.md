@@ -46,13 +46,28 @@ from that release commit; canonical npm, the peeled tag, and the immutable
 Latest GitHub Release must agree on the release identity. A missing branch is a hard
 failure; neither workflow recreates it. One live no-bypass ruleset protects
 creation, deletion, and non-fast-forward movement on the production and canary
-refs. A second no-bypass update rule freezes both refs until the dedicated App
-bypass is installed and proven. The Wrench-only App and reviewer-gated writer
-environment use exactly `metadata:read`, `contents:write`, and
-`workflows:write`; workflows write is required for admitted commits that change
-checked workflow files. They remain inactive until privileged setup proves the
-installation selects only Wrench and an exact workflow-changing `P` to `C`
-canary proves the leased push. On a production deployment,
+refs. A second update rule denies every updater except exact App `4783991` as an
+`Integration` with `bypass_mode=always`. Production-only freeze ruleset
+`22149969` still blocks every production update until a fresh release-owner
+audit removes it by captured numeric ID. The retained privileged setup proof
+establishes that private Hraness App `4783991`, through installation
+`158077029`, is installed only on exact repository `hraness/wrench`. The App
+registration and each separately repository-narrowed runtime token use exactly
+`metadata:read`, `contents:write`, and `workflows:write`; the reviewer-gated
+writer environment holds the key. Workflows write is required for admitted
+commits that change checked workflow files. Retained workflow run `33691443614`
+proves the exact
+workflow-changing leased `P` to `C` canary, ordinary denial, stale-lease
+rejection, and token-revocation convergence. `docs/publishing.md` records the
+durable archive, one-shot key-setup proof, and activation proof. Stable public
+identifiers and published SHA-256 digests bind those artifacts. The App
+registration, installation-selection, token, and revocation response bodies are
+owner-controlled private response evidence. Those identifiers and digests bind
+the retained bytes; they do not make those private responses independently
+public.
+The persistent canary remains at
+exact `C=0bf88a064233635e0c5485c61f9c533974a7dca4` and must never be reset,
+deleted, or repurposed. On a production deployment,
 `website:vercel-build` independently verifies checked-out HEAD, the matching
 GitHub tag commit, canonical npm, and the immutable Latest Release before building.
 Preview and local builds perform no external release verification.
