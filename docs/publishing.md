@@ -207,11 +207,18 @@ immutable Releases determine completed-release ordering.
 The tag-push Release workflow intentionally executes source `S=C`: GitHub loads
 the workflow bytes from the tagged product/source commit. Release-control bytes
 in `C` must therefore contain the final reviewed repair before the tag exists.
-For v0.16.3, do not create a tag from
-`c2d956ca4102d38c29e24ca4e13f26ce862b47f3` or reuse any stage produced from a
-source that predates this repair. If release controls change materially after
-staging, that stage is ineligible for tagging; create and verify a fresh stage
-from the final repaired descendant.
+On 2026-09-03, a stale-source manual recovery run staged and then published
+`@hraness/wrench@0.16.3` from stale source
+`c2d956ca4102d38c29e24ca4e13f26ce862b47f3`. That public npm coordinate is
+consumed. Never create a `v0.16.3` Git tag or GitHub Release, and never attempt
+to unpublish, overwrite, or repair those public bytes in place. The next release
+is `0.16.4` from the final repaired product descendant and a fresh exact stage.
+If release controls change materially after staging, that stage is ineligible
+for tagging. If the ineligible stage is still pending, inspect it, reject that
+exact stage with human two-factor authentication, and confirm that it is absent
+before creating and verifying a fresh same-version stage from the final repaired
+descendant. If npm has already published the version, its semver coordinate is
+consumed instead: never unpublish or overwrite it, and prepare a greater version.
 
 The read-only classifier compares the current and prior `package.json` files. A
 manifest edit with an unchanged version succeeds without running the verify or
@@ -232,9 +239,14 @@ refspec, or `FETCH_HEAD` as authority.
 
 If the automatic run did not start or failed before npm accepted the stage,
 dispatch **Stage npm package** from the current `main` branch. Manual recovery
-runs the same verification and main-only environment path. Do not dispatch a
-replacement after npm has accepted a stage for that version; continue with
-inspection and two-factor approval.
+runs the same verification and main-only environment path. Once npm accepts a
+stage, first inspect whether that exact source and release-control closure remain
+eligible. An accepted and eligible stage must be inspected and approved without
+a duplicate dispatch. An accepted but ineligible pending stage must be inspected,
+rejected with human two-factor authentication, and confirmed absent before one
+fresh same-version stage is dispatched from final current `main`. If the
+ineligible stage is already public, do not reject, unpublish, overwrite, tag, or
+release it; move the complete corrected release to a greater version.
 
 Use the canonical registry for every inspection and promotion command:
 
@@ -249,19 +261,21 @@ npm stage download <stage-id> \
   --registry=https://registry.npmjs.org
 npm stage approve <stage-id> \
   --registry=https://registry.npmjs.org
+npm stage reject <stage-id> \
+  --registry=https://registry.npmjs.org
 ```
 
-To complete this source version's release, download and smoke
-`@hraness/wrench@0.16.3` after approving its stage. Keep the public coordinate
-and tag literal through the final registry checks, then create `v0.16.3` on the
-exact staged source commit:
+To complete the repaired release, download and smoke
+`@hraness/wrench@0.16.4` after approving its fresh stage. Keep the public
+coordinate and tag literal through the final registry checks, then create
+`v0.16.4` on the exact staged source commit:
 
 ```sh
-npm view @hraness/wrench@0.16.3 name version dist \
+npm view @hraness/wrench@0.16.4 name version dist \
   --json \
   --registry=https://registry.npmjs.org
-git tag v0.16.3
-git push origin refs/tags/v0.16.3
+git tag v0.16.4
+git push origin refs/tags/v0.16.4
 ```
 
 The staging workflow runs on GitHub-hosted runners with Node 24, npm 11.19.0,
@@ -321,7 +335,7 @@ non-fast-forward rules. Live ruleset `21887484` targets the same refs with one
 update restriction and exactly one `Integration` bypass for dedicated App
 `4783991` with `bypass_mode=always`. Together they deny ref creation, deletion,
 non-fast-forward movement, and every update except the dedicated App's admitted
-fast-forward. Production-only freeze ruleset `22149969` adds no-bypass creation,
+fast-forward. Production-only freeze ruleset `22182820` adds no-bypass creation,
 update, deletion, and non-fast-forward restrictions while production remains
 safely frozen. The App-only writer passed the positive and negative canary
 proofs retained below, but the production freeze blocks its use until a fresh
@@ -343,7 +357,7 @@ administrator bypass disabled, exactly the four variables
 `WRENCH_RELEASE_APP_SLUG`, and `WRENCH_RELEASE_APP_INSTALLATION_ID`, and
 exactly the `WRENCH_RELEASE_APP_PRIVATE_KEY` secret. Any drift leaves
 production unchanged. This evidence correction does not authorize removal of
-live production freeze `22149969`.
+live production freeze `22182820`.
 
 Checked-in `CODEOWNERS` assigns source ownership and notification for the
 workflow, Release helper, and publishing policy paths. It does not claim live or
@@ -373,23 +387,29 @@ checking Latest. It does not use opaque `gh release view` or
 control path. The direct lightweight tag must remain on the verified release
 commit `C`, and protected linear `main` at each observation must equal or
 descend from `C`. That descendant movement is release-authority-safe only while
-`git diff --quiet --no-ext-diff --no-textconv C M -- .github/workflows`
-confirms that the workflow definitions are unchanged. The early release check
-and both publication-boundary checks enforce that condition using the exact
-imported `C` and `M` objects. After completed-release-order validation and
-immediately before the irreversible create request, authenticated GitHub API
-reads still bind both coordinates. The release-ref helper then observes
+`git diff --quiet --no-ext-diff --no-textconv C M -- .github/workflows
+scripts/release-ref-authority.ts scripts/release-provider-outcome.mjs
+scripts/release-app-token.mjs scripts/release-ref-writer.mjs` confirms that the
+high-privilege authority, publication, and promotion control closure is
+unchanged. The early release check and both publication-boundary checks enforce
+that condition using the exact imported `C` and `M` objects. After
+completed-release-order validation
+and immediately before the irreversible create request, authenticated GitHub
+API reads still bind both coordinates. The release-ref helper then observes
 the combined governed `main` and `refs/tags/v*` advertisement twice, through
 one `ls-remote` connection per observation, and requires the two canonical
 advertisements to be equal. This is a bounded repeated observation, not an
 atomic provider snapshot. Protected tag immutability and monotonic main ancestry
 keep a later main fast-forward from changing `C`; that movement remains
-release-authority-safe only when it also preserves the workflow definitions.
-The terminal readback repeats both the authenticated API checks and the
-combined-advertisement helper, including the workflow-tree comparison. A
-workflow change in the irreducible prewrite-to-POST window may make GitHub's
-Release POST fail closed; the workflow never deletes, patches, or rolls back a
-Release in response. The POST uses `make_latest=legacy`; a higher raw
+release-authority-safe only when it also preserves that release-control
+closure. The terminal readback repeats both the authenticated API checks and
+the combined-advertisement helper, including the release-control comparison. A
+release-control change in the irreducible prewrite-to-POST window makes the
+terminal readback fail closed even though GitHub may already have created the
+immutable Release. Recovery must inspect that exact Release and the current
+Latest Release; the workflow never deletes, patches, or rolls back a Release
+in response. The POST has no conditional-write lease and uses
+`make_latest=legacy`; a higher raw
 `v*` tag is only another queued request, while bounded published immutable
 Releases define completed ordering. If the terminal readback observes another
 immutable Release as Latest, this release remains valid and the workflow fails
@@ -557,8 +577,10 @@ cleanup-qualified revocation receipt
 stableDenials:2}`. Lifecycle ruleset `21832074` remained no-bypass. Update
 ruleset `21887484` admitted only App `4783991` as an `Integration` with
 `bypass_mode=always`. Production-only freeze ruleset `22149969` remained
-no-bypass. The production helper remains hard-bound to `website-production`
-and was not reused for the canary.
+no-bypass during that retained proof. That historical ruleset was later absent;
+current replacement ruleset `22182820` restores the live production freeze.
+The production helper remains hard-bound to `website-production` and was not
+reused for the canary.
 
 This checked cleanup removes the single-use workflow and helper after retaining
 their run, job log, App and installation readbacks, environment admission,

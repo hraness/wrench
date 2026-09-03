@@ -18,6 +18,13 @@ const GIT_TIMEOUT_MILLISECONDS = 120_000;
 const SHA = /^[0-9a-f]{40}$/u;
 const STABLE_TAG = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u;
 const TAG_REF = /^refs\/tags\/(v[A-Za-z0-9][A-Za-z0-9._-]{0,126})$/u;
+const RELEASE_CONTROL_PATHS = Object.freeze([
+  ".github/workflows",
+  "scripts/release-ref-authority.ts",
+  "scripts/release-provider-outcome.mjs",
+  "scripts/release-app-token.mjs",
+  "scripts/release-ref-writer.mjs",
+] as const);
 
 export type GitCommandResult = Readonly<{
   exitCode: number;
@@ -151,6 +158,27 @@ function command(
   const result = runner(arguments_);
   if (result.exitCode !== 0) fail(`${label} failed closed.`);
   return result.stdout;
+}
+
+function requireUnchangedReleaseControls(
+  runner: GitCommandRunner,
+  releaseSha: string,
+  mainRef: string,
+  label: string,
+  phase?: "postwrite" | "prewrite",
+): void {
+  if (runner([
+    "diff",
+    "--quiet",
+    "--no-ext-diff",
+    "--no-textconv",
+    releaseSha,
+    mainRef,
+    "--",
+    ...RELEASE_CONTROL_PATHS,
+  ]).exitCode !== 0) {
+    fail(`${label} have different release-control definitions${phase === undefined ? "" : ` at ${phase}`}.`);
+  }
 }
 
 function stableVersion(tag: string): readonly [bigint, bigint, bigint] | undefined {
@@ -468,18 +496,12 @@ export function verifyReleaseRefAuthority(input: ReleaseRefAuthorityInput): Rele
     if (runner(["merge-base", "--is-ancestor", tag.objectName, LOCAL_MAIN_REF]).exitCode !== 0) {
       fail("Verified release commit is not an ancestor of exact advertised main.");
     }
-    if (runner([
-      "diff",
-      "--quiet",
-      "--no-ext-diff",
-      "--no-textconv",
+    requireUnchangedReleaseControls(
+      runner,
       tag.objectName,
       LOCAL_MAIN_REF,
-      "--",
-      ".github/workflows",
-    ]).exitCode !== 0) {
-      fail("Release commit and advertised main have different workflow definitions.");
-    }
+      "Release commit and advertised main",
+    );
   } else {
     if (input.workflowSha !== head) {
       fail("Promotion helper is not executing from the exact verified workflow source.");
@@ -574,18 +596,13 @@ export function verifyReleasePublicationAuthority(
   if (runner(["merge-base", "--is-ancestor", input.expectedReleaseSha, PUBLICATION_MAIN_REF]).exitCode !== 0) {
     fail("Verified release commit is not an ancestor of authenticated current main.");
   }
-  if (runner([
-    "diff",
-    "--quiet",
-    "--no-ext-diff",
-    "--no-textconv",
+  requireUnchangedReleaseControls(
+    runner,
     input.expectedReleaseSha,
     PUBLICATION_MAIN_REF,
-    "--",
-    ".github/workflows",
-  ]).exitCode !== 0) {
-    fail(`Release commit and authenticated current main have different workflow definitions at ${input.phase}.`);
-  }
+    "Release commit and authenticated current main",
+    input.phase,
+  );
   command(
     runner,
     ["update-ref", "-d", PUBLICATION_MAIN_REF, first.mainOid],

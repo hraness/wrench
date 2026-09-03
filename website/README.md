@@ -48,7 +48,7 @@ failure; neither workflow recreates it. One live no-bypass ruleset protects
 creation, deletion, and non-fast-forward movement on the production and canary
 refs. A second update rule denies every updater except exact App `4783991` as an
 `Integration` with `bypass_mode=always`. Production-only freeze ruleset
-`22149969` still blocks every production update until a fresh release-owner
+`22182820` still blocks every production update until a fresh release-owner
 audit removes it by captured numeric ID. The retained privileged setup proof
 establishes that private Hraness App `4783991`, through installation
 `158077029`, is installed only on exact repository `hraness/wrench`. The App
@@ -73,7 +73,7 @@ only Wrench repository ID `1316443113`. It must also reconfirm the main-only
 `production-ref-writer-key` environment, sole reviewer `0thernet`,
 `prevent_self_review=false`, disabled administrator bypass, exactly four App
 identity variables and the one private-key secret. Any drift leaves production
-unchanged. Live production freeze `22149969` remains retained; this evidence
+unchanged. Live production freeze `22182820` remains retained; this evidence
 correction does not authorize its removal.
 The persistent canary remains at
 exact `C=0bf88a064233635e0c5485c61f9c533974a7dca4` and must never be reset,

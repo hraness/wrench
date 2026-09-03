@@ -2254,7 +2254,7 @@ elif [[ "$args" == "-c credential.helper= -c core.hooksPath=/dev/null fetch --no
   : > "$IMPORTED_TAG_STATE"
 elif [[ "$args" == "-c credential.helper= -c core.hooksPath=/dev/null merge-base --is-ancestor $VERIFIED_SHA refs/wrench-release/publication-main" ]]; then
   [[ "$ANCESTRY_MODE" == "valid" ]]
-elif [[ "$args" == "-c credential.helper= -c core.hooksPath=/dev/null diff --quiet --no-ext-diff --no-textconv $VERIFIED_SHA refs/wrench-release/publication-main -- .github/workflows" ]]; then
+elif [[ "$args" == "-c credential.helper= -c core.hooksPath=/dev/null diff --quiet --no-ext-diff --no-textconv $VERIFIED_SHA refs/wrench-release/publication-main -- .github/workflows scripts/release-ref-authority.ts scripts/release-provider-outcome.mjs scripts/release-app-token.mjs scripts/release-ref-writer.mjs" ]]; then
   if [[ "$WORKFLOW_DRIFT_MODE" == "always" ||
         ( "$WORKFLOW_DRIFT_MODE" == "postwrite" && -f "$RELEASE_CREATED_STATE" ) ]]; then
     exit 1
@@ -2449,7 +2449,7 @@ fi
       expect(postPrewriteGitCommands.match(/ls-remote --sort=refname --refs/gu) ?? [])
         .toHaveLength(4);
       expect(postPrewriteGitCommands.match(
-        /diff --quiet --no-ext-diff --no-textconv .* refs\/wrench-release\/publication-main -- \.github\/workflows/gu,
+        /diff --quiet --no-ext-diff --no-textconv .* refs\/wrench-release\/publication-main -- \.github\/workflows scripts\/release-ref-authority\.ts scripts\/release-provider-outcome\.mjs scripts\/release-app-token\.mjs scripts\/release-ref-writer\.mjs/gu,
       ) ?? []).toHaveLength(2);
 
       const prewriteWorkflowDrift = await runCase({
@@ -2459,7 +2459,7 @@ fi
       });
       expect(prewriteWorkflowDrift.exitCode).not.toBe(0);
       expect(`${prewriteWorkflowDrift.stdout}\n${prewriteWorkflowDrift.stderr}`)
-        .toContain("different workflow definitions at prewrite");
+        .toContain("different release-control definitions at prewrite");
       expect(await readFile(commandLog, "utf8")).not.toContain("--method POST");
 
       const postwriteWorkflowDrift = await runCase({
@@ -2469,7 +2469,7 @@ fi
       });
       expect(postwriteWorkflowDrift.exitCode).not.toBe(0);
       expect(`${postwriteWorkflowDrift.stdout}\n${postwriteWorkflowDrift.stderr}`)
-        .toContain("different workflow definitions at postwrite");
+        .toContain("different release-control definitions at postwrite");
       const postwriteDriftCommands = await readFile(commandLog, "utf8");
       expect(postwriteDriftCommands).toContain("--method POST");
       expect(postwriteDriftCommands).not.toContain("--method DELETE");
@@ -7037,6 +7037,7 @@ fi
       ]);
     const manifest = JSON.parse(manifestText) as { readonly version: string };
     const exactPackage = `@hraness/wrench@${manifest.version}`;
+    const nextReleaseVersion = "0.16.4";
     const oneTimeBootstrap =
       "This section records the one-time bootstrap of `@hraness/wrench@0.15.1`.";
     const doNotReuseBootstrap =
@@ -7066,7 +7067,7 @@ fi
       "scripts/npm-package-identity.ts",
       "--source-archive \"$wrench_npm_archive\"",
       "--registry-archive \"$wrench_registry_archive\"",
-      `git tag v${manifest.version}`,
+      `git tag v${nextReleaseVersion}`,
       "npm stage approve <stage-id>",
       "The exact npm keyword list is checked by `scripts/package-smoke.ts`",
       "Repository topics are maintainer-managed discovery",
@@ -7085,7 +7086,9 @@ fi
       "exact creation, deletion, and\nnon-fast-forward rules",
       "Live ruleset `21887484` targets the same refs with one\nupdate restriction and exactly one `Integration` bypass for dedicated App",
       "`4783991` with `bypass_mode=always`",
-      "Production-only freeze ruleset `22149969` adds no-bypass creation,\nupdate, deletion, and non-fast-forward restrictions",
+      "Production-only freeze ruleset `22182820` adds no-bypass creation,\nupdate, deletion, and non-fast-forward restrictions",
+      "Production-only freeze ruleset `22149969` remained\nno-bypass during that retained proof",
+      "current replacement ruleset `22182820` restores the live production freeze",
       "The App-only writer passed the positive and negative canary\nproofs retained below",
       "production freeze blocks its use until a fresh\nrelease-owner audit",
       "The retained canary proof is evidence, never standing\nmutation authority",
@@ -7122,12 +7125,20 @@ fi
       "Only an authenticated exact 404 permits one REST create request",
       "does not use opaque `gh release view` or\n`gh release create` commands",
       "tag-push Release workflow intentionally executes source `S=C`",
-      "`c2d956ca4102d38c29e24ca4e13f26ce862b47f3` or reuse any stage produced from a\nsource that predates this repair",
-      "If release controls change materially after\nstaging, that stage is ineligible for tagging",
-      "git diff --quiet --no-ext-diff --no-textconv C M -- .github/workflows",
+      "a stale-source manual recovery run staged and then published\n`@hraness/wrench@0.16.3` from stale source",
+      "Never create a `v0.16.3` Git tag or GitHub Release",
+      "The next release\nis `0.16.4` from the final repaired product descendant",
+      "If release controls change materially after staging, that stage is ineligible\nfor tagging",
+      "An accepted and eligible stage must be inspected and approved without\na duplicate dispatch",
+      "An accepted but ineligible pending stage must be inspected,\nrejected with human two-factor authentication, and confirmed absent before one\nfresh same-version stage is dispatched from final current `main`",
+      "If the\nineligible stage is already public, do not reject, unpublish, overwrite, tag, or\nrelease it; move the complete corrected release to a greater version",
+      "npm stage reject <stage-id>",
+      "git diff --quiet --no-ext-diff --no-textconv C M -- .github/workflows\nscripts/release-ref-authority.ts scripts/release-provider-outcome.mjs\nscripts/release-app-token.mjs scripts/release-ref-writer.mjs",
       "descendant movement is release-authority-safe only while",
-      "workflow change in the irreducible prewrite-to-POST window",
-      "never deletes, patches, or rolls back a\nRelease in response",
+      "release-control change in the irreducible prewrite-to-POST window",
+      "terminal readback fail closed even though GitHub may already have created the\nimmutable Release",
+      "The POST has no conditional-write lease",
+      "never deletes, patches, or rolls back a Release\nin response",
       "signed-in\nadministrator must read back immutable Releases as `enabled=true`",
       "X-GitHub-Api-Version: 2026-03-10",
       "/repos/hraness/wrench/immutable-releases",
@@ -7247,7 +7258,7 @@ fi
     }
     expect(guide).not.toContain("Those unowned claims are retracted");
     expect(guide).not.toContain("Neither digest is evidence for this canary");
-    expect(guide).not.toContain("permits deletion of ID `22149969`");
+    expect(guide).not.toContain("permits deletion of ID `22182820`");
     expect(guide).not.toContain("require authenticated\nabsence before any fast-forward");
     for (const temporaryFingerprintVariable of [
       "WRENCH_RELEASE_LIFECYCLE_RULESET_ID",
@@ -7275,7 +7286,7 @@ fi
     expect(guide.indexOf("npm publish \"$wrench_npm_archive\""))
       .toBeLessThan(guide.indexOf("npm trust github @hraness/wrench"));
     expect(guide.indexOf("npm trust github @hraness/wrench"))
-      .toBeLessThan(guide.indexOf(`git tag v${manifest.version}`));
+      .toBeLessThan(guide.indexOf(`git tag v${nextReleaseVersion}`));
 
     expect(agents).toContain("Follow `docs/publishing.md`");
     expect(agents).toContain("automatically enter the exact staging pipeline");
@@ -7350,7 +7361,7 @@ fi
     expect(agents).toContain("documented one-time Vercel bootstrap");
     expect(agents).toContain("Live ruleset `21832074` supplies no-bypass creation, deletion, and non-fast-forward protection");
     expect(agents).toContain("Live ruleset `21887484` supplies the sole update restriction and exact App `4783991` `Integration` bypass with `bypass_mode=always`");
-    expect(agents).toContain("Production-only freeze ruleset `22149969` retains no-bypass creation, update, deletion, and non-fast-forward restrictions");
+    expect(agents).toContain("Production-only freeze ruleset `22182820` retains no-bypass creation, update, deletion, and non-fast-forward restrictions");
     expect(agents).toContain("Checked-in `CODEOWNERS` supplies ownership and notification only");
     expect(agents).toContain("Protect-main has no bypass actors and retains pull-request admission plus the exact Required CI check");
     expect(agents).toContain("`require_code_owner_review=false` until a second eligible independent code owner exists");
@@ -7390,7 +7401,7 @@ fi
     expect(websiteAgents).toContain("Live lifecycle rules cover creation, deletion, and non-fast-forward movement on production and canary");
     expect(websiteAgents).toContain("A separate update rule denies every updater except exact App `4783991`");
     expect(websiteAgents).toContain("`Integration` with `bypass_mode=always`");
-    expect(websiteAgents).toContain("Production-only freeze ruleset `22149969` must continue to block every production update");
+    expect(websiteAgents).toContain("Production-only freeze ruleset `22182820` must continue to block every production update");
     expect(websiteAgents).not.toContain("initial provisional permission configuration");
     expect(websiteAgents).not.toContain("provider window orchestration headroom");
     expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");
@@ -7414,7 +7425,7 @@ fi
     expect(websiteReadme).toContain("live no-bypass ruleset protects\ncreation, deletion, and non-fast-forward movement on the production and canary\nrefs");
     expect(websiteReadme).toContain("second update rule denies every updater except exact App `4783991`");
     expect(websiteReadme).toContain("`Integration` with `bypass_mode=always`");
-    expect(websiteReadme).toContain("Production-only freeze ruleset\n`22149969` still blocks every production update");
+    expect(websiteReadme).toContain("Production-only freeze ruleset\n`22182820` still blocks every production update");
     expect(websiteReadme).toContain("retained privileged setup proof\nestablishes that private Hraness App `4783991`, through installation\n`158077029`, is installed only on exact repository `hraness/wrench`");
     expect(websiteReadme).toContain("App\nregistration and each separately repository-narrowed runtime token use exactly\n`metadata:read`, `contents:write`, and `workflows:write`");
     expect(websiteReadme).toContain("reviewer-gated\nwriter environment holds the key");

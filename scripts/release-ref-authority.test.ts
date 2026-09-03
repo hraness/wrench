@@ -61,6 +61,7 @@ function fixture(options: Readonly<{
   divergent?: boolean;
   higherTagKind?: "annotated" | "lightweight";
   mainAtRelease?: boolean;
+  releaseControlDrift?: boolean;
   requestedTagKind?: "annotated" | "lightweight";
   workflowDrift?: boolean;
 }> = {}): Fixture {
@@ -73,7 +74,11 @@ function fixture(options: Readonly<{
   git(source, ["config", "user.email", "release-ref-authority@example.invalid"]);
   git(source, ["config", "user.name", "Release Ref Authority Fixture"]);
   writeFileSync(join(source, "package.json"), '{"name":"@hraness/wrench","version":"1.0.0"}\n');
-  git(source, ["add", "package.json"]);
+  if (options.releaseControlDrift === true) {
+    mkdirSync(join(source, "scripts"), { recursive: true });
+    writeFileSync(join(source, "scripts", "release-provider-outcome.mjs"), "export const revision = 1;\n");
+  }
+  git(source, ["add", "."]);
   git(source, ["commit", "--no-gpg-sign", "-m", "release"]);
   const previousSha = text(source, ["rev-parse", "HEAD"]);
 
@@ -102,6 +107,10 @@ function fixture(options: Readonly<{
         mkdirSync(join(source, ".github", "workflows"), { recursive: true });
         writeFileSync(join(source, ".github", "workflows", "drift.yml"), "name: drift\n");
         git(source, ["add", ".github/workflows/drift.yml"]);
+      }
+      if (value === "one" && options.releaseControlDrift === true) {
+        writeFileSync(join(source, "scripts", "release-provider-outcome.mjs"), "export const revision = 2;\n");
+        git(source, ["add", "scripts/release-provider-outcome.mjs"]);
       }
       git(source, ["commit", "--no-gpg-sign", "-m", value]);
       if (value === "one") workflowSha = text(source, ["rev-parse", "HEAD"]);
@@ -356,6 +365,48 @@ describe("Wrench release and promotion ref authority", () => {
       workflowSha: divergent.mainSha,
     })).toThrow("not an ancestor");
 
+    const releaseDivergence = fixture({ divergent: true });
+    checkoutRelease(releaseDivergence);
+    expect(() => verifyReleaseRefAuthority({
+      mode: "release",
+      requestedTag: "v1.0.0",
+      runner: runnerFor(releaseDivergence).runner,
+      workingDirectory: releaseDivergence.work,
+    })).toThrow("Verified release commit is not an ancestor of exact advertised main");
+
+    const wrongReleaseCheckout = fixture();
+    checkoutRelease(wrongReleaseCheckout);
+    checkoutSha(wrongReleaseCheckout, wrongReleaseCheckout.mainSha);
+    expect(() => verifyReleaseRefAuthority({
+      mode: "release",
+      requestedTag: "v1.0.0",
+      runner: runnerFor(wrongReleaseCheckout).runner,
+      workingDirectory: wrongReleaseCheckout.work,
+    })).toThrow("Release tag and checkout must name one commit");
+
+    const workflowDivergence = fixture();
+    checkoutSha(workflowDivergence, workflowDivergence.workflowSha);
+    const workflowDivergenceRunner = runnerFor(workflowDivergence, {
+      mutateResult: (arguments_, _invocation, result) => {
+        if (
+          arguments_[0] === "merge-base"
+          && arguments_[1] === "--is-ancestor"
+          && arguments_[2] === workflowDivergence.workflowSha
+          && arguments_[3] === "refs/remotes/origin/main"
+        ) {
+          return Object.freeze({ ...result, exitCode: 1 });
+        }
+        return result;
+      },
+    });
+    expect(() => verifyReleaseRefAuthority({
+      mode: "promotion",
+      requestedTag: "v1.0.0",
+      runner: workflowDivergenceRunner.runner,
+      workingDirectory: workflowDivergence.work,
+      workflowSha: workflowDivergence.workflowSha,
+    })).toThrow("Promotion workflow source is not an ancestor of exact advertised main");
+
     const input = fixture();
     checkoutMain(input);
     expect(() => verifyReleaseRefAuthority({
@@ -402,14 +453,19 @@ describe("Wrench release and promotion ref authority", () => {
       workflowSha: driftInput.mainSha,
     })).toThrow("changed during verification");
 
-    const workflowDrift = fixture({ workflowDrift: true });
-    checkoutRelease(workflowDrift);
-    expect(() => verifyReleaseRefAuthority({
-      mode: "release",
-      requestedTag: "v1.0.0",
-      runner: runnerFor(workflowDrift).runner,
-      workingDirectory: workflowDrift.work,
-    })).toThrow("different workflow definitions");
+    for (const driftOptions of [
+      { workflowDrift: true },
+      { releaseControlDrift: true },
+    ] as const) {
+      const releaseControlDrift = fixture(driftOptions);
+      checkoutRelease(releaseControlDrift);
+      expect(() => verifyReleaseRefAuthority({
+        mode: "release",
+        requestedTag: "v1.0.0",
+        runner: runnerFor(releaseControlDrift).runner,
+        workingDirectory: releaseControlDrift.work,
+      })).toThrow("different release-control definitions");
+    }
   });
 
   test("binds two combined advertisements immediately before publication", () => {
@@ -427,6 +483,20 @@ describe("Wrench release and promotion ref authority", () => {
     expect(success.calls.filter((call) => call[0] === "ls-remote")).toEqual([
       ["ls-remote", "--sort=refname", "--refs", repositoryUrl, "refs/heads/main", "refs/tags/v*"],
       ["ls-remote", "--sort=refname", "--refs", repositoryUrl, "refs/heads/main", "refs/tags/v*"],
+    ]);
+    expect(success.calls.find((call) => call[0] === "diff")).toEqual([
+      "diff",
+      "--quiet",
+      "--no-ext-diff",
+      "--no-textconv",
+      input.releaseSha,
+      "refs/wrench-release/publication-main",
+      "--",
+      ".github/workflows",
+      "scripts/release-ref-authority.ts",
+      "scripts/release-provider-outcome.mjs",
+      "scripts/release-app-token.mjs",
+      "scripts/release-ref-writer.mjs",
     ]);
 
     for (const options of [
@@ -488,16 +558,21 @@ describe("Wrench release and promotion ref authority", () => {
     }
 
     for (const phase of ["prewrite", "postwrite"] as const) {
-      const workflowDrift = fixture({ workflowDrift: true });
-      checkoutSha(workflowDrift, workflowDrift.releaseSha);
-      expect(() => verifyReleasePublicationAuthority({
-        expectedMainSha: workflowDrift.mainSha,
-        expectedReleaseSha: workflowDrift.releaseSha,
-        phase,
-        requestedTag: "v1.0.0",
-        runner: runnerFor(workflowDrift).runner,
-        workingDirectory: workflowDrift.work,
-      })).toThrow(`different workflow definitions at ${phase}`);
+      for (const driftOptions of [
+        { workflowDrift: true },
+        { releaseControlDrift: true },
+      ] as const) {
+        const releaseControlDrift = fixture(driftOptions);
+        checkoutSha(releaseControlDrift, releaseControlDrift.releaseSha);
+        expect(() => verifyReleasePublicationAuthority({
+          expectedMainSha: releaseControlDrift.mainSha,
+          expectedReleaseSha: releaseControlDrift.releaseSha,
+          phase,
+          requestedTag: "v1.0.0",
+          runner: runnerFor(releaseControlDrift).runner,
+          workingDirectory: releaseControlDrift.work,
+        })).toThrow(`different release-control definitions at ${phase}`);
+      }
     }
   });
 });
