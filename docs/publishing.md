@@ -183,9 +183,12 @@ requested tag. `scripts/release-ref-authority.ts` reads only the exact remote
 `main` ref and the bounded `refs/tags/v*` inventory. The combined inventory must
 be canonical UTF-8, at most 64 KiB and 500 rows, and stable across two reads.
 The helper imports only those governed refs with tags disabled and without
-writing `FETCH_HEAD`. Wrench release tags are lightweight direct commit tags;
-an annotated requested tag, a newer stable tag of either kind, a moved ref, or
-a tag, checkout, and current-`main` mismatch fails closed.
+writing `FETCH_HEAD`. Wrench release tags are lightweight direct commit tags.
+The requested tag and checkout must name one commit `C`, and protected linear
+`main` must equal or descend from `C`. An annotated requested tag, moved ref,
+divergence, rollback, or malformed advertisement fails closed. A higher raw
+`v*` tag is only a queued release request; bounded non-draft, non-prerelease,
+immutable Releases determine completed-release ordering.
 
 ## Stage a later version
 
@@ -204,16 +207,18 @@ a tag, checkout, and current-`main` mismatch fails closed.
 The read-only classifier compares the current and prior `package.json` files. A
 manifest edit with an unchanged version succeeds without running the verify or
 OIDC jobs. A prerelease, malformed version, downgrade, unavailable push base, or
-non-current `main` commit fails closed.
+event source outside protected `main`'s linear history fails closed.
 
 Both classifier and verifier use an exact depth-one, no-tag, credential-free
-checkout of the event commit. The classifier binds the advertised `main` tip
-twice. For a push, it imports only governed `main` history under a temporary
-private ref, requires GitHub's exact nonzero `before` commit to be present and
-an ancestor of the advertised tip, removes the ref, and reads the prior
-manifest by object ID. This supports a multi-commit push without importing any
-unrelated ref. Manual recovery has no prior commit. Neither path uses a broad
-ref fetch, a forced refspec, or `FETCH_HEAD` as authority.
+checkout of the event source `C`. They bind the advertised protected `main`
+tip `M` twice, import only that governed history under a temporary private ref,
+and require `C=M` or strict linear ancestry `C<M`. A later no-version-change
+push may therefore advance `main` during the long package gate without
+stranding the artifact already bound to `C`. For a push, the classifier also
+requires GitHub's exact nonzero `before` commit to be present and an ancestor
+of `C`, removes the ref, and reads the prior manifest by object ID. Manual
+recovery has no prior commit. Neither path uses a broad ref fetch, a forced
+refspec, or `FETCH_HEAD` as authority.
 
 If the automatic run did not start or failed before npm accepted the stage,
 dispatch **Stage npm package** from the current `main` branch. Manual recovery
@@ -251,13 +256,23 @@ git push origin refs/tags/v0.16.3
 
 The staging workflow runs on GitHub-hosted runners with Node 24, npm 11.19.0,
 Bun 1.3.14, disabled package-manager caching, and no stored npm token. It binds
-the verified artifact to the current `main` commit. The checkout-free terminal
-OIDC job takes two exact `ls-remote` observations of `main` and the prospective
-tag, requires the main row to remain the verified commit and both exact tag
-lookups to remain empty, and caps their combined canonical inventory at 64 KiB
-and 500 rows. It does not initialize or fetch a repository, execute checked-out
-scripts, or use `FETCH_HEAD`. The main-only `npm-stage` environment applies only
-to this terminal job and has no required deployment reviewers.
+the verified artifact and final tarball hash to source `C`. The checkout-free
+terminal OIDC job observes the combined governed refs twice with one
+`ls-remote` connection per observation, requesting exact protected `main` and
+the prospective tag together. Each canonical advertisement is capped at 64 KiB
+and 500 rows, must contain one `main` row and no requested tag, and the pair
+must be byte-identical. If advertised main is `M!=C`, one authenticated,
+strictly parsed comparison must prove positive-ahead linear ancestry `C<M`,
+with `behind_by=0`, exact base and merge base `C`, and terminal commit `M`.
+The tarball hash precedes both observations and the second advertisement is
+immediately adjacent to `npm stage publish`. A protected descendant advance
+after that last read leaves the quarantined, reviewable stage bound to `C`;
+tagging and publication rebind the approved bytes before release. These are
+repeated governed-ref observations, not an atomic snapshot. The job does not
+initialize or fetch a repository, execute checked-out scripts, or use
+`FETCH_HEAD`. Its only GitHub token permission is `contents:read`, alongside
+OIDC `id-token:write`. The main-only `npm-stage` environment applies only to
+this terminal job and has no required deployment reviewers.
 
 `scripts/package-budget.ts` owns the shared packed-byte, unpacked-byte, and
 file-count ceilings used by artifact inspection and the clean-consumer smoke.
@@ -345,8 +360,55 @@ server-generated notes; authentication, transport, other API, or malformed
 response failures abort. The workflow validates an exact REST readback before
 checking Latest. It does not use opaque `gh release view` or
 `gh release create` commands, so hidden requests cannot escape the bounded
-control path. The tag and its peeled commit must remain exact current `main`
-before creation and at the terminal readback.
+control path. The direct lightweight tag must remain on the verified release
+commit `C`, and protected linear `main` at each observation must equal or
+descend from `C`. After completed-release-order validation and immediately
+before the irreversible create request, authenticated GitHub API reads still
+bind both coordinates. The release-ref helper then observes
+the combined governed `main` and `refs/tags/v*` advertisement twice, through
+one `ls-remote` connection per observation, and requires the two canonical
+advertisements to be equal. This is a bounded repeated observation, not an
+atomic provider snapshot. Protected tag immutability and monotonic main ancestry
+make a later main fast-forward safe across the unavoidable final read-to-POST
+window. The terminal readback repeats both the authenticated API checks and the
+combined-advertisement helper. The POST uses `make_latest=legacy`; a higher raw
+`v*` tag is only another queued request, while bounded published immutable
+Releases define completed ordering. If another immutable Release safely becomes
+Latest during publication, this release remains valid and the workflow fails
+with explicit recovery guidance for the new Latest coordinate.
+
+Immediately before the tag push that dispatches **Release**, a signed-in
+administrator must read back immutable Releases as `enabled=true`. The workflow
+token deliberately keeps only `contents:write` and cannot read that
+Administration endpoint. This fresh control-plane check is therefore a trusted
+operator boundary, with a residual administrator-toggle window that repeated
+workflow reads cannot remove. The created and terminal Release readbacks must
+still report `immutable=true`.
+
+Run this with the signed-in administrator session immediately before creating
+the tag. It records both the required enabled state and GitHub's
+`enforced_by_owner` diagnostic without granting the workflow Administration:
+
+```bash
+immutable_release_state="$(gh api \
+  --header 'Accept: application/vnd.github+json' \
+  --header 'X-GitHub-Api-Version: 2026-03-10' \
+  /repos/hraness/wrench/immutable-releases \
+  --jq '{enabled: .enabled, enforced_by_owner: .enforced_by_owner}')"
+IMMUTABLE_RELEASE_STATE="$immutable_release_state" node <<'NODE'
+const value = JSON.parse(process.env.IMMUTABLE_RELEASE_STATE ?? "null");
+if (
+  value === null ||
+  typeof value !== "object" ||
+  Array.isArray(value) ||
+  Object.keys(value).sort().join(",") !== "enabled,enforced_by_owner" ||
+  value.enabled !== true ||
+  typeof value.enforced_by_owner !== "boolean"
+) process.exit(1);
+process.stdout.write(`${JSON.stringify(value)}\n`);
+NODE
+```
+
 The create request supplies the verified SHA as `target_commitish`, but GitHub
 does not use that field when the tag already exists, and live readback may report
 the default branch. Promotion therefore treats `target_commitish` as
@@ -362,17 +424,21 @@ stable-tag input. The automatic path treats the entire `workflow_run` payload as
 foreign data. It requires repository `hraness/wrench` with numeric ID
 `1316443113`, Release workflow ID `323493609`, exact workflow name and path, a
 tag `push`, first attempt, successful conclusion, and this repository as the head
-repository. The workflow source must equal current `main`; the automatic head
-SHA must instead equal the peeled immutable tag commit, and that release commit
-must be an ancestor of the current-main workflow source. Manual recovery carries
-no upstream SHA. Both paths check out the exact current-main source, bind the
-package version from the peeled tag commit and the newest stable tag, and verify
-the immutable asset-free Latest Release before any provider or ref work.
+repository. The reviewed workflow source `W` originates from `main`; the
+automatic head SHA must instead equal the peeled immutable tag commit `C`.
+Manual recovery carries no upstream SHA. Both paths check out exact `W`, bind
+the package version from `C`, verify the immutable asset-free Latest Release,
+and prove `C<=W<=M` for protected current main `M` before any provider or ref
+work. Main may advance by protected linear fast-forward after dispatch without
+invalidating reviewed `W`.
 
 That promotion checkout is depth one with tags and credentials disabled. The
-same bounded release-ref helper imports only exact advertised `main` and the
-requested lightweight tag, without writing `FETCH_HEAD`, then proves the tag is
-the newest stable tag and an ancestor of current-main workflow source. Every
+same bounded release-ref helper observes `main` and the bounded `refs/tags/v*`
+inventory in one combined governed-ref advertisement per observation. It then
+imports only exact advertised `main` and the requested lightweight tag, without
+writing `FETCH_HEAD`, proves the requested tag is direct commit `C` and proves
+`C<=W<=M`, and requires a second combined advertisement to equal the first.
+Raw tag order is not completed-release order. Every
 later promotion job checks out only the already-verified workflow SHA at depth
 one with tags disabled; provider and App/CAS authority remain separate from Git
 ref discovery.
@@ -390,7 +456,7 @@ statuses after 90 days while preserving the current status on the deployment.
 The baseline outputs whether the established production ref already equals the
 verified release. The already-exact branch takes a separate read-only job. That
 job has no environment admission, App variable, private key, token mint, or Git
-push. It still revalidates current-main workflow source, the peeled tag,
+push. It still revalidates reviewed workflow-source ancestry, the peeled tag,
 immutable Release, Latest, the baseline, authenticated server time, and the
 terminal ref before emitting a receipt.
 
@@ -401,7 +467,7 @@ The environment must permit only `main`, require reviewer `0thernet`, disable
 admin bypass, set `prevent_self_review=false` because that reviewer is currently
 the sole eligible maintainer, and store only `WRENCH_RELEASE_APP_PRIVATE_KEY`
 plus the reviewed App ID, client ID, slug, and selected installation ID
-variables. The job repeats the full current-main, peeled-tag, immutable Release,
+variables. The job repeats the full `C<=W<=M`, peeled-tag, immutable Release,
 and Latest authority check after environment approval and before mutation.
 
 The writer authenticates one private Hraness-owned GitHub App. The App
@@ -479,7 +545,7 @@ This checked cleanup removes the single-use workflow and helper after retaining
 their run, job log, App and installation readbacks, environment admission,
 administrator ruleset projections, ordinary-denial and App-bypass Rule Suites,
 canonical evidence, and SHA-256 digests. After this cleanup is merged and its
-exact-main CI is green, delete the six temporary lifecycle, update, and freeze
+merged-source CI is green, delete the six temporary lifecycle, update, and freeze
 ruleset fingerprint variables by exact name:
 `WRENCH_RELEASE_LIFECYCLE_RULESET_ID`,
 `WRENCH_RELEASE_LIFECYCLE_RULESET_UPDATED_AT`,
@@ -496,8 +562,8 @@ release-owner audit; uncertainty leaves production safely frozen.
 
 The minted token must carry a bounded one-hour expiry and fit the streamed
 response parser. The helper masks it and passes it only through a private
-`GIT_ASKPASS` environment. Because the writer checks out only exact current-main
-workflow source, it first fetches only the verified tag through the fixed HTTPS
+`GIT_ASKPASS` environment. Because the writer checks out only exact reviewed
+workflow source `W`, it first fetches only the verified tag through the fixed HTTPS
 repository URL, peels that fetched object locally, and requires the result to
 equal the independently verified release SHA. It does not check out or execute
 tagged code. The same ephemeral credential boundary then runs one fixed push
@@ -562,9 +628,10 @@ exact successful candidate. Both paths require the REST deployment's lowercase
 GraphQL deployment must expose `ref: null` while `commitOid` equals that same
 commit. These source fields remain in the pinned candidate fingerprint. Both
 paths recheck the exact tag, immutable Release, Latest Release, production ref,
-and current-main workflow source, and pin one deployment. The automatic
-`workflow_run` and manual recovery coordinates both remain bound to the current
-default-branch head throughout the read-only outcome proof.
+and `C<=W<=M`, and pin one deployment. Each workflow-source check reads
+protected main twice, accepts only identical or strict linear-forward movement,
+and rejects rollback or divergence. A protected descendant advance after the
+final read remains safe; neither path claims an atomic cross-system snapshot.
 Every poll rereads the complete GraphQL current-state inventory. The pinned
 candidate also gets an exhaustive, order-independent REST status-history read
 with a 500-row cap and empty sentinel page. Any retained failure, error, or
@@ -600,12 +667,12 @@ a separate 30-minute timeout, leaving ten minutes for checkout, Node setup, and
 runner teardown around the product deadline.
 
 The bounded request contract is separate for REST and GraphQL. The current
-control flow can make at most 197 REST calls in the provider outcome job. The
+control flow can make at most 209 REST calls in the provider outcome job. The
 worst missing-Release path uses 16 calls, including all five bounded release
 pages plus the empty sentinel page. The immutable Release and downstream
-promotion workflows together use at most 278 REST calls, leaving 722 calls
+promotion workflows together use at most 330 REST calls, leaving 670 calls
 under the repository `GITHUB_TOKEN` limit of 1,000 REST requests per hour. The
-promotion helper itself uses at most 13 read-only REST calls; its leased Git
+promotion helper itself uses at most 21 read-only REST calls; its leased Git
 push and at most fourteen App REST requests do not consume that `GITHUB_TOKEN`
 budget. Those App requests are the three setup and mint calls, one DELETE, and
 at most ten convergence probes. Git authentication is outside that REST bound. Five
@@ -622,11 +689,11 @@ identity, installation, token, and revocation responses are streamed under a
 needs no Vercel token, PAT, or redeploy.
 
 If promotion fails after the immutable Release exists, merge the reviewed fix to
-`main` first. Then dispatch **Promote website production** from exact current
-`main` with the immutable Latest stable tag. Recovery never reruns or changes
-the tag Release. It resolves the peeled tag as the verified release SHA, keeps
-that coordinate distinct from the exact current-main workflow SHA, and requires
-the release commit to remain an ancestor of the workflow source. An
+`main` first. Then dispatch **Promote website production** from current `main`
+with the immutable Latest stable tag. Recovery never reruns or changes the tag
+Release. It resolves the peeled tag as verified release commit `C`, keeps that
+coordinate distinct from reviewed workflow source `W`, and proves `C<=W<=M`
+against protected current main. An
 already-exact recovery remains entirely outside the key environment. A required
 fast-forward repeats every authority check after reviewer admission before it
 mints the one-repository App token. Never rerun an ambiguous App push, bypass the
@@ -650,7 +717,7 @@ reason to trust deployment environment variables. Keep `.git` out of
 for this independent check. Canonical npm name, version, and SHA-512 integrity
 are sufficient at this layer because the tag Release workflow first rebuilds
 and compares the exact tarball with canonical npm before creating the immutable
-Release, and the separate current-main workflow advances `website-production`
+Release, and the separate main-origin workflow advances `website-production`
 only after it revalidates that release authority. The production verifier then
 independently rechecks the promoted commit, tag, registry coordinate, and
 immutable Latest Release.

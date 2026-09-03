@@ -35,15 +35,15 @@ all required. Missing, malformed, or inconsistent platform state fails closed.
 Production admission requires the production branch ref, while `main` and pull
 requests produce previews only. After the documented one-time bootstrap, the
 tag Release workflow publishes only the immutable GitHub Release. A separate
-current-main promotion workflow either proves the established production branch
+main-origin promotion workflow either proves the established production branch
 already exact without entering its key environment, or uses one repository-only
 release App token and an explicit expected-old Git lease to fast-forward it to
 the exact verified release commit. That writer first fetches only the verified
-tag into its depth-one current-main checkout, peels it to the independently
+tag into its depth-one reviewed-workflow checkout, peels it to the independently
 verified SHA without executing tagged code, and then performs the leased push.
-The current-main workflow source must descend
-from that release commit; canonical npm, the peeled tag, and the immutable
-Latest GitHub Release must agree on the release identity. A missing branch is a hard
+The reviewed workflow source must descend from that release commit and must
+equal or precede protected current main; canonical npm, the peeled tag, and the
+immutable Latest GitHub Release must agree on the release identity. A missing branch is a hard
 failure; neither workflow recreates it. One live no-bypass ruleset protects
 creation, deletion, and non-fast-forward movement on the production and canary
 refs. A second update rule denies every updater except exact App `4783991` as an

@@ -30,7 +30,7 @@ jobs:
       verified_tag: ${{ steps.identity.outputs.tag }}
       workflow_sha: ${{ steps.request.outputs.sha }}
     steps:
-      - name: Bind dispatch to exact current main
+      - name: Bind dispatch to reviewed main workflow source
         id: request
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$DEFAULT_BRANCH" != "main" || "$EVENT_REF" != "refs/heads/main" || "$EVENT_REPOSITORY" != "hraness/wrench" || "$EVENT_REPOSITORY_ID" != "1316443113" ]]; then
-            echo "::error::Website production promotion must run from exact Wrench main"
+            echo "::error::Website production promotion must originate from the Wrench main ref"
             exit 1
           fi
           if [[ ! "$EVENT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -96,8 +96,8 @@ jobs:
           fi
           repository_default="$(gh api "/repos/$GITHUB_REPOSITORY" --jq '.default_branch')"
           current_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
-          if [[ "$repository_default" != "main" || "$current_main_sha" != "$EVENT_SHA" ]]; then
-            echo "::error::Promotion workflow source $EVENT_SHA is not exact current main $current_main_sha"
+          if [[ "$repository_default" != "main" || ! "$current_main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Promotion repository has no exact protected main coordinate"
             exit 1
           fi
           printf 'sha=%s\n' "$EVENT_SHA" >> "$GITHUB_OUTPUT"
@@ -138,9 +138,8 @@ jobs:
           fi
           tag_commit="${BASH_REMATCH[1]}"
           if [[ "${authority[1]}" != "tag=$REQUESTED_TAG" || \
-                ! "${authority[2]}" =~ ^main_sha=([a-f0-9]{40})$ || \
-                "${BASH_REMATCH[1]}" != "$RECOVERY_WORKFLOW_SHA" ]]; then
-            echo "::error::Promotion ref authority did not bind current-main workflow source"
+                ! "${authority[2]}" =~ ^main_sha=([a-f0-9]{40})$ ]]; then
+            echo "::error::Promotion ref authority did not bind the release, workflow source, and protected main ancestry"
             exit 1
           fi
           head_commit="$(git rev-parse --verify 'HEAD^{commit}')"
@@ -150,7 +149,7 @@ jobs:
             exit 1
           fi
           if [[ "$head_commit" != "$RECOVERY_WORKFLOW_SHA" ]]; then
-            echo "::error::Promotion workflow does not resolve to exact current main"
+            echo "::error::Promotion checkout does not resolve to the verified workflow source"
             exit 1
           fi
           case "$EVENT_NAME" in

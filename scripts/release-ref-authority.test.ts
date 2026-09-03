@@ -11,6 +11,7 @@ import {
   parseGovernedRemoteSnapshot,
   parseRemoteMainSnapshot,
   parseRemoteTagSnapshot,
+  verifyReleasePublicationAuthority,
   verifyReleaseRefAuthority,
   verifyStageSourceAuthority,
 } from "./release-ref-authority";
@@ -53,6 +54,7 @@ type Fixture = Readonly<{
   root: string;
   tagObjectSha: string;
   work: string;
+  workflowSha: string;
 }>;
 
 function fixture(options: Readonly<{
@@ -90,11 +92,13 @@ function fixture(options: Readonly<{
     git(source, ["tag", "v1.0.0", releaseSha]);
   }
 
+  let workflowSha = releaseSha;
   if (options.mainAtRelease !== true) {
     for (const value of ["one", "two"] as const) {
       writeFileSync(join(source, `${value}.txt`), `${value}\n`);
       git(source, ["add", `${value}.txt`]);
       git(source, ["commit", "--no-gpg-sign", "-m", value]);
+      if (value === "one") workflowSha = text(source, ["rev-parse", "HEAD"]);
     }
   }
   const mainSha = text(source, ["rev-parse", "HEAD"]);
@@ -113,7 +117,16 @@ function fixture(options: Readonly<{
   }
   const tagObjectSha = text(source, ["rev-parse", "refs/tags/v1.0.0"]);
   git(root, ["init", work]);
-  return Object.freeze({ mainSha, previousSha, releaseSha, remote, root, tagObjectSha, work });
+  return Object.freeze({
+    mainSha,
+    previousSha,
+    releaseSha,
+    remote,
+    root,
+    tagObjectSha,
+    work,
+    workflowSha,
+  });
 }
 
 function checkoutRelease(input: Fixture): void {
@@ -129,6 +142,11 @@ function checkoutRelease(input: Fixture): void {
 
 function checkoutMain(input: Fixture): void {
   git(input.work, ["fetch", "--depth=1", "--no-tags", input.remote, input.mainSha]);
+  git(input.work, ["checkout", "--detach", "FETCH_HEAD"]);
+}
+
+function checkoutSha(input: Fixture, sha: string): void {
+  git(input.work, ["fetch", "--depth=1", "--no-tags", input.remote, sha]);
   git(input.work, ["checkout", "--detach", "FETCH_HEAD"]);
 }
 
@@ -174,7 +192,7 @@ describe("bounded Wrench remote ref inventories", () => {
   const main = "1".repeat(40);
   const tag = "2".repeat(40);
 
-  test("accepts one exact main and the newest stable tag in canonical order", () => {
+  test("accepts one exact main and binds the requested tag without treating raw tags as releases", () => {
     const mainRow = inventory([main, "refs/heads/main"]);
     const tags = inventory(
       [tag, "refs/tags/v1.0.0"],
@@ -182,11 +200,18 @@ describe("bounded Wrench remote ref inventories", () => {
     );
     expect(parseRemoteMainSnapshot(mainRow)).toBe(main);
     expect(parseRemoteTagSnapshot(tags, "v1.0.0").requestedTagOid).toBe(tag);
-    expect(parseGovernedRemoteSnapshot(mainRow, tags, "v1.0.0")).toEqual({
+    expect(parseGovernedRemoteSnapshot(`${mainRow}${tags}`, "v1.0.0")).toEqual({
       canonical: `${mainRow}${tags}`,
       mainOid: main,
       requestedTagOid: tag,
     });
+    const queuedHigherTag = inventory(
+      [tag, "refs/tags/v1.0.0"],
+      [main, "refs/tags/v1.0.1"],
+    );
+    expect(parseRemoteTagSnapshot(queuedHigherTag, "v1.0.0").requestedTagOid).toBe(tag);
+    expect(parseGovernedRemoteSnapshot(`${mainRow}${queuedHigherTag}`, "v1.0.0").requestedTagOid)
+      .toBe(tag);
   });
 
   test("rejects malformed, duplicate, unexpected, noncanonical, oversized, and stale snapshots", () => {
@@ -201,7 +226,6 @@ describe("bounded Wrench remote ref inventories", () => {
       inventory([tag, "refs/tags/v1.0.0^{}"]),
       `${tag}\trefs/tags/v1.0.0\r\n`,
       `${tag}\trefs/tags/v1.0.0`,
-      inventory([tag, "refs/tags/v1.0.1"], [tag, "refs/tags/v1.0.0"]),
     ]) expect(() => parseRemoteTagSnapshot(value, "v1.0.0")).toThrow();
     expect(() => parseRemoteTagSnapshot(new Uint8Array([0xff]), "v1.0.0"))
       .toThrow("valid UTF-8");
@@ -218,11 +242,42 @@ describe("bounded Wrench remote ref inventories", () => {
     const tooLarge = `${tag}\trefs/tags/v1.0.0${"x".repeat(65_536)}\n`;
     expect(() => parseRemoteTagSnapshot(tooLarge, "v1.0.0")).toThrow("byte bound");
   });
+
+  test("rejects malformed combined governed-ref advertisements", () => {
+    const validMain = inventory([main, "refs/heads/main"]);
+    const validTag = inventory([tag, "refs/tags/v1.0.0"]);
+    for (const value of [
+      "",
+      validMain,
+      validTag,
+      `${validMain}${validMain}${validTag}`,
+      `${inventory([main, "refs/heads/main"])}${inventory([tag, "refs/heads/main"])}${validTag}`,
+      `${validMain}${validTag}${validTag}`,
+      `${validMain}${inventory([main, "refs/heads/unexpected"])}${validTag}`,
+      `${validMain}${validTag}${inventory([tag, "refs/tags/release-1.0.0"])}`,
+      `${inventory(["a".repeat(39), "refs/heads/main"])}${validTag}`,
+      `${inventory(["A".repeat(40), "refs/heads/main"])}${validTag}`,
+      `${validMain}${inventory(["z".repeat(40), "refs/tags/v1.0.0"])}`,
+      `${main} refs/heads/main\n${validTag}`,
+      `${validMain}${tag}\trefs/tags/v1.0.0\r\n`,
+      `${validMain}${tag}\trefs/tags/v1.0.0`,
+      `${validTag}${validMain}`,
+    ]) expect(() => parseGovernedRemoteSnapshot(value, "v1.0.0")).toThrow();
+    expect(() => parseGovernedRemoteSnapshot(new Uint8Array([0xff]), "v1.0.0"))
+      .toThrow("valid UTF-8");
+    expect(() => parseGovernedRemoteSnapshot(
+      `${validMain}${validTag}${"x".repeat(65_536)}`,
+      "v1.0.0",
+    )).toThrow("byte bound");
+    const tooMany = `${validMain}${Array.from({ length: 500 }, (_, index) =>
+      inventory([tag, `refs/tags/v1.0.0-${String(index).padStart(3, "0")}`])).join("")}`;
+    expect(() => parseGovernedRemoteSnapshot(tooMany, "v1.0.0")).toThrow("row count");
+  });
 });
 
 describe("Wrench release and promotion ref authority", () => {
-  test("accepts only one lightweight release tag equal to checkout and current main", () => {
-    const input = fixture({ mainAtRelease: true });
+  test("accepts one lightweight release tag below protected current main", () => {
+    const input = fixture();
     checkoutRelease(input);
     const { calls, runner } = runnerFor(input);
     expect(verifyReleaseRefAuthority({
@@ -232,6 +287,10 @@ describe("Wrench release and promotion ref authority", () => {
       workingDirectory: input.work,
     })).toEqual({ mainSha: input.mainSha, sha: input.releaseSha, tag: "v1.0.0" });
     expect(calls.filter((call) => call[0] === "fetch")).toHaveLength(1);
+    expect(calls.filter((call) => call[0] === "ls-remote")).toEqual([
+      ["ls-remote", "--sort=refname", "--refs", repositoryUrl, "refs/heads/main", "refs/tags/v*"],
+      ["ls-remote", "--sort=refname", "--refs", repositoryUrl, "refs/heads/main", "refs/tags/v*"],
+    ]);
     const fetch = calls.find((call) => call[0] === "fetch") ?? [];
     expect(fetch).toContain("--no-write-fetch-head");
     expect(fetch).toContain("--no-tags");
@@ -245,9 +304,9 @@ describe("Wrench release and promotion ref authority", () => {
     );
   });
 
-  test("accepts a lightweight release ancestor from exact current-main workflow source", () => {
+  test("accepts a release below a workflow source below protected current main", () => {
     const input = fixture();
-    checkoutMain(input);
+    checkoutSha(input, input.workflowSha);
     const { runner } = runnerFor(input);
     expect(verifyReleaseRefAuthority({
       expectedReleaseSha: input.releaseSha,
@@ -255,26 +314,29 @@ describe("Wrench release and promotion ref authority", () => {
       requestedTag: "v1.0.0",
       runner,
       workingDirectory: input.work,
-      workflowSha: input.mainSha,
+      workflowSha: input.workflowSha,
     })).toEqual({ mainSha: input.mainSha, sha: input.releaseSha, tag: "v1.0.0" });
   });
 
-  test("rejects annotated requested tags and newer lightweight or annotated stable tags", () => {
-    for (const options of [
-      { mainAtRelease: true, requestedTagKind: "annotated" as const },
-      { higherTagKind: "lightweight" as const },
-      { higherTagKind: "annotated" as const },
-    ]) {
-      const input = fixture(options);
-      if (options.mainAtRelease === true) checkoutRelease(input);
-      else checkoutMain(input);
-      expect(() => verifyReleaseRefAuthority({
-        mode: options.mainAtRelease === true ? "release" : "promotion",
+  test("rejects annotated requested tags without treating later raw tags as completed releases", () => {
+    const annotated = fixture({ requestedTagKind: "annotated" });
+    checkoutRelease(annotated);
+    expect(() => verifyReleaseRefAuthority({
+      mode: "release",
+      requestedTag: "v1.0.0",
+      runner: runnerFor(annotated).runner,
+      workingDirectory: annotated.work,
+    })).toThrow("lightweight");
+
+    for (const higherTagKind of ["lightweight", "annotated"] as const) {
+      const input = fixture({ higherTagKind });
+      checkoutRelease(input);
+      expect(verifyReleaseRefAuthority({
+        mode: "release",
         requestedTag: "v1.0.0",
         runner: runnerFor(input).runner,
         workingDirectory: input.work,
-        ...(options.mainAtRelease === true ? {} : { workflowSha: input.mainSha }),
-      })).toThrow();
+      })).toEqual({ mainSha: input.mainSha, sha: input.releaseSha, tag: "v1.0.0" });
     }
   });
 
@@ -295,7 +357,7 @@ describe("Wrench release and promotion ref authority", () => {
       requestedTag: "v1.0.0",
       runner: runnerFor(input).runner,
       workflowSha: "9".repeat(40),
-    })).toThrow("exact advertised current main");
+    })).toThrow("exact verified workflow source");
 
     git(input.work, ["update-ref", "refs/heads/unexpected", input.mainSha]);
     expect(() => verifyReleaseRefAuthority({
@@ -307,15 +369,20 @@ describe("Wrench release and promotion ref authority", () => {
 
     const driftInput = fixture();
     checkoutMain(driftInput);
-    let mainReads = 0;
+    let governedReads = 0;
     const drift = runnerFor(driftInput, {
       mutateResult: (arguments_, _invocation, result) => {
-        if (arguments_[0] === "ls-remote" && arguments_.at(-1) === "refs/heads/main") {
-          mainReads += 1;
-          if (mainReads === 2) {
+        if (arguments_[0] === "ls-remote" && arguments_.at(-1) === "refs/tags/v*") {
+          governedReads += 1;
+          if (governedReads === 2) {
             return Object.freeze({
               ...result,
-              stdout: new TextEncoder().encode(`${"8".repeat(40)}\trefs/heads/main\n`),
+              stdout: new TextEncoder().encode(
+                new TextDecoder().decode(result.stdout).replace(
+                  driftInput.mainSha,
+                  "8".repeat(40),
+                ),
+              ),
             });
           }
         }
@@ -329,10 +396,86 @@ describe("Wrench release and promotion ref authority", () => {
       workflowSha: driftInput.mainSha,
     })).toThrow("changed during verification");
   });
+
+  test("binds two combined advertisements immediately before publication", () => {
+    const input = fixture();
+    checkoutSha(input, input.releaseSha);
+    const success = runnerFor(input);
+    expect(verifyReleasePublicationAuthority({
+      expectedMainSha: input.mainSha,
+      expectedReleaseSha: input.releaseSha,
+      phase: "prewrite",
+      requestedTag: "v1.0.0",
+      runner: success.runner,
+      workingDirectory: input.work,
+    })).toEqual({ mainSha: input.mainSha, sha: input.releaseSha, tag: "v1.0.0" });
+    expect(success.calls.filter((call) => call[0] === "ls-remote")).toEqual([
+      ["ls-remote", "--sort=refname", "--refs", repositoryUrl, "refs/heads/main", "refs/tags/v*"],
+      ["ls-remote", "--sort=refname", "--refs", repositoryUrl, "refs/heads/main", "refs/tags/v*"],
+    ]);
+
+    for (const options of [
+      { mainAtRelease: true, requestedTagKind: "annotated" as const },
+    ]) {
+      const rejectedInput = fixture(options);
+      checkoutSha(rejectedInput, rejectedInput.releaseSha);
+      expect(() => verifyReleasePublicationAuthority({
+        expectedMainSha: rejectedInput.mainSha,
+        expectedReleaseSha: rejectedInput.releaseSha,
+        phase: "prewrite",
+        requestedTag: "v1.0.0",
+        runner: runnerFor(rejectedInput).runner,
+        workingDirectory: rejectedInput.work,
+      })).toThrow();
+    }
+
+    let reads = 0;
+    const drift = runnerFor(input, {
+      mutateResult: (arguments_, _invocation, result) => {
+        if (arguments_[0] === "ls-remote" && arguments_.at(-1) === "refs/tags/v*") {
+          reads += 1;
+          if (reads === 2) {
+            return Object.freeze({
+              ...result,
+              stdout: new TextEncoder().encode(
+                new TextDecoder().decode(result.stdout).replace(input.mainSha, "8".repeat(40)),
+              ),
+            });
+          }
+        }
+        return result;
+      },
+    });
+    expect(() => verifyReleasePublicationAuthority({
+      expectedMainSha: input.mainSha,
+      expectedReleaseSha: input.releaseSha,
+      phase: "prewrite",
+      requestedTag: "v1.0.0",
+      runner: drift.runner,
+      workingDirectory: input.work,
+    })).toThrow("changed at the publication boundary");
+
+    const supersededRawTag = fixture({ higherTagKind: "lightweight" });
+    checkoutSha(supersededRawTag, supersededRawTag.releaseSha);
+    for (const phase of ["prewrite", "postwrite"] as const) {
+      expect(verifyReleasePublicationAuthority({
+        expectedMainSha: supersededRawTag.mainSha,
+        expectedReleaseSha: supersededRawTag.releaseSha,
+        phase,
+        requestedTag: "v1.0.0",
+        runner: runnerFor(supersededRawTag).runner,
+        workingDirectory: supersededRawTag.work,
+      })).toEqual({
+        mainSha: supersededRawTag.mainSha,
+        sha: supersededRawTag.releaseSha,
+        tag: "v1.0.0",
+      });
+    }
+  });
 });
 
 describe("Wrench staging ref authority", () => {
-  test("accepts exact current main and imports a multi-commit push base without FETCH_HEAD", () => {
+  test("accepts an artifact source at or below protected main and imports history without FETCH_HEAD", () => {
     const input = fixture();
     checkoutMain(input);
     const currentOnly = runnerFor(input);
@@ -342,13 +485,15 @@ describe("Wrench staging ref authority", () => {
       workingDirectory: input.work,
     })).toEqual({ sourceSha: input.mainSha });
 
-    const pushed = runnerFor(input);
+    const pushedInput = fixture();
+    checkoutMain(pushedInput);
+    const pushed = runnerFor(pushedInput);
     expect(verifyStageSourceAuthority({
-      expectedHeadSha: input.mainSha,
-      previousSha: input.previousSha,
+      expectedHeadSha: pushedInput.mainSha,
+      previousSha: pushedInput.previousSha,
       runner: pushed.runner,
-      workingDirectory: input.work,
-    })).toEqual({ previousSha: input.previousSha, sourceSha: input.mainSha });
+      workingDirectory: pushedInput.work,
+    })).toEqual({ previousSha: pushedInput.previousSha, sourceSha: pushedInput.mainSha });
     const fetch = pushed.calls.find((call) => call[0] === "fetch") ?? [];
     expect(fetch).toEqual([
       "fetch",
@@ -359,8 +504,24 @@ describe("Wrench staging ref authority", () => {
       repositoryUrl,
       "refs/heads/main:refs/wrench-release/stage-main",
     ]);
-    expect(text(input.work, ["for-each-ref", "--format=%(refname)"])).toBe("");
-    expect(text(input.work, ["show", `${input.previousSha}:package.json`])).toContain("@hraness/wrench");
+    expect(text(pushedInput.work, ["for-each-ref", "--format=%(refname)"])).toBe("");
+    expect(text(pushedInput.work, ["show", `${pushedInput.previousSha}:package.json`])).toContain("@hraness/wrench");
+
+    const advanced = fixture();
+    checkoutSha(advanced, advanced.releaseSha);
+    expect(verifyStageSourceAuthority({
+      expectedHeadSha: advanced.releaseSha,
+      runner: runnerFor(advanced).runner,
+      workingDirectory: advanced.work,
+    })).toEqual({ sourceSha: advanced.releaseSha });
+
+    const divergent = fixture({ divergent: true });
+    checkoutSha(divergent, divergent.releaseSha);
+    expect(() => verifyStageSourceAuthority({
+      expectedHeadSha: divergent.releaseSha,
+      runner: runnerFor(divergent).runner,
+      workingDirectory: divergent.work,
+    })).toThrow("not an ancestor of protected main");
   });
 
   test("rejects invalid event bases, stale main, hidden refs, and main drift", () => {
@@ -376,7 +537,7 @@ describe("Wrench staging ref authority", () => {
     expect(() => verifyStageSourceAuthority({
       expectedHeadSha: "9".repeat(40),
       runner: runnerFor(input).runner,
-    })).toThrow("not exact advertised main head");
+    })).toThrow("does not match the verified artifact source");
 
     const divergent = fixture({ divergent: true });
     checkoutMain(divergent);
@@ -414,8 +575,9 @@ describe("Wrench staging ref authority", () => {
     })).toThrow("changed during staging verification");
   });
 
-  test("proves exact tag absence with a stable main/tag/main/tag sandwich", () => {
+  test("proves exact tag absence with two combined governed-ref advertisements", () => {
     const input = fixture();
+    checkoutMain(input);
     const success = runnerFor(input);
     expect(assertRemoteTagAbsent({
       expectedHeadSha: input.mainSha,
@@ -423,10 +585,26 @@ describe("Wrench staging ref authority", () => {
       tag: "v1.0.1",
     })).toEqual({ mainSha: input.mainSha, tag: "v1.0.1" });
     expect(success.calls).toEqual([
-      ["ls-remote", "--refs", repositoryUrl, "refs/heads/main"],
-      ["ls-remote", "--refs", "--tags", repositoryUrl, "refs/tags/v1.0.1"],
-      ["ls-remote", "--refs", repositoryUrl, "refs/heads/main"],
-      ["ls-remote", "--refs", "--tags", repositoryUrl, "refs/tags/v1.0.1"],
+      ["ls-remote", "--sort=refname", "--refs", repositoryUrl, "refs/heads/main", "refs/tags/v1.0.1"],
+      ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(objecttype)%00%(*objectname)%00%(*objecttype)"],
+      ["rev-parse", "--absolute-git-dir"],
+      ["rev-parse", "--git-path", "FETCH_HEAD"],
+      ["rev-parse", "--verify", "HEAD^{commit}"],
+      ["rev-parse", "--is-shallow-repository"],
+      [
+        "fetch",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--no-recurse-submodules",
+        "--unshallow",
+        repositoryUrl,
+        "refs/heads/main:refs/wrench-release/stage-main",
+      ],
+      ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(objecttype)%00%(*objectname)%00%(*objecttype)"],
+      ["merge-base", "--is-ancestor", input.mainSha, "refs/wrench-release/stage-main"],
+      ["update-ref", "-d", "refs/wrench-release/stage-main", input.mainSha],
+      ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(objecttype)%00%(*objectname)%00%(*objecttype)"],
+      ["ls-remote", "--sort=refname", "--refs", repositoryUrl, "refs/heads/main", "refs/tags/v1.0.1"],
     ]);
     expect(() => assertRemoteTagAbsent({
       runner: runnerFor(input).runner,
@@ -436,5 +614,26 @@ describe("Wrench staging ref authority", () => {
       runner: runnerFor(input).runner,
       tag: "v1.0.1-rc.1",
     })).toThrow("canonical stable version");
+
+    let reads = 0;
+    const drift = runnerFor(input, {
+      mutateResult: (arguments_, _invocation, result) => {
+        if (arguments_[0] === "ls-remote" && arguments_.at(-1) === "refs/tags/v1.0.1") {
+          reads += 1;
+          if (reads === 2) {
+            return Object.freeze({
+              ...result,
+              stdout: new TextEncoder().encode(`${"8".repeat(40)}\trefs/heads/main\n`),
+            });
+          }
+        }
+        return result;
+      },
+    });
+    expect(() => assertRemoteTagAbsent({
+      expectedHeadSha: input.mainSha,
+      runner: drift.runner,
+      tag: "v1.0.1",
+    })).toThrow("changed during absence verification");
   });
 });

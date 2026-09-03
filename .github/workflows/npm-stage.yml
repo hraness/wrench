@@ -36,7 +36,7 @@ jobs:
         with:
           node-version: "24"
           package-manager-cache: false
-      - name: Classify current default-branch package
+      - name: Classify event-source package
         id: request
         env:
           BEFORE_SHA: ${{ github.event.before }}
@@ -57,10 +57,10 @@ jobs:
                 printf '%s\n' "$authority_output"
               )
               if [[ ${#authority[@]} -ne 1 || ! "${authority[0]}" =~ ^source_sha=([a-f0-9]{40})$ ]]; then
-                echo "::error::Current-main staging authority output is malformed"
+                echo "::error::Stage-source authority output is malformed"
                 exit 1
               fi
-              default_head="${BASH_REMATCH[1]}"
+              source_sha="${BASH_REMATCH[1]}"
               previous_sha=""
               ;;
             push)
@@ -75,7 +75,7 @@ jobs:
                 echo "::error::Push staging authority output is malformed"
                 exit 1
               fi
-              default_head="${BASH_REMATCH[1]}"
+              source_sha="${BASH_REMATCH[1]}"
               if [[ ! "${authority[1]}" =~ ^previous_sha=([a-f0-9]{40})$ ]]; then
                 echo "::error::Push staging prior-source output is malformed"
                 exit 1
@@ -87,8 +87,8 @@ jobs:
               exit 1
               ;;
           esac
-          if [[ "$GITHUB_SHA" != "$default_head" ]]; then
-            echo "::error::npm staging must run from current $DEFAULT_BRANCH HEAD $default_head"
+          if [[ "$GITHUB_SHA" != "$source_sha" ]]; then
+            echo "::error::npm staging event source does not match admitted commit $source_sha"
             exit 1
           fi
 
@@ -105,7 +105,7 @@ jobs:
           }
 
           current_manifest="$RUNNER_TEMP/wrench-current-package.json"
-          git show "$default_head:package.json" > "$current_manifest"
+          git show "$source_sha:package.json" > "$current_manifest"
           if ! current_version="$(read_manifest_version "$current_manifest")"; then
             echo "::error::Current package manifest must name @hraness/wrench and use a stable semantic version"
             exit 1
@@ -142,7 +142,7 @@ jobs:
           esac
 
           printf 'should_stage=%s\nsource_sha=%s\n' \
-            "$should_stage" "$default_head" >> "$GITHUB_OUTPUT"
+            "$should_stage" "$source_sha" >> "$GITHUB_OUTPUT"
 
   verify:
     name: Verify exact package
@@ -172,7 +172,7 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
-      - name: Verify default-branch head
+      - name: Verify admitted source and protected-main ancestry
         id: identity
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -194,13 +194,13 @@ jobs:
             echo "::error::Verified staging authority output is malformed"
             exit 1
           fi
-          default_head="${BASH_REMATCH[1]}"
+          source_sha="${BASH_REMATCH[1]}"
           if [[ "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" || \
-                "$GITHUB_SHA" != "$default_head" ]]; then
-            echo "::error::npm staging must run from current $DEFAULT_BRANCH HEAD $default_head"
+                "$GITHUB_SHA" != "$source_sha" ]]; then
+            echo "::error::npm staging checkout does not match admitted source $source_sha"
             exit 1
           fi
-          printf 'source_sha=%s\n' "$default_head" >> "$GITHUB_OUTPUT"
+          printf 'source_sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
       - name: Pin npm
         run: |
           set -euo pipefail
@@ -286,6 +286,7 @@ jobs:
     name: Stage exact package
     needs: verify
     permissions:
+      contents: read
       id-token: write
     environment: npm-stage
     runs-on: ubuntu-latest
@@ -395,74 +396,21 @@ jobs:
             exit 1
           fi
           printf 'sha256=%s\ntarball=%s\n' "$actual_sha256" "$tarball" >> "$GITHUB_OUTPUT"
-      - name: Revalidate current main and stage exact package
+      - name: Revalidate protected-main ancestry and stage exact package
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EXPECTED_SOURCE_SHA: ${{ steps.package_identity.outputs.source_sha }}
           EXPECTED_TARBALL_SHA256: ${{ steps.artifact.outputs.sha256 }}
           EXPECTED_VERSION: ${{ steps.package_identity.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
           TARBALL: ${{ steps.artifact.outputs.tarball }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_REPOSITORY" != "hraness/wrench" || "$DEFAULT_BRANCH" != "main" ]]; then
-            echo "::error::Terminal staging must run for exact Wrench main"
+            echo "::error::Terminal staging must run in the Wrench protected-main context"
             exit 1
           fi
           repository_url="https://github.com/hraness/wrench.git"
-          for observation in 1 2; do
-            git ls-remote --refs "$repository_url" \
-              "refs/heads/main" > "$RUNNER_TEMP/main-$observation.refs"
-            git ls-remote --refs --tags "$repository_url" \
-              "refs/tags/v$EXPECTED_VERSION" > "$RUNNER_TEMP/tag-$observation.refs"
-          done
-          EXPECTED_MAIN="$EXPECTED_SOURCE_SHA" EXPECTED_TAG="v$EXPECTED_VERSION" \
-            FIRST_MAIN="$RUNNER_TEMP/main-1.refs" SECOND_MAIN="$RUNNER_TEMP/main-2.refs" \
-            FIRST_TAG="$RUNNER_TEMP/tag-1.refs" SECOND_TAG="$RUNNER_TEMP/tag-2.refs" \
-            node --input-type=module <<'NODE'
-          import { readFileSync } from "node:fs";
-          const sha = /^[0-9a-f]{40}$/u;
-          const stableTag = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u;
-          const expectedMain = process.env.EXPECTED_MAIN ?? "";
-          const expectedTag = process.env.EXPECTED_TAG ?? "";
-          if (!sha.test(expectedMain) || !stableTag.test(expectedTag)) {
-            throw new Error("Terminal staging coordinates are malformed");
-          }
-          const paths = [
-            process.env.FIRST_MAIN,
-            process.env.SECOND_MAIN,
-            process.env.FIRST_TAG,
-            process.env.SECOND_TAG,
-          ];
-          if (paths.some((path) => typeof path !== "string" || path.length === 0)) {
-            throw new Error("Terminal staging ref snapshots are missing");
-          }
-          const snapshots = paths.map((path) => readFileSync(path));
-          const totalBytes = snapshots.reduce((sum, value) => sum + value.byteLength, 0);
-          const totalRows = snapshots.reduce(
-            (sum, value) => sum + value.reduce((rows, byte) => rows + (byte === 0x0a ? 1 : 0), 0),
-            0,
-          );
-          if (totalBytes > 64 * 1024 || totalRows > 500) {
-            throw new Error("Terminal staging ref snapshots exceed their fixed bounds");
-          }
-          const decode = (value, label) => {
-            const text = new TextDecoder("utf-8", { fatal: true }).decode(value);
-            if (text.includes("\0") || text.includes("\r")) {
-              throw new Error(`${label} is not canonical`);
-            }
-            return text;
-          };
-          const [firstMain, secondMain, firstTag, secondTag] = snapshots.map(
-            (value, index) => decode(value, `snapshot ${String(index + 1)}`),
-          );
-          const expectedMainRow = `${expectedMain}\trefs/heads/main\n`;
-          if (firstMain !== expectedMainRow || secondMain !== expectedMainRow) {
-            throw new Error("main changed or is malformed at the terminal staging boundary");
-          }
-          if (firstTag !== "" || secondTag !== "") {
-            throw new Error(`Tag ${expectedTag} exists at the terminal staging boundary`);
-          }
-          NODE
           if [[ "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" ]]; then
             echo "::error::Verified workflow source moved before staging"
             exit 1
@@ -470,6 +418,82 @@ jobs:
           current_tarball_sha256="$(sha256sum "$TARBALL" | awk '{ print $1 }')"
           if [[ "$current_tarball_sha256" != "$EXPECTED_TARBALL_SHA256" ]]; then
             echo "::error::Downloaded tarball changed after current-$DEFAULT_BRANCH verification"
+            exit 1
+          fi
+          git ls-remote --sort=refname --refs "$repository_url" \
+            "refs/heads/main" "refs/tags/v$EXPECTED_VERSION" \
+            > "$RUNNER_TEMP/governed-1.refs"
+          advertised_main="$(EXPECTED_TAG="v$EXPECTED_VERSION" \
+            SNAPSHOT="$RUNNER_TEMP/governed-1.refs" \
+            node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const sha = /^[0-9a-f]{40}$/u;
+          const stableTag = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u;
+          const expectedTag = process.env.EXPECTED_TAG ?? "";
+          if (!stableTag.test(expectedTag)) {
+            throw new Error("Terminal staging coordinates are malformed");
+          }
+          const path = process.env.SNAPSHOT;
+          if (typeof path !== "string" || path.length === 0) {
+            throw new Error("Terminal staging ref snapshot is missing");
+          }
+          const value = readFileSync(path);
+          const rows = value.reduce(
+            (count, byte) => count + (byte === 0x0a ? 1 : 0),
+            0,
+          );
+          if (value.byteLength > 64 * 1024 || rows > 500) {
+            throw new Error("Terminal staging ref snapshot exceeds its fixed bounds");
+          }
+          const snapshot = new TextDecoder("utf-8", { fatal: true }).decode(value);
+          if (snapshot.includes("\0") || snapshot.includes("\r")) {
+            throw new Error("Terminal staging ref snapshot is not canonical");
+          }
+          const expectedTagRowSuffix = `\trefs/tags/${expectedTag}`;
+          if (snapshot.split("\n").some((row) => row.endsWith(expectedTagRowSuffix))) {
+            throw new Error(`Tag ${expectedTag} exists at the terminal staging boundary`);
+          }
+          const match = /^([0-9a-f]{40})\trefs\/heads\/main\n$/u.exec(snapshot);
+          if (match?.[1] === undefined || !sha.test(match[1])) {
+            throw new Error("main or exact-tag authority is malformed at the terminal staging boundary");
+          }
+          process.stdout.write(match[1]);
+          NODE
+          )"
+          if [[ "$advertised_main" != "$EXPECTED_SOURCE_SHA" ]]; then
+            comparison="$(gh api \
+              "/repos/$GITHUB_REPOSITORY/compare/$EXPECTED_SOURCE_SHA...$advertised_main" \
+              --jq '[.status, .ahead_by, .behind_by, .base_commit.sha, .merge_base_commit.sha, .commits[-1].sha] | @tsv')"
+            EXPECTED_ANCESTOR="$EXPECTED_SOURCE_SHA" \
+              EXPECTED_DESCENDANT="$advertised_main" COMPARISON="$comparison" \
+              node --input-type=module <<'NODE'
+            const sha = /^[0-9a-f]{40}$/u;
+            const ancestor = process.env.EXPECTED_ANCESTOR ?? "";
+            const descendant = process.env.EXPECTED_DESCENDANT ?? "";
+            const fields = (process.env.COMPARISON ?? "").split("\t");
+            if (!sha.test(ancestor) || !sha.test(descendant) || fields.length !== 6) {
+              throw new Error("Terminal staging ancestry response is malformed");
+            }
+            const [status, ahead, behind, base, mergeBase, terminal] = fields;
+            if (
+              status !== "ahead" ||
+              !/^[1-9][0-9]*$/u.test(ahead ?? "") ||
+              !Number.isSafeInteger(Number(ahead)) ||
+              behind !== "0" ||
+              base !== ancestor ||
+              mergeBase !== ancestor ||
+              terminal !== descendant
+            ) {
+              throw new Error("Terminal staging source is not an ancestor of protected main");
+            }
+          NODE
+          fi
+          git ls-remote --sort=refname --refs "$repository_url" \
+            "refs/heads/main" "refs/tags/v$EXPECTED_VERSION" \
+            > "$RUNNER_TEMP/governed-2.refs"
+          if ! cmp --silent \
+            "$RUNNER_TEMP/governed-1.refs" "$RUNNER_TEMP/governed-2.refs"; then
+            echo "::error::Governed refs changed between terminal staging advertisements"
             exit 1
           fi
           npm stage publish "$TARBALL" \

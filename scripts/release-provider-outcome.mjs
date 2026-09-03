@@ -138,7 +138,7 @@ const PRODUCTION_DEPLOYMENTS_QUERY = `query WrenchProductionDeployments(
 }`;
 
 const BASELINE_REST_REQUESTS = 2;
-const PROMOTION_REST_REQUESTS = 13;
+const PROMOTION_REST_REQUESTS = 21;
 const OUTCOME_REST_REQUESTS =
   6 +
   MAX_PROVIDER_POLLS * (2 + PAGINATED_READ_REQUESTS) +
@@ -147,14 +147,15 @@ const OUTCOME_REST_REQUESTS =
   PAGINATED_READ_REQUESTS +
   7 +
   PAGINATED_READ_REQUESTS +
-  7;
+  7 +
+  12; // three source checks add four calls each for the second main read and three comparisons
 const IMMUTABLE_RELEASE_REST_REQUESTS =
   3 + // initial tag, main, and exact Release lookup
   PAGINATED_READ_REQUESTS + // five bounded Release pages plus the empty sentinel
   2 + // pre-create main and tag revalidation
   1 + // conditional Release creation
   4; // Release, Latest, terminal tag, and terminal main readbacks
-const WEBSITE_AUTHORITY_REST_REQUESTS = 2 + 4 * (2 * (3 + 1 + 1 + 1));
+const WEBSITE_AUTHORITY_REST_REQUESTS = 2 + 4 * (2 * (7 + 1 + 1 + 1));
 const SURROUNDING_RELEASE_REST_REQUESTS =
   IMMUTABLE_RELEASE_REST_REQUESTS + WEBSITE_AUTHORITY_REST_REQUESTS;
 const BASELINE_GRAPHQL_REQUESTS = 2 * MAX_GRAPHQL_DEPLOYMENT_PAGES;
@@ -1050,6 +1051,40 @@ function expectBranch(value, label) {
   return branch;
 }
 
+async function requireAncestorOrIdentical(
+  api,
+  repository,
+  ancestorSha,
+  descendantSha,
+  label,
+) {
+  if (ancestorSha === descendantSha) return;
+  const value = expectRecord(
+    await api.get(`/repos/${repository}/compare/${ancestorSha}...${descendantSha}`),
+    `${label} comparison`,
+  );
+  const base = expectRecord(value.base_commit, `${label} comparison.base_commit`);
+  const mergeBase = expectRecord(
+    value.merge_base_commit,
+    `${label} comparison.merge_base_commit`,
+  );
+  const commits = expectArray(value.commits, `${label} comparison.commits`);
+  if (commits.length === 0) fail(`${label} comparison has no commits`);
+  const terminalCommit = expectRecord(commits.at(-1), `${label} comparison terminal commit`);
+  const terminalSha = expectSha(terminalCommit.sha, `${label} comparison terminal commit SHA`);
+  if (
+    value.status !== "ahead" ||
+    !Number.isSafeInteger(value.ahead_by) ||
+    value.ahead_by <= 0 ||
+    value.behind_by !== 0 ||
+    base.sha !== ancestorSha ||
+    mergeBase.sha !== ancestorSha ||
+    terminalSha !== descendantSha
+  ) {
+    fail(`${label} does not preserve protected linear ancestry`);
+  }
+}
+
 async function revalidateWorkflowSource(
   api,
   repository,
@@ -1079,7 +1114,13 @@ async function revalidateWorkflowSource(
     expectedRef,
     "release workflow source ref",
   );
-  if (current !== sha) fail("release recovery workflow source is no longer current main");
+  await requireAncestorOrIdentical(
+    api,
+    repository,
+    sha,
+    current,
+    "release workflow source",
+  );
   const terminalRepositoryState = expectRecord(
     await api.get(`/repos/${repository}`),
     "terminal release workflow repository",
@@ -1090,6 +1131,25 @@ async function revalidateWorkflowSource(
   ) {
     fail("release recovery default branch moved during source verification");
   }
+  const terminalCurrent = exactCommitRef(
+    await api.get(`/repos/${repository}/git/ref/heads/${branch}`),
+    expectedRef,
+    "terminal release workflow source ref",
+  );
+  await requireAncestorOrIdentical(
+    api,
+    repository,
+    sha,
+    terminalCurrent,
+    "terminal release workflow source",
+  );
+  await requireAncestorOrIdentical(
+    api,
+    repository,
+    current,
+    terminalCurrent,
+    "release workflow source main sandwich",
+  );
 }
 
 function expectVercelCreator(value, label) {
@@ -1200,7 +1260,9 @@ async function readLatestRelease(api, repository, tag) {
     await api.get(`/repos/${repository}/releases/latest`),
     "Latest Release",
   );
-  if (value.tag_name !== tag) fail(`Latest Release is not ${tag}`);
+  if (value.tag_name !== tag) {
+    fail(`Release ${tag} is no longer Latest; recover from the current immutable Latest Release`);
+  }
 }
 
 async function readVerifiedTagCommit(api, repository, tag, verifiedSha) {
@@ -1227,7 +1289,7 @@ export async function revalidateReleaseAuthority({
   const tag = expectStableTag(verifiedTag, "verified tag");
   const workflowSource = Object.freeze({ defaultBranch, eventName, recoveryWorkflowSha });
   if (eventName !== "workflow_dispatch" && eventName !== "workflow_run") {
-    fail("website promotion authority must use the current-main promotion workflow");
+    fail("website promotion authority must use the reviewed main-origin promotion workflow");
   }
 
   await revalidateWorkflowSource(api, coordinate, workflowSource);
