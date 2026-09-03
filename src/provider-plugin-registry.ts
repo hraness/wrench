@@ -595,6 +595,7 @@ const reviewedDynamicInstalledModuleIdentities =
   reviewedMetaDynamicInstalledModuleIdentities;
 const reviewedKbDynamicInstalledPluginIds = new Set([
   "bluesky-web",
+  "clasificados-web",
   "github-web",
   "hacker-news-web",
   "linkedin-web",

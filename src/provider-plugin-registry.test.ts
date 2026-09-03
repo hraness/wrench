@@ -276,6 +276,24 @@ describe("provider plugin definition and registry", () => {
       }
     }
   });
+  test("registers Clasificados as a current-only durable public listings identity", () => {
+    const plugin = providerPluginRegistry.get("clasificados-web");
+    const binding = plugin?.bindings[0];
+    expect(plugin?.version).toBe("1.0.0");
+    expect(binding?.transport).toBe("web-session-api");
+    if (binding === undefined) throw new Error("Clasificados provider binding is unavailable");
+    expect(binding.operations.map((operation) => operation.name)).toEqual([
+      "listings.search",
+    ]);
+    expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
+      .toBe("fda5a8870cfd235df6419c15541c8ddb1345c15a801c1264e58339d9e9c53828");
+    expect(providerPluginRegistry.legacyContractImplementationHashes(
+      binding,
+      "listings.search",
+      1,
+    )).toEqual([]);
+  });
+
   test("registers Gmail as a current-only durable provider identity", () => {
     const plugin = providerPluginRegistry.get("gmail-official");
     const binding = plugin?.bindings[0];

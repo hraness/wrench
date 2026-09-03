@@ -44,10 +44,10 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-This v0.16.3 source tree defines actions for 19 services: Beeper, Bluesky, Facebook,
-Facebook Groups, Facebook Marketplace, GitHub, Gmail, Hacker News, Instagram,
-iMessage, LinkedIn, Reddit, Substack, Threads, TikTok, Twitch, WhatsApp, X, and
-YouTube.
+This v0.16.3 source tree defines actions for 20 services: Beeper, Bluesky,
+ClasificadosOnline, Facebook, Facebook Groups, Facebook Marketplace, GitHub,
+Gmail, Hacker News, Instagram, iMessage, LinkedIn, Reddit, Substack, Threads,
+TikTok, Twitch, WhatsApp, X, and YouTube.
 LinkedIn and X each have separate official and authenticated-web adapters. The
 [release-bound provider directory](https://wrench.rip/provider-capabilities/)
 lists only executable actions, grouped by the tasks each service supports and
@@ -306,6 +306,19 @@ query can be returned later without opening a browser or provider connection:
 wrench auth bind reddit-main --site reddit
 wrench reddit-web messaging.list --auth reddit-main --input '{"folder":"inbox","limit":25}' --json
 wrench reddit-web messaging.list --auth reddit-main --input '{"folder":"inbox","limit":25}' --cache-only --json
+```
+
+Public ClasificadosOnline rental search is `clasificados-web listings.search`.
+It needs no login. Pass `location` plus optional `beds_min` and `max_price`. Each
+row includes the canonical listing URL, rent, beds, baths, street address when
+the list card publishes one, ZIP when a reviewed table or known-address override
+can prove it, and a neighborhood derived from that address, ZIP, or the card's
+own coordinates. Broker titles are never the neighborhood source. See
+[rental listings](docs/rental-listings.md).
+
+```sh
+wrench clasificados-web listings.search \
+  --input '{"location":"San Juan, PR","beds_min":2,"max_price":5500}' --json
 ```
 
 Observed `profiles.read` capabilities expose target-bound exact counters for X,
