@@ -80,6 +80,7 @@ function isCurrentOnlyRow(row) {
   return (row[0] === "provider-api" && row[1] === "gmail")
     || (row[0] === "local-cli" && row[1] === "beeper")
     || (row[0] === "local-cli" && row[1] === "imessage")
+    || (row[0] === "web-session-api" && row[1] === "clasificados")
     || (row[0] === "web-session-api" && row[1] === "github")
     || (row[0] === "web-session-api" && row[1] === "twitch");
 }
@@ -263,8 +264,8 @@ describe("durable provider contract inventory", () => {
       expect(inventory).toEqual({
         rows: 322,
         sha256: predecessorDefaultInventorySha256,
-        currentOnlyRows: 49,
-        currentOnlySha256: "cd13ae0ffa7a1d3e34772a9f510cd89548236e2565fdfad54b344d843ffe926a",
+        currentOnlyRows: 50,
+        currentOnlySha256: "db4e3b9cb5aff2f84143f869e639b0c7d0c626d36ed0c38bfd0729b3537a71ee",
         legacyRows: [
           322,
           322,

@@ -157,6 +157,14 @@ const identities = Object.freeze({
       development: "d5ada0c9f22748494b12def42560c761777e69f5a58496523cd9641984787aa5",
     },
   },
+  "clasificados-web": {
+    schemaVersion: 1,
+    pluginVersion: "1.0.0",
+    implementationSha256: "fda5a8870cfd235df6419c15541c8ddb1345c15a801c1264e58339d9e9c53828",
+    legacyCurrentReadImplementationSha256: [],
+    legacyReadImplementationSha256: null,
+    legacyE71ReadImplementationSha256: null,
+  },
   "gmail-official": {
     schemaVersion: 1,
     pluginVersion: "1.3.0",

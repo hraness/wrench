@@ -39,6 +39,7 @@ automation.
 - Archive media: `wrench archive <url>` or `wrench audio|video|transcript <url>`.
 - Discover supported article embeds through the provider's bounded semantic media read, then archive each exact returned finite item separately. Do not treat a collection page as one media item or scrape its DOM to manufacture asset routes.
 - Inspect support: `wrench plugin list`, `wrench plugin show <id>`, and `wrench capabilities [adapter]`.
+- Search public Puerto Rico rentals: `wrench clasificados-web listings.search --input '{"location":"San Juan, PR","beds_min":2,"max_price":5500}' --json`. Keep `location` to the reviewed San Juan tokens. Neighborhood comes from street, ZIP, known address, or list-card coordinates, never from broker copy. Zillow-group and Puerto Rico MLS public search are not installed.
 - Operate Beeper: inspect `wrench capabilities beeper-local --json`, then use
   only its typed read or action operation with the bound local Desktop realm.
 - Read or act on a live conversation: follow

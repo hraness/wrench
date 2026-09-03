@@ -15,6 +15,7 @@ const requiredPaths = Object.freeze([
   "README.md",
   "bunfig.toml",
   "docs/imessage-direct-provider.md",
+  "docs/rental-listings.md",
   "package.json",
   "tsconfig.json",
   "dist/beeper-client.js",
@@ -136,6 +137,7 @@ function verifyAllowedPath(path: string, type: "directory" | "file"): void {
       || path === "README.md"
       || path === "bunfig.toml"
       || path === "docs/imessage-direct-provider.md"
+      || path === "docs/rental-listings.md"
       || path === "package.json"
       || path === "tsconfig.json"
       || path.startsWith("dist/")

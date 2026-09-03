@@ -51,27 +51,28 @@ const inertRootImportProgram = `
   import dns from "node:dns";
   import { syncBuiltinESMExports } from "node:module";
   const forbidden = (name) => () => { throw new Error("package root import attempted " + name); };
-  const loaderOnly = (name, implementation) => function (...args) {
-    const stack = new Error().stack ?? "";
-    const immediateCaller = stack.split("\\n")[2] ?? "";
-    if (
-      !immediateCaller.includes("node:internal/modules/")
-      && !immediateCaller.includes("(node:fs:")
-    ) {
+  const loaderCaller = (stack) => {
+    const immediateCaller = (stack ?? "").split("\\n")[2] ?? "";
+    return immediateCaller.includes("node:internal/modules/")
+      || immediateCaller.includes("(node:fs:")
+      || immediateCaller.includes("(node:fs/");
+  };
+  const loaderOnly = (name, implementation, target) => function (...args) {
+    if (!loaderCaller(new Error().stack)) {
       throw new Error("package root import attempted filesystem access via " + name);
     }
-    return Reflect.apply(implementation, fs, args);
+    return Reflect.apply(implementation, target, args);
   };
   for (const name of ["accessSync", "existsSync", "lstatSync", "openSync", "readFileSync", "realpathSync", "statSync"]) {
     Object.defineProperty(fs, name, {
       configurable: true,
-      value: loaderOnly(name, fs[name]),
+      value: loaderOnly(name, fs[name], fs),
     });
   }
   for (const name of ["access", "lstat", "open", "readFile", "realpath", "stat"]) {
     Object.defineProperty(fsPromises, name, {
       configurable: true,
-      value: forbidden("filesystem access via promises." + name),
+      value: loaderOnly("promises." + name, fsPromises[name], fsPromises),
     });
   }
   Object.defineProperty(http, "request", { configurable: true, value: forbidden("HTTP access") });

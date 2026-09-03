@@ -7,7 +7,7 @@
 - `.agents/skills/` – reusable cross-repository KB and phased-execution workflows; product-specific Wrench operations remain under `skills/wrench/`.
 - `kb/` – authored repository rationale, evidence, synthesis, and plans.
 - `WRITING.md` and `STYLE.md` – internal and public prose contracts.
-- `docs/` – provider-plugin authoring and trust-boundary guidance.
+- `docs/` – provider-plugin authoring, trust-boundary guidance, and the public Puerto Rico rental-listings search contract.
 - `scripts/` – standalone CLI, plugin lifecycle, and clean-consumer package verification.
 - `website/` – the dependency-free, statically generated `wrench.rip` documentation and landing surface; it is excluded from the published package.
 - `.github/workflows/` – read-only Linux and macOS checks plus checks-gated immutable releases and release-only website production promotion.

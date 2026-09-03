@@ -7,6 +7,13 @@ coordinate that completed both checks.
 
 ## Unreleased
 
+- Add public `clasificados-web listings.search` for reviewed San Juan rental
+  list pages. Return canonical listing URLs, rent, beds, baths, and a
+  neighborhood derived from street, ZIP, known address, or list-card
+  coordinates rather than broker copy. Document the Zillow-group PerimeterX
+  and Puerto Rico MLS public-search blockers instead of shipping capture-required
+  stubs.
+
 ## 0.16.3 - 2026-09-01
 
 - Redesign the release-bound product site around a result-first hero, a
