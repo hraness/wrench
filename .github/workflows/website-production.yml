@@ -30,7 +30,7 @@ jobs:
       verified_tag: ${{ steps.identity.outputs.tag }}
       workflow_sha: ${{ steps.request.outputs.sha }}
     steps:
-      - name: Bind dispatch to exact current main
+      - name: Bind dispatch to reviewed main workflow source
         id: request
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$DEFAULT_BRANCH" != "main" || "$EVENT_REF" != "refs/heads/main" || "$EVENT_REPOSITORY" != "hraness/wrench" || "$EVENT_REPOSITORY_ID" != "1316443113" ]]; then
-            echo "::error::Website production promotion must run from exact Wrench main"
+            echo "::error::Website production promotion must originate from the Wrench main ref"
             exit 1
           fi
           if [[ ! "$EVENT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -96,8 +96,8 @@ jobs:
           fi
           repository_default="$(gh api "/repos/$GITHUB_REPOSITORY" --jq '.default_branch')"
           current_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
-          if [[ "$repository_default" != "main" || "$current_main_sha" != "$EVENT_SHA" ]]; then
-            echo "::error::Promotion workflow source $EVENT_SHA is not exact current main $current_main_sha"
+          if [[ "$repository_default" != "main" || ! "$current_main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Promotion repository has no exact protected main coordinate"
             exit 1
           fi
           printf 'sha=%s\n' "$EVENT_SHA" >> "$GITHUB_OUTPUT"
@@ -105,7 +105,8 @@ jobs:
           printf 'release_sha=%s\n' "$release_sha" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
           ref: ${{ steps.request.outputs.sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -123,15 +124,32 @@ jobs:
           REQUESTED_TAG: ${{ steps.request.outputs.tag }}
         run: |
           set -euo pipefail
+          authority_output="$(node --experimental-strip-types \
+            ./scripts/release-ref-authority.ts promotion "$REQUESTED_TAG" \
+            "$RECOVERY_WORKFLOW_SHA" "$REQUESTED_RELEASE_SHA")"
+          authority=()
+          while IFS= read -r line; do authority+=("$line"); done < <(
+            printf '%s\n' "$authority_output"
+          )
+          if [[ ${#authority[@]} -ne 3 || \
+                ! "${authority[0]}" =~ ^sha=([a-f0-9]{40})$ ]]; then
+            echo "::error::Promotion ref authority output is malformed"
+            exit 1
+          fi
+          tag_commit="${BASH_REMATCH[1]}"
+          if [[ "${authority[1]}" != "tag=$REQUESTED_TAG" || \
+                ! "${authority[2]}" =~ ^main_sha=([a-f0-9]{40})$ ]]; then
+            echo "::error::Promotion ref authority did not bind the release, workflow source, and protected main ancestry"
+            exit 1
+          fi
           head_commit="$(git rev-parse --verify 'HEAD^{commit}')"
-          tag_commit="$(git rev-parse --verify "refs/tags/$REQUESTED_TAG^{commit}")"
           package_version="$(git show "${tag_commit}:package.json" | node -e 'const fs = require("node:fs"); const value = JSON.parse(fs.readFileSync(0, "utf8")); if (typeof value.version !== "string") process.exit(1); process.stdout.write(value.version)')"
           if [[ "$REQUESTED_TAG" != "v$package_version" ]]; then
             echo "::error::Promotion tag and package version do not agree"
             exit 1
           fi
           if [[ "$head_commit" != "$RECOVERY_WORKFLOW_SHA" ]]; then
-            echo "::error::Promotion workflow does not resolve to exact current main"
+            echo "::error::Promotion checkout does not resolve to the verified workflow source"
             exit 1
           fi
           case "$EVENT_NAME" in
@@ -152,15 +170,6 @@ jobs:
               exit 1
               ;;
           esac
-          if ! git merge-base --is-ancestor "$tag_commit" "$head_commit"; then
-            echo "::error::Immutable release tag is not an ancestor of the current-main workflow"
-            exit 1
-          fi
-          newest_stable_tag="$(git tag --list 'v*' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | LC_ALL=C sort -V | tail -n 1)"
-          if [[ "$newest_stable_tag" != "$REQUESTED_TAG" ]]; then
-            echo "::error::Promotion tag is not the newest stable tag ($newest_stable_tag)"
-            exit 1
-          fi
           printf 'sha=%s\n' "$tag_commit" >> "$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
           VERIFIED_SHA="$tag_commit" VERIFIED_TAG="$REQUESTED_TAG" \
@@ -181,6 +190,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
           ref: ${{ needs.verify.outputs.workflow_sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -218,6 +228,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
           ref: ${{ needs.verify.outputs.workflow_sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -277,6 +288,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
           ref: ${{ needs.verify.outputs.workflow_sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -380,6 +392,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
           ref: ${{ needs.verify.outputs.workflow_sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6

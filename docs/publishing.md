@@ -178,6 +178,18 @@ The tag is a release request. Wait for the read-only verification job to
 rebuild and compare the exact public npm tarball, then verify that the GitHub
 Release is non-draft, immutable, and Latest.
 
+Release verification starts from a depth-one, credential-free checkout of the
+requested tag. `scripts/release-ref-authority.ts` reads only the exact remote
+`main` ref and the bounded `refs/tags/v*` inventory. The combined inventory must
+be canonical UTF-8, at most 64 KiB and 500 rows, and stable across two reads.
+The helper imports only those governed refs with tags disabled and without
+writing `FETCH_HEAD`. Wrench release tags are lightweight direct commit tags.
+The requested tag and checkout must name one commit `C`, and protected linear
+`main` must equal or descend from `C`. An annotated requested tag, moved ref,
+divergence, rollback, or malformed advertisement fails closed. A higher raw
+`v*` tag is only a queued release request; bounded non-draft, non-prerelease,
+immutable Releases determine completed-release ordering.
+
 ## Stage a later version
 
 1. Merge a monotonically greater stable version to `main`. A push that changes
@@ -192,16 +204,49 @@ Release is non-draft, immutable, and Latest.
 5. Download and smoke the public registry package.
 6. Create the matching `v<version>` tag on the staged source commit.
 
+The tag-push Release workflow intentionally executes source `S=C`: GitHub loads
+the workflow bytes from the tagged product/source commit. Release-control bytes
+in `C` must therefore contain the final reviewed repair before the tag exists.
+On 2026-09-03, a stale-source manual recovery run staged and then published
+`@hraness/wrench@0.16.3` from stale source
+`c2d956ca4102d38c29e24ca4e13f26ce862b47f3`. That public npm coordinate is
+consumed. Never create a `v0.16.3` Git tag or GitHub Release, and never attempt
+to unpublish, overwrite, or repair those public bytes in place. The next release
+is `0.16.4` from the final repaired product descendant and a fresh exact stage.
+If release controls change materially after staging, that stage is ineligible
+for tagging. If the ineligible stage is still pending, inspect it, reject that
+exact stage with human two-factor authentication, and confirm that it is absent
+before creating and verifying a fresh same-version stage from the final repaired
+descendant. If npm has already published the version, its semver coordinate is
+consumed instead: never unpublish or overwrite it, and prepare a greater version.
+
 The read-only classifier compares the current and prior `package.json` files. A
 manifest edit with an unchanged version succeeds without running the verify or
 OIDC jobs. A prerelease, malformed version, downgrade, unavailable push base, or
-non-current `main` commit fails closed.
+event source outside protected `main`'s linear history fails closed.
+
+Both classifier and verifier use an exact depth-one, no-tag, credential-free
+checkout of the event source `C`. They bind the advertised protected `main`
+tip `M` twice, import only that governed history under a temporary private ref,
+and require `C=M` or strict linear ancestry `C<M`. A later no-version-change
+push may therefore advance `main` during the long package gate without
+changing the artifact already bound to `C`; a later workflow change still makes
+that stage ineligible for tagging under the rule above. For a push, the
+classifier also requires GitHub's exact nonzero `before` commit to be present
+and an ancestor of `C`, removes the ref, and reads the prior manifest by object
+ID. Manual recovery has no prior commit. Neither path uses a broad ref fetch, a forced
+refspec, or `FETCH_HEAD` as authority.
 
 If the automatic run did not start or failed before npm accepted the stage,
 dispatch **Stage npm package** from the current `main` branch. Manual recovery
-runs the same verification and main-only environment path. Do not dispatch a
-replacement after npm has accepted a stage for that version; continue with
-inspection and two-factor approval.
+runs the same verification and main-only environment path. Once npm accepts a
+stage, first inspect whether that exact source and release-control closure remain
+eligible. An accepted and eligible stage must be inspected and approved without
+a duplicate dispatch. An accepted but ineligible pending stage must be inspected,
+rejected with human two-factor authentication, and confirmed absent before one
+fresh same-version stage is dispatched from final current `main`. If the
+ineligible stage is already public, do not reject, unpublish, overwrite, tag, or
+release it; move the complete corrected release to a greater version.
 
 Use the canonical registry for every inspection and promotion command:
 
@@ -216,27 +261,42 @@ npm stage download <stage-id> \
   --registry=https://registry.npmjs.org
 npm stage approve <stage-id> \
   --registry=https://registry.npmjs.org
+npm stage reject <stage-id> \
+  --registry=https://registry.npmjs.org
 ```
 
-To complete this source version's release, download and smoke
-`@hraness/wrench@0.16.3` after approving its stage. Keep the public coordinate
-and tag literal through the final registry checks, then create `v0.16.3` on the
-exact staged source commit:
+To complete the repaired release, download and smoke
+`@hraness/wrench@0.16.4` after approving its fresh stage. Keep the public
+coordinate and tag literal through the final registry checks, then create
+`v0.16.4` on the exact staged source commit:
 
 ```sh
-npm view @hraness/wrench@0.16.3 name version dist \
+npm view @hraness/wrench@0.16.4 name version dist \
   --json \
   --registry=https://registry.npmjs.org
-git tag v0.16.3
-git push origin refs/tags/v0.16.3
+git tag v0.16.4
+git push origin refs/tags/v0.16.4
 ```
 
 The staging workflow runs on GitHub-hosted runners with Node 24, npm 11.19.0,
 Bun 1.3.14, disabled package-manager caching, and no stored npm token. It binds
-the verified artifact to the current `main` commit, refetches `main` before
-staging, and aborts if that commit is no longer the default-branch head. The
-main-only `npm-stage` environment applies only to the terminal OIDC job and has
-no required deployment reviewers.
+the verified artifact and final tarball hash to source `C`. The checkout-free
+terminal OIDC job observes the combined governed refs twice with one
+`ls-remote` connection per observation, requesting exact protected `main` and
+the prospective tag together. Each canonical advertisement is capped at 64 KiB
+and 500 rows, must contain one `main` row and no requested tag, and the pair
+must be byte-identical. If advertised main is `M!=C`, one authenticated,
+strictly parsed comparison must prove positive-ahead linear ancestry `C<M`,
+with `behind_by=0`, exact base and merge base `C`, and terminal commit `M`.
+The tarball hash precedes both observations and the second advertisement is
+immediately adjacent to `npm stage publish`. A protected descendant advance
+after that last read leaves the quarantined, reviewable stage bound to `C`;
+tagging and publication rebind the approved bytes before release. These are
+repeated governed-ref observations, not an atomic snapshot. The job does not
+initialize or fetch a repository, execute checked-out scripts, or use
+`FETCH_HEAD`. Its only GitHub token permission is `contents:read`, alongside
+OIDC `id-token:write`. The main-only `npm-stage` environment applies only to
+this terminal job and has no required deployment reviewers.
 
 `scripts/package-budget.ts` owns the shared packed-byte, unpacked-byte, and
 file-count ceilings used by artifact inspection and the clean-consumer smoke.
@@ -275,25 +335,29 @@ non-fast-forward rules. Live ruleset `21887484` targets the same refs with one
 update restriction and exactly one `Integration` bypass for dedicated App
 `4783991` with `bypass_mode=always`. Together they deny ref creation, deletion,
 non-fast-forward movement, and every update except the dedicated App's admitted
-fast-forward. `22149969` is the captured numeric ID of the temporary pre-release
-production freeze. While present, it blocks creation, update, deletion, and
-non-fast-forward movement of `refs/heads/website-production`; it does not target
-the persistent canary. The retained canary proof is evidence, never standing
-mutation authority. Before every required fast-forward, fresh administrator
-readback must reconfirm the exact permanent rulesets and target refs and the sole
-App `4783991` `Integration` bypass. It must also prove that the App registration
-still grants exactly `metadata:read`, `contents:write`, and `workflows:write`
-with no other permission and that installation `158077029` still selects exactly
+fast-forward. Production-only freeze ruleset `22182820` adds no-bypass creation,
+update, deletion, and non-fast-forward restrictions while production remains
+safely frozen. The App-only writer passed the positive and negative canary
+proofs retained below, but the production freeze blocks its use until a fresh
+release-owner audit. GitHub Actions App Integration 15368 is not the
+production writer and must not be configured as the update-rule bypass.
+
+The retained canary proof is evidence, never standing
+mutation authority.
+Before every required fast-forward, fresh administrator readback must
+reconfirm the exact permanent rulesets and target refs and the sole App
+`4783991` `Integration` bypass. It must prove that the App registration still
+grants exactly `metadata:read`, `contents:write`, and `workflows:write` with no
+other permission, and that installation `158077029` still selects exactly
 repository `hraness/wrench` at ID `1316443113`. The
-`production-ref-writer-key` environment must still have `deployment=false`, a
+`production-ref-writer-key` environment still has `deployment=false`, a
 main-only branch policy, sole reviewer `0thernet`, `prevent_self_review=false`,
 administrator bypass disabled, exactly the four variables
 `WRENCH_RELEASE_APP_ID`, `WRENCH_RELEASE_APP_CLIENT_ID`,
-`WRENCH_RELEASE_APP_SLUG`, and `WRENCH_RELEASE_APP_INSTALLATION_ID`, and exactly
-the `WRENCH_RELEASE_APP_PRIVATE_KEY` secret. Any drift leaves production
-unchanged. GitHub Actions App
-Integration `15368` is not the production writer and must not be configured as
-the update-rule bypass.
+`WRENCH_RELEASE_APP_SLUG`, and `WRENCH_RELEASE_APP_INSTALLATION_ID`, and
+exactly the `WRENCH_RELEASE_APP_PRIVATE_KEY` secret. Any drift leaves
+production unchanged. This evidence correction does not authorize removal of
+live production freeze `22182820`.
 
 Checked-in `CODEOWNERS` assigns source ownership and notification for the
 workflow, Release helper, and publishing policy paths. It does not claim live or
@@ -320,8 +384,70 @@ server-generated notes; authentication, transport, other API, or malformed
 response failures abort. The workflow validates an exact REST readback before
 checking Latest. It does not use opaque `gh release view` or
 `gh release create` commands, so hidden requests cannot escape the bounded
-control path. The tag and its peeled commit must remain exact current `main`
-before creation and at the terminal readback.
+control path. The direct lightweight tag must remain on the verified release
+commit `C`, and protected linear `main` at each observation must equal or
+descend from `C`. That descendant movement is release-authority-safe only while
+`git diff --quiet --no-ext-diff --no-textconv C M -- .github/workflows
+scripts/release-ref-authority.ts scripts/release-provider-outcome.mjs
+scripts/release-app-token.mjs scripts/release-ref-writer.mjs` confirms that the
+high-privilege authority, publication, and promotion control closure is
+unchanged. The early release check and both publication-boundary checks enforce
+that condition using the exact imported `C` and `M` objects. After
+completed-release-order validation
+and immediately before the irreversible create request, authenticated GitHub
+API reads still bind both coordinates. The release-ref helper then observes
+the combined governed `main` and `refs/tags/v*` advertisement twice, through
+one `ls-remote` connection per observation, and requires the two canonical
+advertisements to be equal. This is a bounded repeated observation, not an
+atomic provider snapshot. Protected tag immutability and monotonic main ancestry
+keep a later main fast-forward from changing `C`; that movement remains
+release-authority-safe only when it also preserves that release-control
+closure. The terminal readback repeats both the authenticated API checks and
+the combined-advertisement helper, including the release-control comparison. A
+release-control change in the irreducible prewrite-to-POST window makes the
+terminal readback fail closed even though GitHub may already have created the
+immutable Release. Recovery must inspect that exact Release and the current
+Latest Release; the workflow never deletes, patches, or rolls back a Release
+in response. The POST has no conditional-write lease and uses
+`make_latest=legacy`; a higher raw
+`v*` tag is only another queued request, while bounded published immutable
+Releases define completed ordering. If the terminal readback observes another
+immutable Release as Latest, this release remains valid and the workflow fails
+with explicit recovery guidance for the observed Latest coordinate. A
+supersession after that final read is not observable by the completed workflow.
+
+Immediately before the tag push that dispatches **Release**, a signed-in
+administrator must read back immutable Releases as `enabled=true`. The workflow
+token deliberately keeps only `contents:write` and cannot read that
+Administration endpoint. This fresh control-plane check is therefore a trusted
+operator boundary, with a residual administrator-toggle window that repeated
+workflow reads cannot remove. The created and terminal Release readbacks must
+still report `immutable=true`.
+
+Run this with the signed-in administrator session immediately before creating
+the tag. It records both the required enabled state and GitHub's
+`enforced_by_owner` diagnostic without granting the workflow Administration:
+
+```bash
+immutable_release_state="$(gh api \
+  --header 'Accept: application/vnd.github+json' \
+  --header 'X-GitHub-Api-Version: 2026-03-10' \
+  /repos/hraness/wrench/immutable-releases \
+  --jq '{enabled: .enabled, enforced_by_owner: .enforced_by_owner}')"
+IMMUTABLE_RELEASE_STATE="$immutable_release_state" node <<'NODE'
+const value = JSON.parse(process.env.IMMUTABLE_RELEASE_STATE ?? "null");
+if (
+  value === null ||
+  typeof value !== "object" ||
+  Array.isArray(value) ||
+  Object.keys(value).sort().join(",") !== "enabled,enforced_by_owner" ||
+  value.enabled !== true ||
+  typeof value.enforced_by_owner !== "boolean"
+) process.exit(1);
+process.stdout.write(`${JSON.stringify(value)}\n`);
+NODE
+```
+
 The create request supplies the verified SHA as `target_commitish`, but GitHub
 does not use that field when the tag already exists, and live readback may report
 the default branch. Promotion therefore treats `target_commitish` as
@@ -337,12 +463,24 @@ stable-tag input. The automatic path treats the entire `workflow_run` payload as
 foreign data. It requires repository `hraness/wrench` with numeric ID
 `1316443113`, Release workflow ID `323493609`, exact workflow name and path, a
 tag `push`, first attempt, successful conclusion, and this repository as the head
-repository. The workflow source must equal current `main`; the automatic head
-SHA must instead equal the peeled immutable tag commit, and that release commit
-must be an ancestor of the current-main workflow source. Manual recovery carries
-no upstream SHA. Both paths check out the exact current-main source, bind the
-package version from the peeled tag commit and the newest stable tag, and verify
-the immutable asset-free Latest Release before any provider or ref work.
+repository. The reviewed workflow source `W` originates from `main`; the
+automatic head SHA must instead equal the peeled immutable tag commit `C`.
+Manual recovery carries no upstream SHA. Both paths check out exact `W`, bind
+the package version from `C`, verify the immutable asset-free Latest Release,
+and prove `C<=W<=M` for protected current main `M` before any provider or ref
+work. Main may advance by protected linear fast-forward after dispatch without
+invalidating reviewed `W`.
+
+That promotion checkout is depth one with tags and credentials disabled. The
+same bounded release-ref helper observes `main` and the bounded `refs/tags/v*`
+inventory in one combined governed-ref advertisement per observation. It then
+imports only exact advertised `main` and the requested lightweight tag, without
+writing `FETCH_HEAD`, proves the requested tag is direct commit `C` and proves
+`C<=W<=M`, and requires a second combined advertisement to equal the first.
+Raw tag order is not completed-release order. Every
+later promotion job checks out only the already-verified workflow SHA at depth
+one with tags disabled; provider and App/CAS authority remain separate from Git
+ref discovery.
 
 Before any key-gated job starts, a read-only job records a bounded, complete
 snapshot of GitHub's Production deployments. Authenticated GitHub
@@ -357,7 +495,7 @@ statuses after 90 days while preserving the current status on the deployment.
 The baseline outputs whether the established production ref already equals the
 verified release. The already-exact branch takes a separate read-only job. That
 job has no environment admission, App variable, private key, token mint, or Git
-push. It still revalidates current-main workflow source, the peeled tag,
+push. It still revalidates reviewed workflow-source ancestry, the peeled tag,
 immutable Release, Latest, the baseline, authenticated server time, and the
 terminal ref before emitting a receipt.
 
@@ -368,7 +506,7 @@ The environment must permit only `main`, require reviewer `0thernet`, disable
 admin bypass, set `prevent_self_review=false` because that reviewer is currently
 the sole eligible maintainer, and store only `WRENCH_RELEASE_APP_PRIVATE_KEY`
 plus the reviewed App ID, client ID, slug, and selected installation ID
-variables. The job repeats the full current-main, peeled-tag, immutable Release,
+variables. The job repeats the full `C<=W<=M`, peeled-tag, immutable Release,
 and Latest authority check after environment approval and before mutation.
 
 The writer authenticates one private Hraness-owned GitHub App. The App
@@ -413,97 +551,60 @@ Its terminal journal-record digest is
 `9d6c91d29fb8932a6abba9b2f9d4822a153011d0642dd61150a4b9a8bf8da75b`.
 These four anchors identify the one-shot key-setup proof.
 
-The exact base64-decoded `WRENCH_RELEASE_APP_CANARY_EVIDENCE_V2` value emitted
-by workflow run `33691443614` ends with its closing `}` byte, uses schema
-`wrench-release-app-canary-evidence/v2` and has SHA-256
+The base64-decoded `WRENCH_RELEASE_APP_CANARY_EVIDENCE_V2` value emitted by
+workflow run `33691443614` ends at its closing `}` byte with no trailing line
+feed and has SHA-256
 `b3b285d8d8965851595ff991ba4a4ffa327b605350c161fca36dc09a32b5bb27`.
-The exact GitHub Actions log bytes downloaded for prove job `100450916193` have
-SHA-256
+Archived file `terminal.canary-evidence.json` contains those same JSON bytes
+plus exactly one trailing line feed and has SHA-256
+`5b5161fbaea60b29bac64881680e7954631c157b2cb5a0a8e84d1dc1b9f415ec`.
+The raw prove-job log response bytes for job `100450916193` have SHA-256
 `eb79ede7214e1b3085d7f787cd91df8b23f9150f805c13d5e5675df934b70510`.
-The canonical record binds actor `894119`, repository `1316443113`, App
-`4783991`, slug `wrench-prod-ref-writer-1316443113`, client ID
-`Iv23lintMtwGdKiwV6gq`, and installation `158077029`. The App registration,
-installation, and minted token were limited to Wrench with exactly
-`metadata:read`, `contents:write`, and `workflows:write`.
+Archived whole-run log file `terminal.run.log` is a separate, larger byte
+sequence with SHA-256
+`eb930fec28427928a328a89f61874920ebc18694484b0ffd70051d660ca703e8`.
+These four hashes label four distinct retained or fetched byte representations
+and are not interchangeable.
 
-Earlier prose assigned digests
-`5b5161fbaea60b29bac64881680e7954631c157b2cb5a0a8e84d1dc1b9f415ec` and
-`eb930fec28427928a328a89f61874920ebc18694484b0ffd70051d660ca703e8` to
-activation evidence without identifying separately retained objects. Those
-unowned claims are retracted. Neither digest is evidence for this canary; only
-the explicitly named canonical JSON and prove-job log above carry those labels.
-
-The evidence fingerprints lifecycle ruleset `21832074`
-(`RRS_lACqUmVwb3NpdG9yec5Od1PpzgFNIYo`, created
-`2026-08-30T01:20:47.112Z`, updated `2026-08-30T23:58:27.117Z`), update
-ruleset `21887484` (`RRS_lACqUmVwb3NpdG9yec5Od1PpzgFN-fw`, created
-`2026-08-31T00:15:02.504Z`, updated `2026-09-02T22:35:03.118Z`), and the
-temporary activation freeze `22149969`
-(`RRS_lACqUmVwb3NpdG9yec5Od1PpzgFR-1E`, created
-`2026-09-02T22:33:42.087Z`, updated `2026-09-02T22:33:42.128Z`). Their
-canonical administrator projection digests are respectively
-`fcdb750dccfd3685e69e0f20fc8944c1dbb319cf5f48cbf531bc071bdc237c55`,
-`aba327ae2e7e6a0b3193c7791fb0f1f1814b57b08044cfc0804ff2836c6427a8`,
-and `52bd8190d6715c213ac624fcfe6f6194492fa379083f61af7cc1056698917773`.
-
-Ordinary-user denial Rule Suite `3922909251` bound actor `894119`, failed the
-`P` to `C` update, and has canonical SHA-256
-`35083b54ff700c0f549f5027c2b7cd2b8e0fa9fac30f3012e923d025f4aa13b3`.
-App Rule Suite `3922938237` bound bot `323289432`, admitted the same update
-only through Integration `4783991` with `bypass_mode=always`, and has canonical
-SHA-256 `324df21b32978fce1c5fbd45612dc02ecd45abbb148d713b76d7b9efebc11a6c`.
-Environment `20895709932` admitted the exact run; its approval projection
-digest is `d7ee98109c7e8326c8dc71d51c487c92b3c5bf8f308d816defc258574ee2a4cf`.
-The App and installation-summary projection digests are
-`accdf2f7f9a831ea0f42aef6d13b7b11d10d65ba19db3452cda2240037e6e918`
-and `12d2124d310e7fb12785de710d112285c2403ca2ea5624c526a98bbc860d028d`.
-
-GitHub server time bounded the proof at `2026-09-02T22:40:56Z`, the write at
-`2026-09-02T22:41:00Z`, and the terminal read at
-`2026-09-02T22:41:06Z`. The successful push output digest is
-`93f5eaa8169aa38b358f7eb3e80b30f80f0cb3fd4eb3d37fe6ac60673b02f9fd`;
-the rejected stale-lease output digest is
-`ca646017da1c8e57ef915b6b76e4e808a41a1e0492454ca0b0c3176f7a504b8a`.
-One empty HTTP 204 revocation converged immediately to two stable HTTP 401
-denials: `converged=true`, `observationCount=2`,
-`propagationObserved=false`, and `stableDenials=2`. The production helper
-remains hard-bound to `website-production` and was not reused for the canary.
+The evidence binds exact App `4783991`, bot `323289432`, selected installation
+`158077029` and repository, the admitted push output SHA-256
+`93f5eaa8169aa38b358f7eb3e80b30f80f0cb3fd4eb3d37fe6ac60673b02f9fd`,
+the stale-lease rejection output SHA-256
+`ca646017da1c8e57ef915b6b76e4e808a41a1e0492454ca0b0c3176f7a504b8a`,
+unchanged control fingerprints, and the activation workflow's
+cleanup-qualified revocation receipt
+`{converged:true, observationCount:2, propagationObserved:false,
+stableDenials:2}`. Lifecycle ruleset `21832074` remained no-bypass. Update
+ruleset `21887484` admitted only App `4783991` as an `Integration` with
+`bypass_mode=always`. Production-only freeze ruleset `22149969` remained
+no-bypass during that retained proof. That historical ruleset was later absent;
+current replacement ruleset `22182820` restores the live production freeze.
+The production helper remains hard-bound to `website-production` and was not
+reused for the canary.
 
 This checked cleanup removes the single-use workflow and helper after retaining
 their run, job log, App and installation readbacks, environment admission,
 administrator ruleset projections, ordinary-denial and App-bypass Rule Suites,
 canonical evidence, and SHA-256 digests. After this cleanup is merged and its
-exact-main CI is green, delete the six temporary lifecycle, update, and freeze
+merged-source CI is green, delete the six temporary lifecycle, update, and freeze
 ruleset fingerprint variables by exact name:
 `WRENCH_RELEASE_LIFECYCLE_RULESET_ID`,
 `WRENCH_RELEASE_LIFECYCLE_RULESET_UPDATED_AT`,
 `WRENCH_RELEASE_UPDATE_RULESET_ID`,
 `WRENCH_RELEASE_UPDATE_RULESET_UPDATED_AT`,
 `WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_ID`, and
-`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT`. Read the environment
-back and require exactly the four reviewed App ID, client ID, slug, and
-installation ID variables plus the single private key secret, with its main-only
-branch policy, reviewer, `prevent_self_review` setting, and disabled admin bypass
-unchanged. Repeat the fresh administrator validation above. Only after it
-and exact-main CI both succeed, immediately read ruleset `22149969` through the
-authenticated repository-ruleset endpoint. Require exact ID `22149969`, name
-`Temporary website-production activation freeze`, node ID
-`RRS_lACqUmVwb3NpdG9yec5Od1PpzgFR-1E`, repository source `hraness/wrench` of
-type `Repository`, branch target, active enforcement, an empty bypass-actor set,
-only `refs/heads/website-production` in its include condition with no exclusions,
-and exactly the creation, update, deletion, and non-fast-forward rules. Its
-created and updated timestamps must remain `2026-09-02T22:33:42.087Z` and
-`2026-09-02T22:33:42.128Z`. Drift leaves the freeze in place. Only that fresh,
-exact readback permits deletion of ID `22149969`; then require authenticated
-absence before any fast-forward. Preserve permanent
-rulesets `21832074` and `21887484` and the canary at `C`; require each to remain
-unchanged after deletion. The archived freeze fingerprint remains evidence after
-deletion. Uncertainty leaves production frozen.
+`WRENCH_RELEASE_PRODUCTION_FREEZE_RULESET_UPDATED_AT`. Read the environment back and
+require exactly the four reviewed App ID, client ID, slug, and installation ID
+variables plus the single private key secret, with its main-only branch policy,
+reviewer, `prevent_self_review` setting, and disabled admin bypass unchanged.
+Retain both permanent rulesets, the canary at `C`, and the production-only
+freeze. Remove the freeze later only by its captured numeric ID after a fresh
+release-owner audit; uncertainty leaves production safely frozen.
 
 The minted token must carry a bounded one-hour expiry and fit the streamed
 response parser. The helper masks it and passes it only through a private
-`GIT_ASKPASS` environment. Because the writer checks out only exact current-main
-workflow source, it first fetches only the verified tag through the fixed HTTPS
+`GIT_ASKPASS` environment. Because the writer checks out only exact reviewed
+workflow source `W`, it first fetches only the verified tag through the fixed HTTPS
 repository URL, peels that fetched object locally, and requires the result to
 equal the independently verified release SHA. It does not check out or execute
 tagged code. The same ephemeral credential boundary then runs one fixed push
@@ -568,9 +669,10 @@ exact successful candidate. Both paths require the REST deployment's lowercase
 GraphQL deployment must expose `ref: null` while `commitOid` equals that same
 commit. These source fields remain in the pinned candidate fingerprint. Both
 paths recheck the exact tag, immutable Release, Latest Release, production ref,
-and current-main workflow source, and pin one deployment. The automatic
-`workflow_run` and manual recovery coordinates both remain bound to the current
-default-branch head throughout the read-only outcome proof.
+and `C<=W<=M`, and pin one deployment. Each workflow-source check reads
+protected main twice, accepts only identical or strict linear-forward movement,
+and rejects rollback or divergence. A protected descendant advance after the
+final read remains safe; neither path claims an atomic cross-system snapshot.
 Every poll rereads the complete GraphQL current-state inventory. The pinned
 candidate also gets an exhaustive, order-independent REST status-history read
 with a 500-row cap and empty sentinel page. Any retained failure, error, or
@@ -606,12 +708,12 @@ a separate 30-minute timeout, leaving ten minutes for checkout, Node setup, and
 runner teardown around the product deadline.
 
 The bounded request contract is separate for REST and GraphQL. The current
-control flow can make at most 197 REST calls in the provider outcome job. The
+control flow can make at most 209 REST calls in the provider outcome job. The
 worst missing-Release path uses 16 calls, including all five bounded release
 pages plus the empty sentinel page. The immutable Release and downstream
-promotion workflows together use at most 278 REST calls, leaving 722 calls
+promotion workflows together use at most 330 REST calls, leaving 670 calls
 under the repository `GITHUB_TOKEN` limit of 1,000 REST requests per hour. The
-promotion helper itself uses at most 13 read-only REST calls; its leased Git
+promotion helper itself uses at most 21 read-only REST calls; its leased Git
 push and at most fourteen App REST requests do not consume that `GITHUB_TOKEN`
 budget. Those App requests are the three setup and mint calls, one DELETE, and
 at most ten convergence probes. Git authentication is outside that REST bound. Five
@@ -628,11 +730,11 @@ identity, installation, token, and revocation responses are streamed under a
 needs no Vercel token, PAT, or redeploy.
 
 If promotion fails after the immutable Release exists, merge the reviewed fix to
-`main` first. Then dispatch **Promote website production** from exact current
-`main` with the immutable Latest stable tag. Recovery never reruns or changes
-the tag Release. It resolves the peeled tag as the verified release SHA, keeps
-that coordinate distinct from the exact current-main workflow SHA, and requires
-the release commit to remain an ancestor of the workflow source. An
+`main` first. Then dispatch **Promote website production** from current `main`
+with the immutable Latest stable tag. Recovery never reruns or changes the tag
+Release. It resolves the peeled tag as verified release commit `C`, keeps that
+coordinate distinct from reviewed workflow source `W`, and proves `C<=W<=M`
+against protected current main. An
 already-exact recovery remains entirely outside the key environment. A required
 fast-forward repeats every authority check after reviewer admission before it
 mints the one-repository App token. Never rerun an ambiguous App push, bypass the
@@ -656,7 +758,7 @@ reason to trust deployment environment variables. Keep `.git` out of
 for this independent check. Canonical npm name, version, and SHA-512 integrity
 are sufficient at this layer because the tag Release workflow first rebuilds
 and compares the exact tarball with canonical npm before creating the immutable
-Release, and the separate current-main workflow advances `website-production`
+Release, and the separate main-origin workflow advances `website-production`
 only after it revalidates that release authority. The production verifier then
 independently rechecks the promoted commit, tag, registry coordinate, and
 immutable Latest Release.

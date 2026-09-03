@@ -35,27 +35,21 @@ all required. Missing, malformed, or inconsistent platform state fails closed.
 Production admission requires the production branch ref, while `main` and pull
 requests produce previews only. After the documented one-time bootstrap, the
 tag Release workflow publishes only the immutable GitHub Release. A separate
-current-main promotion workflow either proves the established production branch
+main-origin promotion workflow either proves the established production branch
 already exact without entering its key environment, or uses one repository-only
 release App token and an explicit expected-old Git lease to fast-forward it to
 the exact verified release commit. That writer first fetches only the verified
-tag into its depth-one current-main checkout, peels it to the independently
+tag into its depth-one reviewed-workflow checkout, peels it to the independently
 verified SHA without executing tagged code, and then performs the leased push.
-The current-main workflow source must descend
-from that release commit; canonical npm, the peeled tag, and the immutable
-Latest GitHub Release must agree on the release identity. A missing branch is a hard
+The reviewed workflow source must descend from that release commit and must
+equal or precede protected current main; canonical npm, the peeled tag, and the
+immutable Latest GitHub Release must agree on the release identity. A missing branch is a hard
 failure; neither workflow recreates it. One live no-bypass ruleset protects
 creation, deletion, and non-fast-forward movement on the production and canary
 refs. A second update rule denies every updater except exact App `4783991` as an
-`Integration` with `bypass_mode=always`. `22149969` is the captured ID of the
-temporary pre-release production freeze. While present, it blocks every
-production update. Immediately before deletion, an authenticated readback must
-prove its exact ID, name, node ID, repository source, production-only branch
-condition, active enforcement, empty bypass-actor set,
-creation/update/deletion/non-fast-forward rules, and captured created/updated
-timestamps. Drift leaves it in place. Delete only that ID, and require an
-authenticated absence readback before production promotion.
-The retained privileged setup proof
+`Integration` with `bypass_mode=always`. Production-only freeze ruleset
+`22182820` still blocks every production update until a fresh release-owner
+audit removes it by captured numeric ID. The retained privileged setup proof
 establishes that private Hraness App `4783991`, through installation
 `158077029`, is installed only on exact repository `hraness/wrench`. The App
 registration and each separately repository-narrowed runtime token use exactly
@@ -70,19 +64,17 @@ identifiers and published SHA-256 digests bind those artifacts. The App
 registration, installation-selection, token, and revocation response bodies are
 owner-controlled private response evidence. Those identifiers and digests bind
 the retained bytes; they do not make those private responses independently
-public. Retained evidence is not standing mutation authority. Before every
-required fast-forward, fresh administrator readback must reconfirm the permanent
-rulesets and target refs; the sole App `4783991` bypass; the App registration's
-exact `metadata:read`, `contents:write`, and `workflows:write` permissions with
-no others; and installation `158077029` selecting only Wrench repository ID
-`1316443113`. It must also reconfirm the `production-ref-writer-key` environment
-with `deployment=false`, main-only admission, sole reviewer `0thernet`,
-`prevent_self_review=false`, administrator bypass disabled, exactly the four
-variables `WRENCH_RELEASE_APP_ID`, `WRENCH_RELEASE_APP_CLIENT_ID`,
-`WRENCH_RELEASE_APP_SLUG`, and `WRENCH_RELEASE_APP_INSTALLATION_ID`, and exactly
-the `WRENCH_RELEASE_APP_PRIVATE_KEY` secret. Every promotion still requires
-fresh release authority, reviewer admission, an exact lease, revocation
-convergence, and provider verification; any drift leaves production unchanged.
+public.
+Retained evidence is not standing mutation authority. Before every required
+fast-forward, fresh administrator readback must reconfirm the permanent
+rulesets and target refs, the sole App `4783991` `Integration` bypass, the
+App's exact permission set, and that installation `158077029` still selects
+only Wrench repository ID `1316443113`. It must also reconfirm the main-only
+`production-ref-writer-key` environment, sole reviewer `0thernet`,
+`prevent_self_review=false`, disabled administrator bypass, exactly four App
+identity variables and the one private-key secret. Any drift leaves production
+unchanged. Live production freeze `22182820` remains retained; this evidence
+correction does not authorize its removal.
 The persistent canary remains at
 exact `C=0bf88a064233635e0c5485c61f9c533974a7dca4` and must never be reset,
 deleted, or repurposed. On a production deployment,

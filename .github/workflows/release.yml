@@ -43,7 +43,8 @@ jobs:
           printf 'tag=%s\n' "$EVENT_REF_NAME" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
           ref: refs/tags/${{ steps.request.outputs.tag }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -68,6 +69,23 @@ jobs:
           REQUESTED_TAG: ${{ steps.request.outputs.tag }}
         run: |
           set -euo pipefail
+          authority_output="$(node --experimental-strip-types \
+            ./scripts/release-ref-authority.ts release "$REQUESTED_TAG")"
+          authority=()
+          while IFS= read -r line; do authority+=("$line"); done < <(
+            printf '%s\n' "$authority_output"
+          )
+          if [[ ${#authority[@]} -ne 3 || \
+                ! "${authority[0]}" =~ ^sha=([a-f0-9]{40})$ ]]; then
+            echo "::error::Release ref authority output is malformed"
+            exit 1
+          fi
+          tag_commit="${BASH_REMATCH[1]}"
+          if [[ "${authority[1]}" != "tag=$REQUESTED_TAG" || \
+                ! "${authority[2]}" =~ ^main_sha=([a-f0-9]{40})$ ]]; then
+            echo "::error::Release ref authority did not bind tag below protected current main"
+            exit 1
+          fi
           package_version="$(bun -e 'const value = await Bun.file("package.json").json(); if (typeof value.version !== "string") process.exit(1); process.stdout.write(value.version)')"
           if [[ ! "$package_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "::error::Package version $package_version is not a stable semantic version"
@@ -78,20 +96,9 @@ jobs:
             echo "::error::Tag $REQUESTED_TAG does not match package version $expected_tag"
             exit 1
           fi
-          tag_commit="$(git rev-parse --verify "refs/tags/$REQUESTED_TAG^{commit}")"
           head_commit="$(git rev-parse --verify "HEAD^{commit}")"
           if [[ "$tag_commit" != "$head_commit" ]]; then
             echo "::error::Checked-out source $head_commit does not match tag commit $tag_commit"
-            exit 1
-          fi
-          default_head="$(git rev-parse --verify "origin/$DEFAULT_BRANCH^{commit}")"
-          if [[ "$default_head" != "$tag_commit" ]]; then
-            echo "::error::Tag release commit $tag_commit is not current $DEFAULT_BRANCH head $default_head"
-            exit 1
-          fi
-          newest_stable_tag="$(git tag --list 'v*' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | LC_ALL=C sort -V | tail -n 1)"
-          if [[ "$newest_stable_tag" != "$REQUESTED_TAG" ]]; then
-            echo "::error::Tag $REQUESTED_TAG is not newer than $newest_stable_tag"
             exit 1
           fi
           printf 'tag=%s\n' "$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
@@ -170,6 +177,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
+          fetch-tags: false
           persist-credentials: false
           ref: ${{ needs.verify.outputs.verified_sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -189,10 +197,24 @@ jobs:
           fi
           remote_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$VERIFIED_TAG" --jq '.sha')"
           current_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq '.object.sha')"
-          if [[ "$remote_tag_sha" != "$VERIFIED_SHA" || "$current_main_sha" != "$VERIFIED_SHA" ]]; then
-            echo "::error::Remote tag or current main moved from $VERIFIED_SHA"
+          if [[ "$remote_tag_sha" != "$VERIFIED_SHA" || ! "$current_main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Remote tag or current main authority is malformed"
             exit 1
           fi
+          verify_publication_authority() {
+            local actual expected expected_main phase
+            phase="$1"
+            expected_main="$2"
+            actual="$(node --experimental-strip-types \
+              ./scripts/release-ref-authority.ts "publication-$phase" \
+              "$VERIFIED_TAG" "$VERIFIED_SHA" "$expected_main")"
+            expected="$(printf 'sha=%s\ntag=%s\nmain_sha=%s' \
+              "$VERIFIED_SHA" "$VERIFIED_TAG" "$expected_main")"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "::error::Publication authority output is malformed"
+              exit 1
+            fi
+          }
           release_endpoint="/repos/$GITHUB_REPOSITORY/releases/tags/$VERIFIED_TAG"
           release_lookup_stderr="$(mktemp)"
           trap 'rm -f "$release_lookup_stderr"' EXIT
@@ -224,16 +246,17 @@ jobs:
             node ./scripts/release-provider-outcome.mjs release-order
             current_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq '.object.sha')"
             remote_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$VERIFIED_TAG" --jq '.sha')"
-            if [[ "$current_main_sha" != "$VERIFIED_SHA" || "$remote_tag_sha" != "$VERIFIED_SHA" ]]; then
+            if [[ ! "$current_main_sha" =~ ^[0-9a-f]{40}$ || "$remote_tag_sha" != "$VERIFIED_SHA" ]]; then
               echo "::error::Release authority moved before publication"
               exit 1
             fi
+            verify_publication_authority prewrite "$current_main_sha"
             created_release="$(gh api \
               --method POST \
               "/repos/$GITHUB_REPOSITORY/releases" \
               -F draft=false \
               -F generate_release_notes=true \
-              -f make_latest=true \
+              -f make_latest=legacy \
               -f name="Wrench $VERIFIED_TAG" \
               -F prerelease=false \
               -f tag_name="$VERIFIED_TAG" \
@@ -247,7 +270,12 @@ jobs:
           latest_tag="$(gh api "/repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')"
           terminal_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$VERIFIED_TAG" --jq '.sha')"
           terminal_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq '.object.sha')"
-          if [[ "$latest_tag" != "$VERIFIED_TAG" || "$terminal_tag_sha" != "$VERIFIED_SHA" || "$terminal_main_sha" != "$VERIFIED_SHA" ]]; then
-            echo "::error::Release authority changed during publication"
+          verify_publication_authority postwrite "$terminal_main_sha"
+          if [[ "$terminal_tag_sha" != "$VERIFIED_SHA" ]]; then
+            echo "::error::Immutable release tag moved during publication"
+            exit 1
+          fi
+          if [[ "$latest_tag" != "$VERIFIED_TAG" ]]; then
+            echo "::error::Release $VERIFIED_TAG is immutable but no longer Latest; recover from the current immutable Latest Release"
             exit 1
           fi
