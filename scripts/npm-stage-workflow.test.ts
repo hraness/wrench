@@ -1406,7 +1406,18 @@ esac
     }
   });
 
-  test("rechecks main and exact-tag authority through two combined terminal advertisements", async () => {
+  type TerminalAdvertisementScenario =
+    | "publication"
+    | "governed-ref-rejection"
+    | "non-descendant-comparison"
+    | "malformed-comparison"
+    | "malformed-ref-set"
+    | "malformed-ref-row"
+    | "excessive-advertisement";
+
+  async function assertTerminalAdvertisementScenario(
+    scenario: TerminalAdvertisementScenario,
+  ): Promise<void> {
     const workflow = await readFile(stageWorkflowUrl, "utf8");
     const script = workflowStepScript(
       workflow,
@@ -1549,112 +1560,179 @@ esac
         TARBALL: tarball,
       });
 
-      const absent = await runWorkflowScript(script, {
-        ...baseEnvironment,
-        GIT_SNAPSHOT_STATUS: "absent",
-      });
-      expect(absent.exitCode, `${absent.stdout}\n${absent.stderr}`).toBe(0);
-      expect(await readFile(publishMarker, "utf8")).toBe("published\n");
-      const commands = await readFile(commandLog, "utf8");
-      const combinedCommand = "git ls-remote --sort=refname --refs https://github.com/hraness/wrench.git refs/heads/main refs/tags/v0.15.1";
-      const combinedIndexes = [...commands.matchAll(new RegExp(combinedCommand, "gu"))]
-        .map((match) => match.index);
-      const hashIndex = commands.indexOf("sha256sum");
-      const publishIndex = commands.indexOf("npm stage publish");
-      expect(combinedIndexes).toHaveLength(2);
-      expect(combinedIndexes[0]).toBeGreaterThan(-1);
-      expect(combinedIndexes[1]).toBeGreaterThan(combinedIndexes[0] ?? -1);
-      expect(hashIndex).toBeLessThan(combinedIndexes[0] ?? -1);
-      expect(publishIndex).toBeGreaterThan(combinedIndexes[1] ?? -1);
-
-      await rm(commandLog, { force: true });
-      await rm(gitCallCount, { force: true });
-      await rm(publishMarker, { force: true });
-      const descendant = await runWorkflowScript(script, {
-        ...baseEnvironment,
-        GIT_SNAPSHOT_STATUS: "descendant",
-      });
-      expect(descendant.exitCode, `${descendant.stdout}\n${descendant.stderr}`).toBe(0);
-      expect(await readFile(publishMarker, "utf8")).toBe("published\n");
-      expect(await readFile(commandLog, "utf8")).toContain(
-        `gh api /repos/hraness/wrench/compare/${sourceSha}...${driftSha}`,
-      );
-
-      for (const snapshotStatus of ["present", "failure", "main-drift", "tag-drift"] as const) {
-        await rm(commandLog, { force: true });
-        await rm(gitCallCount, { force: true });
-        await rm(publishMarker, { force: true });
-        const rejected = await runWorkflowScript(script, {
+      if (scenario === "publication") {
+        const absent = await runWorkflowScript(script, {
           ...baseEnvironment,
-          GIT_SNAPSHOT_STATUS: snapshotStatus,
+          GIT_SNAPSHOT_STATUS: "absent",
         });
-        expect(rejected.exitCode).not.toBe(0);
-        const output = `${rejected.stdout}${rejected.stderr}`;
-        if (snapshotStatus === "present") {
-          expect(output).toContain("Tag v0.15.1 exists at the terminal staging boundary");
-        } else if (snapshotStatus === "failure") {
-          expect(output).toContain("simulated remote lookup failure");
-        } else {
-          expect(output).toContain("Governed refs changed between terminal staging advertisements");
-        }
-        expect(await Bun.file(publishMarker).exists()).toBe(false);
-      }
+        expect(absent.exitCode, `${absent.stdout}\n${absent.stderr}`).toBe(0);
+        expect(await readFile(publishMarker, "utf8")).toBe("published\n");
+        const commands = await readFile(commandLog, "utf8");
+        const combinedCommand = "git ls-remote --sort=refname --refs https://github.com/hraness/wrench.git refs/heads/main refs/tags/v0.15.1";
+        const combinedIndexes = [...commands.matchAll(new RegExp(combinedCommand, "gu"))]
+          .map((match) => match.index);
+        const hashIndex = commands.indexOf("sha256sum");
+        const publishIndex = commands.indexOf("npm stage publish");
+        expect(combinedIndexes).toHaveLength(2);
+        expect(combinedIndexes[0]).toBeGreaterThan(-1);
+        expect(combinedIndexes[1]).toBeGreaterThan(combinedIndexes[0] ?? -1);
+        expect(hashIndex).toBeLessThan(combinedIndexes[0] ?? -1);
+        expect(publishIndex).toBeGreaterThan(combinedIndexes[1] ?? -1);
 
-      for (const comparisonStatus of [
-        "behind",
-        "divergent",
-        "zero-ahead",
-        "wrong-base",
-        "wrong-merge-base",
-        "wrong-terminal",
-        "malformed",
-        "failure",
-      ] as const) {
         await rm(commandLog, { force: true });
         await rm(gitCallCount, { force: true });
         await rm(publishMarker, { force: true });
-        const rejected = await runWorkflowScript(script, {
+        const descendant = await runWorkflowScript(script, {
           ...baseEnvironment,
-          COMPARISON_STATUS: comparisonStatus,
           GIT_SNAPSHOT_STATUS: "descendant",
         });
-        expect(rejected.exitCode).not.toBe(0);
-        expect(await Bun.file(publishMarker).exists()).toBe(false);
+        expect(descendant.exitCode, `${descendant.stdout}\n${descendant.stderr}`).toBe(0);
+        expect(await readFile(publishMarker, "utf8")).toBe("published\n");
+        expect(await readFile(commandLog, "utf8")).toContain(
+          `gh api /repos/hraness/wrench/compare/${sourceSha}...${driftSha}`,
+        );
       }
 
-      for (const snapshotStatus of [
-        "empty",
-        "missing-main",
-        "duplicate-main-same",
-        "duplicate-main-different",
-        "duplicate-tag",
-        "unexpected-ref",
-        "short-sha",
-        "uppercase-sha",
-        "bad-sha",
-        "space-row",
-        "no-tab",
-        "crlf",
-        "nul",
-        "invalid-utf8",
-        "no-final-newline",
-        "too-large",
-        "too-many",
-      ] as const) {
-        await rm(commandLog, { force: true });
-        await rm(gitCallCount, { force: true });
-        await rm(publishMarker, { force: true });
-        const rejected = await runWorkflowScript(script, {
-          ...baseEnvironment,
-          GIT_SNAPSHOT_STATUS: snapshotStatus,
-        });
-        expect(rejected.exitCode).not.toBe(0);
-        expect(await Bun.file(publishMarker).exists()).toBe(false);
+      if (scenario === "governed-ref-rejection") {
+        for (const snapshotStatus of ["present", "failure", "main-drift", "tag-drift"] as const) {
+          await rm(commandLog, { force: true });
+          await rm(gitCallCount, { force: true });
+          await rm(publishMarker, { force: true });
+          const rejected = await runWorkflowScript(script, {
+            ...baseEnvironment,
+            GIT_SNAPSHOT_STATUS: snapshotStatus,
+          });
+          expect(rejected.exitCode).not.toBe(0);
+          const output = `${rejected.stdout}${rejected.stderr}`;
+          if (snapshotStatus === "present") {
+            expect(output).toContain("Tag v0.15.1 exists at the terminal staging boundary");
+          } else if (snapshotStatus === "failure") {
+            expect(output).toContain("simulated remote lookup failure");
+          } else {
+            expect(output).toContain("Governed refs changed between terminal staging advertisements");
+          }
+          expect(await Bun.file(publishMarker).exists()).toBe(false);
+        }
+      }
+
+      if (scenario === "non-descendant-comparison") {
+        for (const comparisonStatus of [
+          "behind",
+          "divergent",
+          "zero-ahead",
+        ] as const) {
+          await rm(commandLog, { force: true });
+          await rm(gitCallCount, { force: true });
+          await rm(publishMarker, { force: true });
+          const rejected = await runWorkflowScript(script, {
+            ...baseEnvironment,
+            COMPARISON_STATUS: comparisonStatus,
+            GIT_SNAPSHOT_STATUS: "descendant",
+          });
+          expect(rejected.exitCode).not.toBe(0);
+          expect(await Bun.file(publishMarker).exists()).toBe(false);
+        }
+      }
+
+      if (scenario === "malformed-comparison") {
+        for (const comparisonStatus of [
+          "wrong-base",
+          "wrong-merge-base",
+          "wrong-terminal",
+          "malformed",
+          "failure",
+        ] as const) {
+          await rm(commandLog, { force: true });
+          await rm(gitCallCount, { force: true });
+          await rm(publishMarker, { force: true });
+          const rejected = await runWorkflowScript(script, {
+            ...baseEnvironment,
+            COMPARISON_STATUS: comparisonStatus,
+            GIT_SNAPSHOT_STATUS: "descendant",
+          });
+          expect(rejected.exitCode).not.toBe(0);
+          expect(await Bun.file(publishMarker).exists()).toBe(false);
+        }
+      }
+
+      if (scenario === "malformed-ref-set") {
+        for (const snapshotStatus of [
+          "empty",
+          "missing-main",
+          "duplicate-main-same",
+          "duplicate-main-different",
+          "duplicate-tag",
+          "unexpected-ref",
+        ] as const) {
+          await rm(commandLog, { force: true });
+          await rm(gitCallCount, { force: true });
+          await rm(publishMarker, { force: true });
+          const rejected = await runWorkflowScript(script, {
+            ...baseEnvironment,
+            GIT_SNAPSHOT_STATUS: snapshotStatus,
+          });
+          expect(rejected.exitCode).not.toBe(0);
+          expect(await Bun.file(publishMarker).exists()).toBe(false);
+        }
+      }
+
+      if (scenario === "malformed-ref-row") {
+        for (const snapshotStatus of [
+          "short-sha",
+          "uppercase-sha",
+          "bad-sha",
+          "space-row",
+          "no-tab",
+          "crlf",
+          "nul",
+          "invalid-utf8",
+          "no-final-newline",
+        ] as const) {
+          await rm(commandLog, { force: true });
+          await rm(gitCallCount, { force: true });
+          await rm(publishMarker, { force: true });
+          const rejected = await runWorkflowScript(script, {
+            ...baseEnvironment,
+            GIT_SNAPSHOT_STATUS: snapshotStatus,
+          });
+          expect(rejected.exitCode).not.toBe(0);
+          expect(await Bun.file(publishMarker).exists()).toBe(false);
+        }
+      }
+
+      if (scenario === "excessive-advertisement") {
+        for (const snapshotStatus of [
+          "too-large",
+          "too-many",
+        ] as const) {
+          await rm(commandLog, { force: true });
+          await rm(gitCallCount, { force: true });
+          await rm(publishMarker, { force: true });
+          const rejected = await runWorkflowScript(script, {
+            ...baseEnvironment,
+            GIT_SNAPSHOT_STATUS: snapshotStatus,
+          });
+          expect(rejected.exitCode).not.toBe(0);
+          expect(await Bun.file(publishMarker).exists()).toBe(false);
+        }
       }
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
-  });
+  }
+
+  test.each([
+    { label: "successful publication", scenario: "publication" },
+    { label: "governed-ref rejection", scenario: "governed-ref-rejection" },
+    { label: "non-descendant protected-main rejection", scenario: "non-descendant-comparison" },
+    { label: "malformed protected-main comparison rejection", scenario: "malformed-comparison" },
+    { label: "malformed ref-set rejection", scenario: "malformed-ref-set" },
+    { label: "malformed ref-row rejection", scenario: "malformed-ref-row" },
+    { label: "excessive advertisement rejection", scenario: "excessive-advertisement" },
+  ] as const)(
+    "rechecks main and exact-tag authority through two combined terminal advertisements: $label",
+    ({ scenario }) => assertTerminalAdvertisementScenario(scenario),
+  );
 
   test("validates and npm-installs the exact reported tarball", async () => {
     const smoke = await readFile(packageSmokeUrl, "utf8");
