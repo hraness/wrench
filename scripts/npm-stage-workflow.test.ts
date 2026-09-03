@@ -7264,6 +7264,18 @@ fi
     const manifest = JSON.parse(manifestText) as { readonly version: string };
     const exactPackage = `@hraness/wrench@${manifest.version}`;
     const nextReleaseVersion = "0.16.4";
+    const tagFailFastBoundary = 'set -eu\ncase "${STAGE_RUN_ID:-}" in';
+    const stageRunIdGuard = 'case "${STAGE_RUN_ID:-}" in';
+    const stageSourceBinding = 'C="$(gh api \\';
+    const stageSourceObjectProof = 'test "$(git rev-parse --verify "$C^{commit}")" = "$C"';
+    const stagedManifestRead = 'git show "${C}:package.json"';
+    const stagedPackageCoordinateProof =
+      `test "$package_coordinate" = "@hraness/wrench@${nextReleaseVersion}"`;
+    const sourceArtifactDownload = 'gh run download "$STAGE_RUN_ID" \\';
+    const registryArtifactDownload = `npm pack @hraness/wrench@${nextReleaseVersion} \\`;
+    const registryIdentityCheck = "bun run ./scripts/npm-package-identity.ts \\";
+    const registrySmokeCheck = "bun run ./scripts/package-smoke.ts \\";
+    const exactTagCommand = `git tag v${nextReleaseVersion} "$C"`;
     const oneTimeBootstrap =
       "This section records the one-time bootstrap of `@hraness/wrench@0.15.1`.";
     const doNotReuseBootstrap =
@@ -7293,7 +7305,34 @@ fi
       "scripts/npm-package-identity.ts",
       "--source-archive \"$wrench_npm_archive\"",
       "--registry-archive \"$wrench_registry_archive\"",
-      `git tag v${nextReleaseVersion}`,
+      tagFailFastBoundary,
+      stageRunIdGuard,
+      stageSourceBinding,
+      ".workflow_id == 344213783",
+      '.name == "Stage npm package"',
+      '.path == ".github/workflows/npm-stage.yml"',
+      '.event == "workflow_dispatch"',
+      '.head_branch == "main"',
+      '.status == "completed"',
+      '.conclusion == "success"',
+      ".run_attempt == 1",
+      'test "${#C}" -eq 40',
+      '*[!0-9a-f]*) exit 1 ;;',
+      'test "$(git cat-file -t "$C")" = commit',
+      stageSourceObjectProof,
+      stagedManifestRead,
+      'JSON.parse(require("node:fs").readFileSync(0, "utf8"))',
+      'manifest?.name !== "@hraness/wrench"',
+      `manifest?.version !== "${nextReleaseVersion}"`,
+      stagedPackageCoordinateProof,
+      sourceArtifactDownload,
+      'wrench_source_name="npm-package-0.16.4-$C-$STAGE_RUN_ID-1"',
+      '--name "$wrench_source_name"',
+      registryArtifactDownload,
+      registryIdentityCheck,
+      registrySmokeCheck,
+      `--expected-version ${nextReleaseVersion}`,
+      exactTagCommand,
       "npm stage approve <stage-id>",
       "The exact npm keyword list is checked by `scripts/package-smoke.ts`",
       "Repository topics are maintainer-managed discovery",
@@ -7509,10 +7548,28 @@ fi
     const commands = npmCommands(guide);
     expect(commands.length).toBeGreaterThan(0);
     for (const command of commands) expect(command).toContain(`--registry=${npmRegistry}`);
+    expect(guide.split("\n")).toContain(exactTagCommand);
+    expect(guide.split("\n")).not.toContain(`git tag v${nextReleaseVersion}`);
+    const stageSectionIndex = guide.indexOf("## Stage a later version");
+    const stageIndexOf = (value: string) => guide.indexOf(value, stageSectionIndex);
+    expect(stageIndexOf(tagFailFastBoundary)).toBeLessThan(stageIndexOf(stageSourceBinding));
+    expect(stageIndexOf(stageRunIdGuard)).toBeLessThan(stageIndexOf(stageSourceBinding));
+    expect(stageIndexOf(stageSourceBinding)).toBeLessThan(stageIndexOf(stageSourceObjectProof));
+    expect(stageIndexOf(stageSourceObjectProof)).toBeLessThan(stageIndexOf(stagedManifestRead));
+    expect(stageIndexOf(stagedManifestRead))
+      .toBeLessThan(stageIndexOf(stagedPackageCoordinateProof));
+    expect(stageIndexOf(stagedPackageCoordinateProof))
+      .toBeLessThan(stageIndexOf(sourceArtifactDownload));
+    expect(stageIndexOf(sourceArtifactDownload))
+      .toBeLessThan(stageIndexOf(registryArtifactDownload));
+    expect(stageIndexOf(registryArtifactDownload))
+      .toBeLessThan(stageIndexOf(registryIdentityCheck));
+    expect(stageIndexOf(registryIdentityCheck)).toBeLessThan(stageIndexOf(registrySmokeCheck));
+    expect(stageIndexOf(registrySmokeCheck)).toBeLessThan(stageIndexOf(exactTagCommand));
     expect(guide.indexOf("npm publish \"$wrench_npm_archive\""))
       .toBeLessThan(guide.indexOf("npm trust github @hraness/wrench"));
     expect(guide.indexOf("npm trust github @hraness/wrench"))
-      .toBeLessThan(guide.indexOf(`git tag v${nextReleaseVersion}`));
+      .toBeLessThan(guide.indexOf(exactTagCommand));
 
     expect(agents).toContain("Follow `docs/publishing.md`");
     expect(agents).toContain("automatically enter the exact staging pipeline");

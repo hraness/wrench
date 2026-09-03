@@ -267,14 +267,71 @@ npm stage reject <stage-id> \
 
 To complete the repaired release, download and smoke
 `@hraness/wrench@0.16.4` after approving its fresh stage. Keep the public
-coordinate and tag literal through the final registry checks, then create
-`v0.16.4` on the exact staged source commit:
+coordinate and tag literal through the final registry checks. Set
+`STAGE_RUN_ID` to the numeric ID of the exact inspected successful manual
+staging run. Resolve `C` from that run rather than ambient `HEAD`, and require
+the full lowercase commit object locally before creating `v0.16.4`:
 
 ```sh
+set -eu
+case "${STAGE_RUN_ID:-}" in
+  ""|*[!0-9]*) exit 1 ;;
+esac
+C="$(gh api \
+  "/repos/hraness/wrench/actions/runs/$STAGE_RUN_ID" \
+  --jq 'select(
+    .workflow_id == 344213783 and
+    .name == "Stage npm package" and
+    .path == ".github/workflows/npm-stage.yml" and
+    .event == "workflow_dispatch" and
+    .head_branch == "main" and
+    .status == "completed" and
+    .conclusion == "success" and
+    .run_attempt == 1
+  ) | .head_sha')"
+test "${#C}" -eq 40
+case "$C" in
+  *[!0-9a-f]*) exit 1 ;;
+esac
+test "$(git cat-file -t "$C")" = commit
+test "$(git rev-parse --verify "$C^{commit}")" = "$C"
+package_coordinate="$(
+  git show "${C}:package.json" |
+    node -e 'const manifest = JSON.parse(require("node:fs").readFileSync(0, "utf8")); if (manifest?.name !== "@hraness/wrench" || manifest?.version !== "0.16.4") process.exit(1); process.stdout.write(`${manifest.name}@${manifest.version}`);'
+)"
+test "$package_coordinate" = "@hraness/wrench@0.16.4"
+wrench_source_artifact="$(mktemp -d)"
+wrench_source_name="npm-package-0.16.4-$C-$STAGE_RUN_ID-1"
+gh run download "$STAGE_RUN_ID" \
+  --repo hraness/wrench \
+  --name "$wrench_source_name" \
+  --dir "$wrench_source_artifact"
+wrench_npm_archive="$wrench_source_artifact/hraness-wrench-0.16.4.tgz"
+wrench_npm_json="$wrench_source_artifact/npm-pack.json"
+wrench_registry_artifact="$(mktemp -d)"
+wrench_registry_json="$wrench_registry_artifact/npm-pack.json"
+wrench_registry_view_json="$wrench_registry_artifact/npm-view.json"
+npm pack @hraness/wrench@0.16.4 \
+  --ignore-scripts \
+  --json \
+  --pack-destination "$wrench_registry_artifact" \
+  --registry=https://registry.npmjs.org > "$wrench_registry_json"
 npm view @hraness/wrench@0.16.4 name version dist \
   --json \
-  --registry=https://registry.npmjs.org
-git tag v0.16.4
+  --registry=https://registry.npmjs.org > "$wrench_registry_view_json"
+wrench_registry_archive="$wrench_registry_artifact/hraness-wrench-0.16.4.tgz"
+bun run ./scripts/npm-package-identity.ts \
+  --source-archive "$wrench_npm_archive" \
+  --source-pack-json "$wrench_npm_json" \
+  --registry-archive "$wrench_registry_archive" \
+  --registry-pack-json "$wrench_registry_json" \
+  --registry-view-json "$wrench_registry_view_json" \
+  --expected-name @hraness/wrench \
+  --expected-version 0.16.4
+bun run ./scripts/package-smoke.ts \
+  --archive "$wrench_registry_archive" \
+  --pack-json "$wrench_registry_json"
+git tag v0.16.4 "$C"
 git push origin refs/tags/v0.16.4
 ```
 
