@@ -945,14 +945,14 @@ describe("npm publication contract", () => {
     expect(artifact).toContain('from "./package-budget.js"');
     expect(smoke).toContain('from "./package-budget.js"');
     expect(budget).toContain("two npm 11.19.0 packs");
-    expect(budget).toContain("2,157,644 packed bytes");
-    expect(budget).toContain("11,909,660 unpacked bytes, and 451 files");
+    expect(budget).toContain("2,157,669 packed bytes");
+    expect(budget).toContain("11,909,764 unpacked bytes, and 451 files");
     expect(budget).toContain(
-      "9091a5ed7367073df1dc255933cf49f077f31257d51f67b4b2af43958df531bc",
+      "16c9f24cf05d416ba25ff16ea3f6edc0784276c53bdf84e045d19714fbdd516a",
     );
     expect(budget).toContain("measured a 3,543-byte Linux/macOS gzip spread");
-    expect(budget).toContain("Keep 7,356 packed bytes");
-    expect(budget).toContain("15,340 unpacked bytes of bounded headroom");
+    expect(budget).toContain("Keep 7,331 packed bytes");
+    expect(budget).toContain("15,236 unpacked bytes of bounded headroom");
     expect(MAX_PACKED_BYTES).toBe(2_165_000);
     expect(MAX_PACKED_ENTRIES).toBe(451);
     expect(MAX_PACKED_FILES).toBe(451);
@@ -1031,12 +1031,12 @@ describe("npm publication contract", () => {
   test("keeps one truthful Wrench 0.16.3 changelog section", async () => {
     const changelog = await readFile(changelogUrl, "utf8");
     const unreleasedHeader = "## Unreleased\n";
-    const releaseHeader = "## 0.16.3 - 2026-09-02\n";
+    const releaseHeader = "## 0.16.3 - 2026-09-03\n";
     const unreleasedStart = changelog.indexOf(unreleasedHeader);
     const releaseStart = changelog.indexOf(releaseHeader);
 
     expect(changelog.match(/^## Unreleased$/gmu) ?? []).toHaveLength(1);
-    expect(changelog.match(/^## 0\.16\.3 - 2026-09-02$/gmu) ?? []).toHaveLength(1);
+    expect(changelog.match(/^## 0\.16\.3 - 2026-09-03$/gmu) ?? []).toHaveLength(1);
     expect(unreleasedStart).toBeGreaterThan(-1);
     expect(releaseStart).toBeGreaterThan(unreleasedStart);
     expect(changelog.slice(unreleasedStart + unreleasedHeader.length, releaseStart).trim()).toBe("");

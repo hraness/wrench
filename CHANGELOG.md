@@ -14,7 +14,7 @@ coordinate that completed both checks.
   and Puerto Rico MLS public-search blockers instead of shipping capture-required
   stubs.
 
-## 0.16.3 - 2026-09-02
+## 0.16.3 - 2026-09-03
 
 - Redesign the release-bound product site around a result-first hero, a
   three-step proof, a capability fact grid, a verified install block, and
@@ -22,11 +22,11 @@ coordinate that completed both checks.
   and compact-layout coverage.
 - Publish an Omarchy desktop-root news take that keeps a session-wide host
   privilege grant distinct from one named, release-attested Wrench operation.
-- Bind production promotion to the immutable npm and GitHub release, exact
-  current-main workflow source, a one-repository release App, an explicit
-  expected-old Git lease, and terminal Vercel outcome evidence. Keep the
-  established production ref protected against deletion, non-fast-forward
-  movement, and ordinary-writer updates.
+- Bind production promotion to the immutable npm and GitHub release, a reviewed
+  main-origin workflow source between that release and protected current main,
+  a one-repository release App, an explicit expected-old Git lease, and terminal
+  Vercel outcome evidence. Keep the established production ref protected
+  against deletion, non-fast-forward movement, and ordinary-writer updates.
 - Resolve annotated release tags through their exact peeled commits, retain Git
   metadata in Vercel builds, exhaust paginated GitHub comparisons, and recover
   website promotion without weakening exact source, tag, or provider identity.
