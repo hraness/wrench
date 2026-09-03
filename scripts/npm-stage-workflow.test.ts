@@ -4884,6 +4884,7 @@ fi
     ): ProviderJson => ({
       draft: false,
       id,
+      immutable: true,
       prerelease: false,
       tag_name: tagName,
       ...overrides,
@@ -4925,6 +4926,22 @@ fi
         verifiedTag: providerTag,
       })).rejects.toThrow(`is not newer than ${current}`);
     }
+
+    await expect(assertReleaseTagNewerThanPublished({
+      api: releaseApi([publishedRelease(1, "v0.16.1", { immutable: false })]),
+      repository: providerRepository,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("Published stable Release v0.16.1 is not immutable");
+    await expect(assertReleaseTagNewerThanPublished({
+      api: releaseApi([{ draft: false, id: 1, prerelease: false, tag_name: "v0.16.1" }]),
+      repository: providerRepository,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("published releases page 1 item 0 immutable is not a boolean");
+    await expect(assertReleaseTagNewerThanPublished({
+      api: releaseApi([publishedRelease(1, "v0.16.1", { immutable: "true" })]),
+      repository: providerRepository,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("published releases page 1 item 0 immutable is not a boolean");
 
     const overCap = Array.from(
       { length: 501 },

@@ -939,13 +939,17 @@ export async function assertReleaseTagNewerThanPublished({ api, repository, veri
         `published releases page ${String(page)} item ${String(index)} tag_name`,
       );
       const current = stableVersion(currentTag, "published release tag");
-      if (
-        !draft &&
-        !prerelease &&
-        current !== undefined &&
-        compareStableVersions(next, current) <= 0
-      ) {
-        fail(`Release ${tag} is not newer than ${currentTag}`);
+      if (!draft && !prerelease && current !== undefined) {
+        const immutable = expectBoolean(
+          release.immutable,
+          `published releases page ${String(page)} item ${String(index)} immutable`,
+        );
+        if (!immutable) {
+          fail(`Published stable Release ${currentTag} is not immutable`);
+        }
+        if (compareStableVersions(next, current) <= 0) {
+          fail(`Release ${tag} is not newer than ${currentTag}`);
+        }
       }
     }
     if (rawPage.length < PAGE_SIZE) exhausted = true;
