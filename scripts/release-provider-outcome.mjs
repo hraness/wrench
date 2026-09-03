@@ -947,6 +947,10 @@ export async function assertReleaseTagNewerThanPublished({ api, repository, veri
         if (!immutable) {
           fail(`Published stable Release ${currentTag} is not immutable`);
         }
+        parseSecondTimestamp(
+          release.published_at,
+          `published releases page ${String(page)} item ${String(index)} published_at`,
+        );
         if (compareStableVersions(next, current) <= 0) {
           fail(`Release ${tag} is not newer than ${currentTag}`);
         }

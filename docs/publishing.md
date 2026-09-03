@@ -204,6 +204,15 @@ immutable Releases determine completed-release ordering.
 5. Download and smoke the public registry package.
 6. Create the matching `v<version>` tag on the staged source commit.
 
+The tag-push Release workflow intentionally executes source `S=C`: GitHub loads
+the workflow bytes from the tagged product/source commit. Release-control bytes
+in `C` must therefore contain the final reviewed repair before the tag exists.
+For v0.16.3, do not create a tag from
+`c2d956ca4102d38c29e24ca4e13f26ce862b47f3` or reuse any stage produced from a
+source that predates this repair. If release controls change materially after
+staging, that stage is ineligible for tagging; create and verify a fresh stage
+from the final repaired descendant.
+
 The read-only classifier compares the current and prior `package.json` files. A
 manifest edit with an unchanged version succeeds without running the verify or
 OIDC jobs. A prerelease, malformed version, downgrade, unavailable push base, or
@@ -373,9 +382,10 @@ make a later main fast-forward safe across the unavoidable final read-to-POST
 window. The terminal readback repeats both the authenticated API checks and the
 combined-advertisement helper. The POST uses `make_latest=legacy`; a higher raw
 `v*` tag is only another queued request, while bounded published immutable
-Releases define completed ordering. If another immutable Release safely becomes
-Latest during publication, this release remains valid and the workflow fails
-with explicit recovery guidance for the new Latest coordinate.
+Releases define completed ordering. If the terminal readback observes another
+immutable Release as Latest, this release remains valid and the workflow fails
+with explicit recovery guidance for the observed Latest coordinate. A
+supersession after that final read is not observable by the completed workflow.
 
 Immediately before the tag push that dispatches **Release**, a signed-in
 administrator must read back immutable Releases as `enabled=true`. The workflow

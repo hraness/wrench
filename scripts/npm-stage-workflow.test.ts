@@ -1685,6 +1685,8 @@ esac
 
     expect(workflow).not.toContain("workflow_dispatch:");
     expect(workflow).toContain("ref: refs/tags/${{ steps.request.outputs.tag }}");
+    expect(workflow).toContain("fetch-depth: 1");
+    expect(workflow).toContain("persist-credentials: false");
 
     try {
       const runCase = async (
@@ -4886,6 +4888,7 @@ fi
       id,
       immutable: true,
       prerelease: false,
+      published_at: "2026-08-29T14:00:00Z",
       tag_name: tagName,
       ...overrides,
     });
@@ -4942,6 +4945,24 @@ fi
       repository: providerRepository,
       verifiedTag: providerTag,
     })).rejects.toThrow("published releases page 1 item 0 immutable is not a boolean");
+    await expect(assertReleaseTagNewerThanPublished({
+      api: releaseApi([{
+        draft: false,
+        id: 1,
+        immutable: true,
+        prerelease: false,
+        tag_name: "v0.16.1",
+      }]),
+      repository: providerRepository,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("published releases page 1 item 0 published_at is not a string");
+    for (const publishedAt of [null, "not-a-timestamp"] as const) {
+      await expect(assertReleaseTagNewerThanPublished({
+        api: releaseApi([publishedRelease(1, "v0.16.1", { published_at: publishedAt })]),
+        repository: providerRepository,
+        verifiedTag: providerTag,
+      })).rejects.toThrow("published releases page 1 item 0 published_at");
+    }
 
     const overCap = Array.from(
       { length: 501 },
@@ -7068,6 +7089,9 @@ fi
       "The Release lookup accepts only an exact REST 200",
       "Only an authenticated exact 404 permits one REST create request",
       "does not use opaque `gh release view` or\n`gh release create` commands",
+      "tag-push Release workflow intentionally executes source `S=C`",
+      "`c2d956ca4102d38c29e24ca4e13f26ce862b47f3` or reuse any stage produced from a\nsource that predates this repair",
+      "If release controls change materially after\nstaging, that stage is ineligible for tagging",
       "signed-in\nadministrator must read back immutable Releases as `enabled=true`",
       "X-GitHub-Api-Version: 2026-03-10",
       "/repos/hraness/wrench/immutable-releases",
