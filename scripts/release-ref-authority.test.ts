@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -62,6 +62,7 @@ function fixture(options: Readonly<{
   higherTagKind?: "annotated" | "lightweight";
   mainAtRelease?: boolean;
   requestedTagKind?: "annotated" | "lightweight";
+  workflowDrift?: boolean;
 }> = {}): Fixture {
   const root = mkdtempSync(join(tmpdir(), "wrench-release-ref-authority-"));
   temporaryRoots.push(root);
@@ -97,6 +98,11 @@ function fixture(options: Readonly<{
     for (const value of ["one", "two"] as const) {
       writeFileSync(join(source, `${value}.txt`), `${value}\n`);
       git(source, ["add", `${value}.txt`]);
+      if (value === "one" && options.workflowDrift === true) {
+        mkdirSync(join(source, ".github", "workflows"), { recursive: true });
+        writeFileSync(join(source, ".github", "workflows", "drift.yml"), "name: drift\n");
+        git(source, ["add", ".github/workflows/drift.yml"]);
+      }
       git(source, ["commit", "--no-gpg-sign", "-m", value]);
       if (value === "one") workflowSha = text(source, ["rev-parse", "HEAD"]);
     }
@@ -395,6 +401,15 @@ describe("Wrench release and promotion ref authority", () => {
       runner: drift.runner,
       workflowSha: driftInput.mainSha,
     })).toThrow("changed during verification");
+
+    const workflowDrift = fixture({ workflowDrift: true });
+    checkoutRelease(workflowDrift);
+    expect(() => verifyReleaseRefAuthority({
+      mode: "release",
+      requestedTag: "v1.0.0",
+      runner: runnerFor(workflowDrift).runner,
+      workingDirectory: workflowDrift.work,
+    })).toThrow("different workflow definitions");
   });
 
   test("binds two combined advertisements immediately before publication", () => {
@@ -470,6 +485,19 @@ describe("Wrench release and promotion ref authority", () => {
         sha: supersededRawTag.releaseSha,
         tag: "v1.0.0",
       });
+    }
+
+    for (const phase of ["prewrite", "postwrite"] as const) {
+      const workflowDrift = fixture({ workflowDrift: true });
+      checkoutSha(workflowDrift, workflowDrift.releaseSha);
+      expect(() => verifyReleasePublicationAuthority({
+        expectedMainSha: workflowDrift.mainSha,
+        expectedReleaseSha: workflowDrift.releaseSha,
+        phase,
+        requestedTag: "v1.0.0",
+        runner: runnerFor(workflowDrift).runner,
+        workingDirectory: workflowDrift.work,
+      })).toThrow(`different workflow definitions at ${phase}`);
     }
   });
 });

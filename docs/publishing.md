@@ -223,10 +223,11 @@ checkout of the event source `C`. They bind the advertised protected `main`
 tip `M` twice, import only that governed history under a temporary private ref,
 and require `C=M` or strict linear ancestry `C<M`. A later no-version-change
 push may therefore advance `main` during the long package gate without
-stranding the artifact already bound to `C`. For a push, the classifier also
-requires GitHub's exact nonzero `before` commit to be present and an ancestor
-of `C`, removes the ref, and reads the prior manifest by object ID. Manual
-recovery has no prior commit. Neither path uses a broad ref fetch, a forced
+changing the artifact already bound to `C`; a later workflow change still makes
+that stage ineligible for tagging under the rule above. For a push, the
+classifier also requires GitHub's exact nonzero `before` commit to be present
+and an ancestor of `C`, removes the ref, and reads the prior manifest by object
+ID. Manual recovery has no prior commit. Neither path uses a broad ref fetch, a forced
 refspec, or `FETCH_HEAD` as authority.
 
 If the automatic run did not start or failed before npm accepted the stage,
@@ -371,16 +372,24 @@ checking Latest. It does not use opaque `gh release view` or
 `gh release create` commands, so hidden requests cannot escape the bounded
 control path. The direct lightweight tag must remain on the verified release
 commit `C`, and protected linear `main` at each observation must equal or
-descend from `C`. After completed-release-order validation and immediately
-before the irreversible create request, authenticated GitHub API reads still
-bind both coordinates. The release-ref helper then observes
+descend from `C`. That descendant movement is release-authority-safe only while
+`git diff --quiet --no-ext-diff --no-textconv C M -- .github/workflows`
+confirms that the workflow definitions are unchanged. The early release check
+and both publication-boundary checks enforce that condition using the exact
+imported `C` and `M` objects. After completed-release-order validation and
+immediately before the irreversible create request, authenticated GitHub API
+reads still bind both coordinates. The release-ref helper then observes
 the combined governed `main` and `refs/tags/v*` advertisement twice, through
 one `ls-remote` connection per observation, and requires the two canonical
 advertisements to be equal. This is a bounded repeated observation, not an
 atomic provider snapshot. Protected tag immutability and monotonic main ancestry
-make a later main fast-forward safe across the unavoidable final read-to-POST
-window. The terminal readback repeats both the authenticated API checks and the
-combined-advertisement helper. The POST uses `make_latest=legacy`; a higher raw
+keep a later main fast-forward from changing `C`; that movement remains
+release-authority-safe only when it also preserves the workflow definitions.
+The terminal readback repeats both the authenticated API checks and the
+combined-advertisement helper, including the workflow-tree comparison. A
+workflow change in the irreducible prewrite-to-POST window may make GitHub's
+Release POST fail closed; the workflow never deletes, patches, or rolls back a
+Release in response. The POST uses `make_latest=legacy`; a higher raw
 `v*` tag is only another queued request, while bounded published immutable
 Releases define completed ordering. If the terminal readback observes another
 immutable Release as Latest, this release remains valid and the workflow fails

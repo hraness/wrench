@@ -468,6 +468,18 @@ export function verifyReleaseRefAuthority(input: ReleaseRefAuthorityInput): Rele
     if (runner(["merge-base", "--is-ancestor", tag.objectName, LOCAL_MAIN_REF]).exitCode !== 0) {
       fail("Verified release commit is not an ancestor of exact advertised main.");
     }
+    if (runner([
+      "diff",
+      "--quiet",
+      "--no-ext-diff",
+      "--no-textconv",
+      tag.objectName,
+      LOCAL_MAIN_REF,
+      "--",
+      ".github/workflows",
+    ]).exitCode !== 0) {
+      fail("Release commit and advertised main have different workflow definitions.");
+    }
   } else {
     if (input.workflowSha !== head) {
       fail("Promotion helper is not executing from the exact verified workflow source.");
@@ -561,6 +573,18 @@ export function verifyReleasePublicationAuthority(
   ) fail("Imported publication tag is not the advertised direct lightweight commit.");
   if (runner(["merge-base", "--is-ancestor", input.expectedReleaseSha, PUBLICATION_MAIN_REF]).exitCode !== 0) {
     fail("Verified release commit is not an ancestor of authenticated current main.");
+  }
+  if (runner([
+    "diff",
+    "--quiet",
+    "--no-ext-diff",
+    "--no-textconv",
+    input.expectedReleaseSha,
+    PUBLICATION_MAIN_REF,
+    "--",
+    ".github/workflows",
+  ]).exitCode !== 0) {
+    fail(`Release commit and authenticated current main have different workflow definitions at ${input.phase}.`);
   }
   command(
     runner,

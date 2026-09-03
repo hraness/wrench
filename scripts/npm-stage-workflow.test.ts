@@ -2254,6 +2254,11 @@ elif [[ "$args" == "-c credential.helper= -c core.hooksPath=/dev/null fetch --no
   : > "$IMPORTED_TAG_STATE"
 elif [[ "$args" == "-c credential.helper= -c core.hooksPath=/dev/null merge-base --is-ancestor $VERIFIED_SHA refs/wrench-release/publication-main" ]]; then
   [[ "$ANCESTRY_MODE" == "valid" ]]
+elif [[ "$args" == "-c credential.helper= -c core.hooksPath=/dev/null diff --quiet --no-ext-diff --no-textconv $VERIFIED_SHA refs/wrench-release/publication-main -- .github/workflows" ]]; then
+  if [[ "$WORKFLOW_DRIFT_MODE" == "always" ||
+        ( "$WORKFLOW_DRIFT_MODE" == "postwrite" && -f "$RELEASE_CREATED_STATE" ) ]]; then
+    exit 1
+  fi
 elif [[ "$args" == "-c credential.helper= -c core.hooksPath=/dev/null update-ref -d refs/wrench-release/publication-main $current_remote_main" ]]; then
   rm -f "$IMPORTED_MAIN_STATE"
 elif [[ "$args" == "-c credential.helper= -c core.hooksPath=/dev/null update-ref -d refs/wrench-release/publication-tag $REMOTE_TAG_OID" ]]; then
@@ -2361,6 +2366,7 @@ fi
         TAG_OBJECT_SHA: tagObjectSha,
         VERIFIED_SHA: peeledCommitSha,
         VERIFIED_TAG: "v0.16.2",
+        WORKFLOW_DRIFT_MODE: "stable",
       });
       const runCase = async (
         overrides: Readonly<Record<string, string>>,
@@ -2442,6 +2448,32 @@ fi
       );
       expect(postPrewriteGitCommands.match(/ls-remote --sort=refname --refs/gu) ?? [])
         .toHaveLength(4);
+      expect(postPrewriteGitCommands.match(
+        /diff --quiet --no-ext-diff --no-textconv .* refs\/wrench-release\/publication-main -- \.github\/workflows/gu,
+      ) ?? []).toHaveLength(2);
+
+      const prewriteWorkflowDrift = await runCase({
+        ALLOW_CREATE: "true",
+        LOOKUP_MODE: "missing",
+        WORKFLOW_DRIFT_MODE: "always",
+      });
+      expect(prewriteWorkflowDrift.exitCode).not.toBe(0);
+      expect(`${prewriteWorkflowDrift.stdout}\n${prewriteWorkflowDrift.stderr}`)
+        .toContain("different workflow definitions at prewrite");
+      expect(await readFile(commandLog, "utf8")).not.toContain("--method POST");
+
+      const postwriteWorkflowDrift = await runCase({
+        ALLOW_CREATE: "true",
+        LOOKUP_MODE: "missing",
+        WORKFLOW_DRIFT_MODE: "postwrite",
+      });
+      expect(postwriteWorkflowDrift.exitCode).not.toBe(0);
+      expect(`${postwriteWorkflowDrift.stdout}\n${postwriteWorkflowDrift.stderr}`)
+        .toContain("different workflow definitions at postwrite");
+      const postwriteDriftCommands = await readFile(commandLog, "utf8");
+      expect(postwriteDriftCommands).toContain("--method POST");
+      expect(postwriteDriftCommands).not.toContain("--method DELETE");
+      expect(postwriteDriftCommands).not.toContain("--method PATCH");
 
       const concurrentSupersession = await runCase({
         ALLOW_CREATE: "true",
@@ -7092,6 +7124,10 @@ fi
       "tag-push Release workflow intentionally executes source `S=C`",
       "`c2d956ca4102d38c29e24ca4e13f26ce862b47f3` or reuse any stage produced from a\nsource that predates this repair",
       "If release controls change materially after\nstaging, that stage is ineligible for tagging",
+      "git diff --quiet --no-ext-diff --no-textconv C M -- .github/workflows",
+      "descendant movement is release-authority-safe only while",
+      "workflow change in the irreducible prewrite-to-POST window",
+      "never deletes, patches, or rolls back a\nRelease in response",
       "signed-in\nadministrator must read back immutable Releases as `enabled=true`",
       "X-GitHub-Api-Version: 2026-03-10",
       "/repos/hraness/wrench/immutable-releases",
