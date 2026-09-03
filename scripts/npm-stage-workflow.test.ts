@@ -945,14 +945,14 @@ describe("npm publication contract", () => {
     expect(artifact).toContain('from "./package-budget.js"');
     expect(smoke).toContain('from "./package-budget.js"');
     expect(budget).toContain("two npm 11.19.0 packs");
-    expect(budget).toContain("2,157,669 packed bytes");
-    expect(budget).toContain("11,909,764 unpacked bytes, and 451 files");
+    expect(budget).toContain("2,158,266 packed bytes");
+    expect(budget).toContain("11,911,298 unpacked bytes, and 451 files");
     expect(budget).toContain(
-      "16c9f24cf05d416ba25ff16ea3f6edc0784276c53bdf84e045d19714fbdd516a",
+      "3c2a51d706cdc5a34e7e88cfd850f727d344e957856deea4fae2809232100fa3",
     );
     expect(budget).toContain("measured a 3,543-byte Linux/macOS gzip spread");
-    expect(budget).toContain("Keep 7,331 packed bytes");
-    expect(budget).toContain("15,236 unpacked bytes of bounded headroom");
+    expect(budget).toContain("Keep 6,734 packed bytes");
+    expect(budget).toContain("13,702 unpacked bytes of bounded headroom");
     expect(MAX_PACKED_BYTES).toBe(2_165_000);
     expect(MAX_PACKED_ENTRIES).toBe(451);
     expect(MAX_PACKED_FILES).toBe(451);
@@ -1028,21 +1028,25 @@ describe("npm publication contract", () => {
     }
   });
 
-  test("keeps one truthful Wrench 0.16.3 changelog section", async () => {
+  test("keeps separate truthful Wrench 0.16.3 and 0.16.4 changelog sections", async () => {
     const changelog = await readFile(changelogUrl, "utf8");
     const unreleasedHeader = "## Unreleased\n";
-    const releaseHeader = "## 0.16.3 - 2026-09-03\n";
+    const releaseHeader = "## 0.16.4 - 2026-09-03\n";
+    const incidentHeader = "## 0.16.3 - 2026-09-01\n";
     const unreleasedStart = changelog.indexOf(unreleasedHeader);
     const releaseStart = changelog.indexOf(releaseHeader);
+    const incidentStart = changelog.indexOf(incidentHeader);
 
     expect(changelog.match(/^## Unreleased$/gmu) ?? []).toHaveLength(1);
-    expect(changelog.match(/^## 0\.16\.3 - 2026-09-03$/gmu) ?? []).toHaveLength(1);
+    expect(changelog.match(/^## 0\.16\.4 - 2026-09-03$/gmu) ?? []).toHaveLength(1);
+    expect(changelog.match(/^## 0\.16\.3 - 2026-09-01$/gmu) ?? []).toHaveLength(1);
     expect(unreleasedStart).toBeGreaterThan(-1);
     expect(releaseStart).toBeGreaterThan(unreleasedStart);
+    expect(incidentStart).toBeGreaterThan(releaseStart);
     expect(changelog.slice(unreleasedStart + unreleasedHeader.length, releaseStart).trim()).toBe("");
 
     const nextReleaseStart = changelog.indexOf("\n## ", releaseStart + releaseHeader.length);
-    expect(nextReleaseStart).toBeGreaterThan(releaseStart);
+    expect(nextReleaseStart).toBe(incidentStart - 1);
     const releaseSection = changelog.slice(releaseStart, nextReleaseStart);
     for (const requiredFact of [
       "Omarchy",
@@ -1059,6 +1063,25 @@ describe("npm publication contract", () => {
     expect(releaseSection).not.toContain("CreateTweet");
     expect(releaseSection).not.toContain("UserTweets");
     expect(releaseSection).not.toContain("SearchTimeline");
+
+    const nextIncidentStart = changelog.indexOf("\n## ", incidentStart + incidentHeader.length);
+    expect(nextIncidentStart).toBeGreaterThan(incidentStart);
+    const incidentSection = changelog.slice(incidentStart, nextIncidentStart);
+    const normalizedIncidentSection = incidentSection.replace(/\s+/gu, " ");
+    for (const retainedFact of [
+      "stale-source npm-only",
+      "npm published it on 2026-09-03",
+      "no matching Git tag, GitHub Release, or production promotion",
+      "not a completed Wrench release",
+      "CreateTweet",
+      "UserTweets",
+      "SearchTimeline",
+      "cleanup-required",
+    ] as const) {
+      expect(normalizedIncidentSection).toContain(retainedFact);
+    }
+    expect(incidentSection).not.toContain("Apple Photos");
+    expect(incidentSection).not.toContain("WhatsApp Message Like Me");
   });
 
   test("separates read-only classification and verification from checkout-free terminal staging", async () => {

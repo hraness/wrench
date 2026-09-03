@@ -7,48 +7,14 @@ coordinate that completed both checks.
 
 ## Unreleased
 
+## 0.16.4 - 2026-09-03
+
 - Add public `clasificados-web listings.search` for reviewed San Juan rental
   list pages. Return canonical listing URLs, rent, beds, baths, and a
   neighborhood derived from street, ZIP, known address, or list-card
   coordinates rather than broker copy. Document the Zillow-group PerimeterX
   and Puerto Rico MLS public-search blockers instead of shipping capture-required
   stubs.
-
-## 0.16.3 - 2026-09-03
-
-- Redesign the release-bound product site around a result-first hero, a
-  three-step proof, a capability fact grid, a verified install block, and
-  explicit CLI, SDK, and Agent Skill paths while retaining canonical metadata
-  and compact-layout coverage.
-- Publish an Omarchy desktop-root news take that keeps a session-wide host
-  privilege grant distinct from one named, release-attested Wrench operation.
-- Bind production promotion to the immutable npm and GitHub release, a reviewed
-  main-origin workflow source between that release and protected current main,
-  a one-repository release App, an explicit expected-old Git lease, and terminal
-  Vercel outcome evidence. Keep the established production ref protected
-  against deletion, non-fast-forward movement, and ordinary-writer updates.
-- Resolve annotated release tags through their exact peeled commits, retain Git
-  metadata in Vercel builds, exhaust paginated GitHub comparisons, and recover
-  website promotion without weakening exact source, tag, or provider identity.
-- Route Beeper account listing, chat search, exact-chat reads, message history,
-  and filtered message search through fixed authenticated Desktop loopback
-  `GET` routes. Preserve opaque older/newer cursors across bounded pages, reject
-  replay or coordinate drift, and never call the separate mark-read route.
-- Let Beeper message search paginate an exact account/chat/date-filtered local
-  index without query text. Keep the prior v2.2.0, v2.1.0, and v2.0.0 adapter
-  manifests as exact upgrade baselines, and retain the local-materialization
-  caveat rather than claiming complete remote provider history.
-- Export one bounded page of the signed-in X account's bookmarks, keyed by
-  `post_id`, while resolving the reviewed Bookmarks operation across overlapping
-  webpack maps.
-- Fail closed before every Vercel build unless a true local invocation has no
-  Vercel signal or the checked-in release marker and exact platform state agree.
-- Resolve the production release tag through a separately byte-bounded GitHub
-  SHA response while retaining fixed local `git rev-parse HEAD` evidence,
-  removing the remote Git descendant boundary from website admission.
-- Move automatic main-only npm staging out of GitHub deployment review. npm
-  still requires separate human inspection and two-factor approval before the
-  staged version becomes public.
 - Add bounded Apple Photos contact evidence through a detached private worker.
   The worker captures full Photos and Contacts SQLite databases with `VACUUM
   INTO`, so transient copies can contain unselected columns and raw blobs even
@@ -63,6 +29,66 @@ coordinate that completed both checks.
   WhatsApp consumer to immutable Message Like Me v0.7.0 contract bytes.
   Runtime Wacli admission verifies the official release, exact SHA-256, and
   offline code signature; the installer separately repeats online notarization.
+- Version the complete reviewed Beeper CLI 0.6.2 surface independently from the
+  executable identity. The v2.3 adapter exposes 32 semantic operations, keeps
+  every other command explicitly classified, retains v2.2, v2.1, and v2.0 as
+  exact upgrade baselines, and leaves destructive or unbounded surfaces inert.
+- Export one bounded page of the signed-in X account's bookmarks, keyed by
+  `post_id`, while resolving the reviewed Bookmarks operation across overlapping
+  webpack maps.
+- Publish an Omarchy desktop-root news take that keeps a session-wide host
+  privilege grant distinct from one named, release-attested Wrench operation.
+- Require immutable, canonically timestamped GitHub Releases for completed
+  release ordering. Bind release and promotion to exact source, main, workflow,
+  and high-privilege control ancestry before and after irreversible publication,
+  while preserving uncertain post-publication evidence without rollback.
+- Bind production promotion to a one-repository release App, an explicit
+  expected-old Git lease, and terminal Vercel outcome evidence. Keep the
+  established production ref protected against deletion, non-fast-forward
+  movement, and ordinary-writer updates.
+
+## 0.16.3 - 2026-09-01
+
+`@hraness/wrench@0.16.3` is an irreversibly consumed stale-source npm-only
+coordinate from `c2d956ca4102d38c29e24ca4e13f26ce862b47f3`. npm published it
+on 2026-09-03, but it has no matching Git tag, GitHub Release, or production
+promotion, and it is not a completed Wrench release.
+
+- Redesign the release-bound product site around a result-first hero, a
+  three-step proof, a capability fact grid, a verified install block, and
+  explicit CLI, SDK, and Agent Skill paths while retaining canonical metadata
+  and compact-layout coverage.
+- Route Beeper account listing, chat search, exact-chat reads, message history,
+  and filtered message search through fixed authenticated Desktop loopback
+  `GET` routes. Preserve opaque older/newer cursors across bounded pages, reject
+  replay or coordinate drift, and never call the separate mark-read route.
+- Let Beeper message search paginate an exact account/chat/date-filtered local
+  index without query text. Keep the prior v2.1.0 and v2.0.0 adapter manifests
+  as exact upgrade baselines, and retain the local-materialization
+  caveat rather than claiming complete remote provider history.
+- Accept one `x-web` `posts.publish` body up to the reviewed CreateTweet
+  25000-unit bound without truncation. Bind long-form text from `note_tweet`
+  when CreateTweet returns a short `full_text` preview. Thread and reply item
+  caps stay 280.
+- Refresh the reviewed X UserTweets and SearchTimeline operation coordinates
+  from current authenticated bundle evidence.
+- Recover an orphaned same-boot browser session through a durable doctor lease
+  bound to its exact daemon start identity, launch, CDP endpoint, and private
+  root generations. Prepared, launch-intent, quiescent, and per-root removal
+  phases make close, TERM, and deletion recovery crash-resumable. Changed or
+  unprovable state remains fail-closed without making reboot part of the
+  recovery contract.
+- Return a bound `cleanup-required` result when durable realm admission blocks
+  an R1 read before dispatch. JSON callers retain the no-retry category while
+  the cleanup-unsafe claim remains fail-closed.
+- Fail closed before every Vercel build unless a true local invocation has no
+  Vercel signal or the checked-in release marker and exact platform state agree.
+- Resolve the production release tag through a separately byte-bounded GitHub
+  SHA response while retaining fixed local `git rev-parse HEAD` evidence,
+  removing the remote Git descendant boundary from website admission.
+- Move automatic main-only npm staging out of GitHub deployment review. npm
+  still requires separate human inspection and two-factor approval before the
+  staged version becomes public.
 
 ## 0.16.2 - 2026-08-28
 

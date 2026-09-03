@@ -1,9 +1,9 @@
 // After a clean Bun 1.3.14 build, two npm 11.19.0 packs of the converged
-// v0.16.3 product candidate were byte-identical: 2,157,669 packed bytes,
-// 11,909,764 unpacked bytes, and 451 files. Their SHA-256 was
-// 16c9f24cf05d416ba25ff16ea3f6edc0784276c53bdf84e045d19714fbdd516a. Prior CI
-// measured a 3,543-byte Linux/macOS gzip spread. Keep 7,331 packed bytes and
-// 15,236 unpacked bytes of bounded headroom, while admitting no package-inventory
+// v0.16.4 product candidate were byte-identical: 2,158,266 packed bytes,
+// 11,911,298 unpacked bytes, and 451 files. Their SHA-256 was
+// 3c2a51d706cdc5a34e7e88cfd850f727d344e957856deea4fae2809232100fa3. Prior CI
+// measured a 3,543-byte Linux/macOS gzip spread. Keep 6,734 packed bytes and
+// 13,702 unpacked bytes of bounded headroom, while admitting no package-inventory
 // expansion.
 export const MAX_PACKED_BYTES = 2_165_000;
 export const MAX_PACKED_ENTRIES = 451;
