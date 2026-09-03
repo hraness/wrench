@@ -1395,8 +1395,8 @@ describe("wrench.rip static site", () => {
       .map((match) => match[0]);
     expect(referencedReleases.length).toBeGreaterThan(0);
     expect(new Set(referencedReleases)).toEqual(new Set([identity.release]));
-    expect(catalogServiceCount).toBe(20);
-    expect(executableServiceCount).toBe(19);
+    expect(catalogServiceCount).toBe(21);
+    expect(executableServiceCount).toBe(20);
     expect(readme).toContain(
       `This ${identity.release} source tree supports executable actions for ${String(executableServiceCount)} services:`,
     );
