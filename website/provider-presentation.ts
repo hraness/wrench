@@ -32,6 +32,7 @@ type ProviderPresentationDefinition = Readonly<{
 export const PROVIDER_PRESENTATIONS = Object.freeze([
   { accent: "blue", icon: "chat", name: "Beeper", surfaceId: "beeper" },
   { accent: "blue", icon: "network", name: "Bluesky", surfaceId: "bluesky" },
+  { accent: "gold", icon: "store", name: "ClasificadosOnline", surfaceId: "clasificados" },
   { accent: "blue", icon: "network", name: "Facebook", surfaceId: "facebook" },
   { accent: "blue", icon: "community", name: "Facebook Groups", surfaceId: "facebook-group" },
   { accent: "blue", icon: "store", name: "Facebook Marketplace", surfaceId: "facebook-marketplace" },

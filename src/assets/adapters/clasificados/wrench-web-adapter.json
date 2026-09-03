@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 4,
+  "id": "clasificados-web",
+  "version": "1.0.0",
+  "displayName": "ClasificadosOnline (Public Rental Listings)",
+  "surfaceId": "clasificados",
+  "origins": [
+    "https://www.clasificadosonline.com"
+  ],
+  "browserDomains": [
+    "www.clasificadosonline.com"
+  ],
+  "operations": {
+    "listings.search": {
+      "description": "Search one exact public ClasificadosOnline rental list for a reviewed Puerto Rico locality, bind each card's canonical listing URL, rent, beds, baths, and list-row coordinates, and verify neighborhood from street, ZIP, known address, or those coordinates.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "Exact rental search locality",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "beds_min": {
+            "type": "number",
+            "description": "Minimum bedroom count",
+            "minimum": 0,
+            "maximum": 12
+          },
+          "max_price": {
+            "type": "number",
+            "description": "Maximum monthly rent in USD",
+            "minimum": 1,
+            "maximum": 100000
+          }
+        },
+        "required": [
+          "location"
+        ]
+      },
+      "webSession": {
+        "site": "clasificados",
+        "action": "listings.search",
+        "contractVersion": 1,
+        "timeoutMs": 60000,
+        "maxOutputBytes": 2097152
+      }
+    }
+  }
+}
