@@ -44,10 +44,10 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-This v0.16.3 source tree defines actions for 20 services: Beeper, Bluesky,
-ClasificadosOnline, Facebook, Facebook Groups, Facebook Marketplace, GitHub,
-Gmail, Hacker News, Instagram, iMessage, LinkedIn, Reddit, Substack, Threads,
-TikTok, Twitch, WhatsApp, X, and YouTube.
+This v0.16.3 source tree supports executable actions for 20 services: Beeper,
+Bluesky, ClasificadosOnline, Facebook, Facebook Groups, Facebook Marketplace,
+GitHub, Gmail, Hacker News, Instagram, iMessage, LinkedIn, Reddit, Substack,
+Threads, TikTok, Twitch, WhatsApp, X, and YouTube.
 LinkedIn and X each have separate official and authenticated-web adapters. The
 [release-bound provider directory](https://wrench.rip/provider-capabilities/)
 lists only executable actions, grouped by the tasks each service supports and

@@ -1111,6 +1111,22 @@ describe("wrench.rip static site", () => {
     expect(whatsapp?.html).not.toContain("runtime notarization");
     expect(whatsapp?.html).not.toContain("wrench auth pair");
     expect(whatsapp?.html).not.toContain("wrench auth sync");
+    const whatsappJsonMatch = /<script type="application\/ld\+json">([^<]+)<\/script>/u.exec(
+      whatsapp?.html ?? "",
+    );
+    const whatsappStructured = JSON.parse(whatsappJsonMatch?.[1] ?? "null") as {
+      "@graph"?: ReadonlyArray<Readonly<Record<string, unknown>>>;
+    };
+    const whatsappBreadcrumb = whatsappStructured["@graph"]?.find((node) =>
+      node["@id"] === `${SITE_ORIGIN}/providers/whatsapp/#breadcrumb`);
+    expect(whatsappBreadcrumb).toMatchObject({
+      "@type": "BreadcrumbList",
+      itemListElement: [
+        { name: "Wrench", position: 1, item: `${SITE_ORIGIN}/` },
+        { name: "Providers", position: 2, item: `${SITE_ORIGIN}/provider-capabilities/` },
+        { name: "WhatsApp", position: 3, item: `${SITE_ORIGIN}/providers/whatsapp/` },
+      ],
+    });
 
     const personalAgents = pages.find((page) =>
       page.definition.canonicalPath === "/compare/personal-agents-browser-use/");
@@ -1367,15 +1383,26 @@ describe("wrench.rip static site", () => {
   });
 
   test("keeps every README release reference aligned with package identity", async () => {
-    const [manifest, readme] = await Promise.all([
+    const [manifest, readme, attestation] = await Promise.all([
       Bun.file(join(repositoryRoot, "package.json")).json(),
       readFile(join(repositoryRoot, "README.md"), "utf8"),
+      loadProviderCapabilityAttestation(repositoryRoot),
     ]);
     const identity = parsePackageIdentity(manifest);
+    const catalogServiceCount = new Set(attestation.rows.map((row) => row.surfaceId)).size;
+    const executableServiceCount = createProviderDirectory(attestation).providerCount;
     const referencedReleases = [...readme.matchAll(/\bv[0-9]+\.[0-9]+\.[0-9]+\b/gu)]
       .map((match) => match[0]);
     expect(referencedReleases.length).toBeGreaterThan(0);
     expect(new Set(referencedReleases)).toEqual(new Set([identity.release]));
+    expect(catalogServiceCount).toBe(20);
+    expect(executableServiceCount).toBe(19);
+    expect(readme).toContain(
+      `This ${identity.release} source tree supports executable actions for ${String(executableServiceCount)} services:`,
+    );
+    expect(readme).not.toContain(
+      `This ${identity.release} source tree defines actions for ${String(executableServiceCount)} services:`,
+    );
     expect(readme).toContain(
       "[built-in Beeper Desktop MCP server](https://developers.beeper.com/desktop-api/mcp/)",
     );

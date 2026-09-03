@@ -454,7 +454,13 @@ function jsonLd(identity: PackageIdentity, page: PublicPage): Readonly<Record<st
         { item: `${SITE_ORIGIN}/provider-capabilities/`, name: "Providers" },
         { item: url, name: "Beeper" },
       ]
-      : [{ item: `${SITE_ORIGIN}/`, name: "Wrench" }, { item: url, name: page.title }];
+      : page.canonicalPath === "/providers/whatsapp/"
+        ? [
+          { item: `${SITE_ORIGIN}/`, name: "Wrench" },
+          { item: `${SITE_ORIGIN}/provider-capabilities/`, name: "Providers" },
+          { item: url, name: "WhatsApp" },
+        ]
+        : [{ item: `${SITE_ORIGIN}/`, name: "Wrench" }, { item: url, name: page.title }];
   const pageGraph: Array<Readonly<Record<string, unknown>>> = [
     {
       "@id": pageId,
