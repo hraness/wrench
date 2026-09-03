@@ -197,7 +197,7 @@ describe("abandoned local installer stage recovery", () => {
     const releasePath = join(root, "release-waiting-claims");
     mkdirSync(readyDirectory, { mode: 0o700 });
 
-    const children = Array.from({ length: 4 }, () => {
+    const spawnReclaimer = () => {
       const child = Bun.spawn(
         [process.execPath, recoveryScript, "acquire", root, String(process.pid)],
         {
@@ -217,20 +217,31 @@ describe("abandoned local installer stage recovery", () => {
         stdout: new Response(child.stdout).text(),
         stderr: new Response(child.stderr).text(),
       };
-    });
+    };
+    const children: ReturnType<typeof spawnReclaimer>[] = [];
     try {
       const deadline = performance.now() + TEST_CHILD_SIGNAL_TIMEOUT_MS;
-      while (
-        readdirSync(readyDirectory).length !== 4
-        && performance.now() < deadline
-      ) {
-        const exited = children.find((entry) => entry.child.exitCode !== null);
-        if (exited !== undefined) {
-          throw new Error(
-            `waiting-claim helper exited before arbitration: ${await exited.stderr}`,
+      for (let index = 0; index < 4; index += 1) {
+        const entry = spawnReclaimer();
+        children.push(entry);
+        // Serialize only the external owner-identity probes. Every helper
+        // remains held at the shared waiting-claim barrier until all four
+        // enter mutation arbitration together below.
+        while (
+          readdirSync(readyDirectory).length !== children.length
+          && performance.now() < deadline
+        ) {
+          const exited = children.find((candidate) =>
+            candidate.child.exitCode !== null
           );
+          if (exited !== undefined) {
+            throw new Error(
+              `waiting-claim helper exited before arbitration: ${await exited.stderr}`,
+            );
+          }
+          await Bun.sleep(25);
         }
-        await Bun.sleep(25);
+        if (readdirSync(readyDirectory).length !== children.length) break;
       }
       expect(readdirSync(readyDirectory)).toHaveLength(4);
       writeFileSync(releasePath, "release\n", { mode: 0o600 });
