@@ -602,7 +602,7 @@ export async function createLinkedInFeedBrowserTransport(
         "LinkedIn profile-activity browser identity response",
       );
     },
-    resolveProfileActivityBinding: async (vanity) => {
+    resolveProfileActivityBinding: async (vanity: string) => {
       if (state !== "identity") {
         throw new Error("LinkedIn profile-activity browser query observation is out of order");
       }
@@ -656,7 +656,12 @@ export async function createLinkedInFeedBrowserTransport(
         );
       }
     },
-    readProfileActivityPage: async (input) => {
+    readProfileActivityPage: async (input: {
+      readonly queryId: string;
+      readonly profileUrn: string;
+      readonly count: number;
+      readonly start: number;
+    }) => {
       if (state !== "bound" && state !== "identity") {
         throw new Error("LinkedIn profile-activity browser page read is out of order");
       }
