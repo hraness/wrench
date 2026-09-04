@@ -1205,22 +1205,39 @@ describe("npm publication contract", () => {
     }
   });
 
-  test("keeps separate truthful Wrench 0.16.3 and 0.16.4 changelog sections", async () => {
+  test("keeps separate truthful Wrench 0.16.3, 0.16.4, and 0.16.5 changelog sections", async () => {
     const changelog = await readFile(changelogUrl, "utf8");
     const unreleasedHeader = "## Unreleased\n";
+    const currentHeader = "## 0.16.5 - 2026-09-04\n";
     const releaseHeader = "## 0.16.4 - 2026-09-03\n";
     const incidentHeader = "## 0.16.3 - 2026-09-01\n";
     const unreleasedStart = changelog.indexOf(unreleasedHeader);
+    const currentStart = changelog.indexOf(currentHeader);
     const releaseStart = changelog.indexOf(releaseHeader);
     const incidentStart = changelog.indexOf(incidentHeader);
 
     expect(changelog.match(/^## Unreleased$/gmu) ?? []).toHaveLength(1);
+    expect(changelog.match(/^## 0\.16\.5 - 2026-09-04$/gmu) ?? []).toHaveLength(1);
     expect(changelog.match(/^## 0\.16\.4 - 2026-09-03$/gmu) ?? []).toHaveLength(1);
     expect(changelog.match(/^## 0\.16\.3 - 2026-09-01$/gmu) ?? []).toHaveLength(1);
     expect(unreleasedStart).toBeGreaterThan(-1);
-    expect(releaseStart).toBeGreaterThan(unreleasedStart);
+    expect(currentStart).toBeGreaterThan(unreleasedStart);
+    expect(releaseStart).toBeGreaterThan(currentStart);
     expect(incidentStart).toBeGreaterThan(releaseStart);
-    expect(changelog.slice(unreleasedStart + unreleasedHeader.length, releaseStart).trim()).toBe("");
+    expect(changelog.slice(unreleasedStart + unreleasedHeader.length, currentStart).trim()).toBe("");
+
+    const currentReleaseEnd = changelog.indexOf("\n## ", currentStart + currentHeader.length);
+    expect(currentReleaseEnd).toBe(releaseStart - 1);
+    const currentSection = changelog.slice(currentStart, currentReleaseEnd);
+    for (const requiredFact of [
+      "production-outcome job",
+      "canonical release marker",
+      "custom-domain auto-assignment",
+      "Latest Release projection",
+      "version-tag update/deletion ruleset",
+    ] as const) {
+      expect(currentSection).toContain(requiredFact);
+    }
 
     const nextReleaseStart = changelog.indexOf("\n## ", releaseStart + releaseHeader.length);
     expect(nextReleaseStart).toBe(incidentStart - 1);
@@ -7731,7 +7748,7 @@ fi
       ]);
     const manifest = JSON.parse(manifestText) as { readonly version: string };
     const exactPackage = `@hraness/wrench@${manifest.version}`;
-    const nextReleaseVersion = "0.16.4";
+    const nextReleaseVersion = "0.16.5";
     const tagFailFastBoundary = 'set -eu\ncase "${STAGE_RUN_ID:-}" in';
     const stageRunIdGuard = 'case "${STAGE_RUN_ID:-}" in';
     const stageSourceBinding = 'C="$(gh api \\';
@@ -7794,7 +7811,7 @@ fi
       `manifest?.version !== "${nextReleaseVersion}"`,
       stagedPackageCoordinateProof,
       sourceArtifactDownload,
-      'wrench_source_name="npm-package-0.16.4-$C-$STAGE_RUN_ID-1"',
+      'wrench_source_name="npm-package-0.16.5-$C-$STAGE_RUN_ID-1"',
       '--name "$wrench_source_name"',
       registryArtifactDownload,
       registryIdentityCheck,
@@ -7872,7 +7889,7 @@ fi
       "tag-push Release workflow intentionally executes source `S=C`",
       "a stale-source manual recovery run staged and then published\n`@hraness/wrench@0.16.3` from stale source",
       "Never create a `v0.16.3` Git tag or GitHub Release",
-      "The next release\nis `0.16.4` from the final repaired product descendant",
+      "The completed\nreplacement is `0.16.4`; the first marker-bearing successor is `0.16.5`",
       "If release controls change materially after staging, that stage is ineligible\nfor tagging",
       "An accepted and eligible stage must be inspected and approved without\na duplicate dispatch",
       "An accepted but ineligible pending stage must be inspected,\nrejected with human two-factor authentication, and confirmed absent before one\nfresh same-version stage is dispatched from final current `main`",
