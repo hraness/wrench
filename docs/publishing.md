@@ -211,8 +211,9 @@ On 2026-09-03, a stale-source manual recovery run staged and then published
 `@hraness/wrench@0.16.3` from stale source
 `c2d956ca4102d38c29e24ca4e13f26ce862b47f3`. That public npm coordinate is
 consumed. Never create a `v0.16.3` Git tag or GitHub Release, and never attempt
-to unpublish, overwrite, or repair those public bytes in place. The next release
-is `0.16.4` from the final repaired product descendant and a fresh exact stage.
+to unpublish, overwrite, or repair those public bytes in place. The completed
+replacement is `0.16.4`; the first marker-bearing successor is `0.16.5` from
+the final reviewed control descendant and a fresh exact stage.
 If release controls change materially after staging, that stage is ineligible
 for tagging. If the ineligible stage is still pending, inspect it, reject that
 exact stage with human two-factor authentication, and confirm that it is absent
@@ -265,12 +266,12 @@ npm stage reject <stage-id> \
   --registry=https://registry.npmjs.org
 ```
 
-To complete the repaired release, download and smoke
-`@hraness/wrench@0.16.4` after approving its fresh stage. Keep the public
+To complete the marker-bearing release, download and smoke
+`@hraness/wrench@0.16.5` after approving its fresh stage. Keep the public
 coordinate and tag literal through the final registry checks. Set
 `STAGE_RUN_ID` to the numeric ID of the exact inspected successful manual
 staging run. Resolve `C` from that run rather than ambient `HEAD`, and require
-the full lowercase commit object locally before creating `v0.16.4`:
+the full lowercase commit object locally before creating `v0.16.5`:
 
 ```sh
 set -eu
@@ -297,29 +298,29 @@ test "$(git cat-file -t "$C")" = commit
 test "$(git rev-parse --verify "$C^{commit}")" = "$C"
 package_coordinate="$(
   git show "${C}:package.json" |
-    node -e 'const manifest = JSON.parse(require("node:fs").readFileSync(0, "utf8")); if (manifest?.name !== "@hraness/wrench" || manifest?.version !== "0.16.4") process.exit(1); process.stdout.write(`${manifest.name}@${manifest.version}`);'
+    node -e 'const manifest = JSON.parse(require("node:fs").readFileSync(0, "utf8")); if (manifest?.name !== "@hraness/wrench" || manifest?.version !== "0.16.5") process.exit(1); process.stdout.write(`${manifest.name}@${manifest.version}`);'
 )"
-test "$package_coordinate" = "@hraness/wrench@0.16.4"
+test "$package_coordinate" = "@hraness/wrench@0.16.5"
 wrench_source_artifact="$(mktemp -d)"
-wrench_source_name="npm-package-0.16.4-$C-$STAGE_RUN_ID-1"
+wrench_source_name="npm-package-0.16.5-$C-$STAGE_RUN_ID-1"
 gh run download "$STAGE_RUN_ID" \
   --repo hraness/wrench \
   --name "$wrench_source_name" \
   --dir "$wrench_source_artifact"
-wrench_npm_archive="$wrench_source_artifact/hraness-wrench-0.16.4.tgz"
+wrench_npm_archive="$wrench_source_artifact/hraness-wrench-0.16.5.tgz"
 wrench_npm_json="$wrench_source_artifact/npm-pack.json"
 wrench_registry_artifact="$(mktemp -d)"
 wrench_registry_json="$wrench_registry_artifact/npm-pack.json"
 wrench_registry_view_json="$wrench_registry_artifact/npm-view.json"
-npm pack @hraness/wrench@0.16.4 \
+npm pack @hraness/wrench@0.16.5 \
   --ignore-scripts \
   --json \
   --pack-destination "$wrench_registry_artifact" \
   --registry=https://registry.npmjs.org > "$wrench_registry_json"
-npm view @hraness/wrench@0.16.4 name version dist \
+npm view @hraness/wrench@0.16.5 name version dist \
   --json \
   --registry=https://registry.npmjs.org > "$wrench_registry_view_json"
-wrench_registry_archive="$wrench_registry_artifact/hraness-wrench-0.16.4.tgz"
+wrench_registry_archive="$wrench_registry_artifact/hraness-wrench-0.16.5.tgz"
 bun run ./scripts/npm-package-identity.ts \
   --source-archive "$wrench_npm_archive" \
   --source-pack-json "$wrench_npm_json" \
@@ -327,12 +328,12 @@ bun run ./scripts/npm-package-identity.ts \
   --registry-pack-json "$wrench_registry_json" \
   --registry-view-json "$wrench_registry_view_json" \
   --expected-name @hraness/wrench \
-  --expected-version 0.16.4
+  --expected-version 0.16.5
 bun run ./scripts/package-smoke.ts \
   --archive "$wrench_registry_archive" \
   --pack-json "$wrench_registry_json"
-git tag v0.16.4 "$C"
-git push origin refs/tags/v0.16.4
+git tag v0.16.5 "$C"
+git push origin refs/tags/v0.16.5
 ```
 
 The staging workflow runs on GitHub-hosted runners with Node 24, npm 11.19.0,

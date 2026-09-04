@@ -7,6 +7,23 @@ coordinate that completed both checks.
 
 ## Unreleased
 
+## 0.16.5 - 2026-09-04
+
+- Require the production-outcome job after either mutually exclusive ref path,
+  so an intentionally skipped alternate writer can no longer suppress terminal
+  Vercel and public-site verification.
+- Emit a canonical release marker only from a verified Production build and
+  bind the apex, Beeper guide, `llms.txt`, `www` redirect, GitHub deployment,
+  immutable Release, tag, and exact Vercel deployment URL before promotion
+  succeeds.
+- Treat Vercel custom-domain auto-assignment as a persistent project invariant
+  with exact setting-only admission and fail-closed staged-deployment recovery.
+- Allow GitHub's Latest Release projection a bounded create-only convergence
+  window pinned to its exact predecessor, while existing releases and terminal
+  readbacks remain immediate and exact.
+- Require fresh signed-in administrator proof of immutable Releases and the
+  no-bypass version-tag update/deletion ruleset before a release tag is pushed.
+
 ## 0.16.4 - 2026-09-03
 
 - Add public `clasificados-web listings.search` for reviewed San Juan rental

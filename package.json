@@ -1,6 +1,6 @@
 {
   "name": "@hraness/wrench",
-  "version": "0.16.4",
+  "version": "0.16.5",
   "description": "Open-source CLI and TypeScript SDK for precise web capabilities for AI agents: page capture, verified media archives, encrypted reads, and typed provider operations.",
   "license": "MIT",
   "type": "module",
