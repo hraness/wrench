@@ -1611,7 +1611,7 @@ describe("browser process isolation helpers", () => {
     try {
       for (const reused of [false, true] as const) {
         for (const wrap of [
-          (value: { readonly success: true; readonly data: unknown }) => value,
+          (value: { readonly success: boolean; readonly data: unknown }) => value,
           agentBrowserBoundaryEnvelope,
         ] as const) {
           const bound = await bindWith(wrap(activeInfo(reused)), wrap(cdpInfo(reused)));
