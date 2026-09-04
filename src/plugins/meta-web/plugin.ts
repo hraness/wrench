@@ -201,7 +201,7 @@ const archivedInstagramOperations = Object.freeze([
 export const metaWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "meta-web",
-  version: "1.4.0",
+  version: "1.5.0",
   displayName: "Meta Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
@@ -212,6 +212,7 @@ export const metaWebPlugin = defineProviderPlugin({
     ["kernel/state-helper.bunfig.toml", "../../state-helper.bunfig.toml"],
     ["kernel/path-helper.ts", "../../path-helper.ts"],
     ["providers/iso-bmff.ts", "../../providers/iso-bmff.ts"],
+    ["providers/instagram-web-profile-browser.ts", "../../providers/instagram-web-profile-browser.ts"],
     ["providers/instagram-video-foundations.ts", "../../providers/instagram-video-foundations.ts"],
     ["providers/meta-web.ts", "../../providers/meta-web.ts"],
     ["providers/meta-web-runtime.ts", "../../providers/meta-web-runtime.ts"],

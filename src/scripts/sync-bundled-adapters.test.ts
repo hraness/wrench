@@ -179,6 +179,7 @@ describe("single-process bundled adapter generation sync", () => {
       "instagram-web@1.4.0",
       "instagram-web@1.5.0",
       "instagram-web@1.6.0",
+      "instagram-web@1.7.0",
       "linkedin@0.4.0",
       "linkedin@1.0.0",
       "linkedin-web@1.0.0",

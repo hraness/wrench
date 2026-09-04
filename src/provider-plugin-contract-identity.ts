@@ -308,9 +308,10 @@ const identities = Object.freeze({
   },
   "meta-web": {
     schemaVersion: 1,
-    pluginVersion: "1.4.0",
-    implementationSha256: "349991a62eb1b3e08c3917948554ba4e53016cf66f30d0d4513c2c0321548763",
+    pluginVersion: "1.5.0",
+    implementationSha256: "1a1c67883a899a3a0b414656f0e4033579e9ea89dc29e80691b733b28402c979",
     legacyCurrentReadImplementationSha256: [
+      "349991a62eb1b3e08c3917948554ba4e53016cf66f30d0d4513c2c0321548763",
       "cd8847f028199857b1aed8f6873af25470a6c9945c38b1deb49e52402a0bf84b",
       "8b5f59a6aa223ea1493fb49c2f9959565fef931318af55880973c3dd2758c101",
       "6f3f5d29dd6a8e19c2d6eba9bd92cce0406f24df9a6a8b121731f20ed5604994",

@@ -4,7 +4,11 @@ import { open } from "node:fs/promises";
 import { acquireCookieRecords } from "@hraness/kb/clip/acquire";
 
 import type { WrenchAuth } from "../auth";
-import type { BrowserFileResolver } from "../browser";
+import {
+  browserCleanupBarrier,
+  PreservedBrowserArtifactsError,
+  type BrowserFileResolver,
+} from "../browser";
 import { canonicalJson, sha256 } from "../canonical-json";
 import type { FileInputValue, OperationInput, WebSessionRecipe } from "../model";
 import { OperationDeadlineError } from "../operation-deadline";
@@ -20,13 +24,26 @@ import {
 } from "../web-session-client";
 import { acquireWebSessionCookieRecords } from "../web-session-cookies";
 import type {
+  WebSessionCleanupBarrierRegistrar,
+  WebSessionCleanupResourcePublisher,
   WebSessionDispatchEvent,
   WebSessionExecution,
   WebSessionOperationDeadline,
   WebSessionProviderAcceptedMutationTargetEvent,
   WebSessionProviderBoundMutationTargetEvent,
 } from "../web-session-execution";
-import { failedProviderRead } from "./read-failure";
+import { startWebSessionCleanupTrackedOperation } from "../web-session-execution";
+import {
+  createInstagramProfileBrowserTransport,
+  InstagramProfileBrowserFailure,
+  InstagramProfileBrowserResponseRejectedError,
+  type InstagramProfileBrowserTransport,
+} from "./instagram-web-profile-browser";
+import {
+  failedProviderRead,
+  ProviderReadResponseRejectedError,
+  ProviderReadTransportError,
+} from "./read-failure";
 import {
   assertInstagramVideoConfigureIndeterminate,
   assertInstagramVideoDeleteAcknowledgement,
@@ -137,6 +154,8 @@ const INSTAGRAM_WEB_APP_ID = "936619743392459";
 const INSTAGRAM_ASBD_ID = "359341";
 
 export type MetaWebRuntimeDependencies = Partial<WebSessionNetworkDependencies> & {
+  readonly createInstagramProfileBrowserTransport?:
+    typeof createInstagramProfileBrowserTransport;
   readonly now?: () => number;
 };
 
@@ -2447,7 +2466,6 @@ async function executeInstagramRead(
     {
       readonly kind:
         | "instagram-feed"
-        | "instagram-profile"
         | "instagram-media"
         | "instagram-comments"
         | "instagram-inbox"
@@ -2459,18 +2477,6 @@ async function executeInstagramRead(
   maximumBytes: number,
 ): Promise<unknown> {
   const maxBytes = Math.min(maximumBytes, MAX_API_BYTES);
-  if (prepared.kind === "instagram-profile") {
-    const url = new URL("/api/v1/users/web_profile_info/", ORIGINS.instagram);
-    url.searchParams.set("username", prepared.profile);
-    return client.requestJson({
-      url,
-      method: "GET",
-      headers: instagramHeaders(`${ORIGINS.instagram}/${prepared.profile}/`),
-      expectedStatuses: [200],
-      expectedContentTypes: ["application/json"],
-      maxBytes,
-    });
-  }
   if (prepared.kind === "instagram-feed") {
     const url = new URL("/api/v1/feed/timeline/", ORIGINS.instagram);
     url.searchParams.set("count", String(prepared.limit));
@@ -2535,6 +2541,96 @@ async function executeInstagramRead(
   }
   const exhaustive: never = prepared;
   throw new Error(`Instagram authenticated web operation ${(exhaustive as { kind: string }).kind} is not reviewed`);
+}
+
+function instagramProfileBrowserFailure(error: unknown): unknown {
+  if (error instanceof InstagramProfileBrowserResponseRejectedError) {
+    return new ProviderReadResponseRejectedError(error.status);
+  }
+  if (
+    error instanceof InstagramProfileBrowserFailure
+    && (
+      error.category === "startup"
+      || error.category === "execution-context"
+      || error.category === "provider-fetch"
+    )
+  ) return new ProviderReadTransportError(error);
+  return error;
+}
+
+async function executeInstagramProfileRead(
+  recipe: WebSessionRecipe,
+  prepared: Extract<PreparedMetaRead, { readonly kind: "instagram-profile" }>,
+  auth: WrenchAuth,
+  expectedSubject: string,
+  finalUrl: string,
+  options: {
+    readonly dependencies?: MetaWebRuntimeDependencies;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly publishCleanupResource?: WebSessionCleanupResourcePublisher;
+  },
+): Promise<WebSessionExecution> {
+  let failureStage: "identity" | "target" = "identity";
+  let transport: InstagramProfileBrowserTransport | null = null;
+  try {
+    const createTransport = options.dependencies
+      ?.createInstagramProfileBrowserTransport
+      ?? createInstagramProfileBrowserTransport;
+    transport = await createTransport(auth, {
+      timeoutMs: recipe.timeoutMs,
+      // The viewer bootstrap keeps its established 12 MiB bound while the
+      // contained target JSON read remains independently capped at 8 MiB.
+      maxOutputBytes: MAX_BOOTSTRAP_BYTES,
+      ...(options.operationDeadline === undefined
+        ? {}
+        : { operationDeadline: options.operationDeadline }),
+      ...(options.publishCleanupResource === undefined
+        ? {}
+        : { publishCleanupResource: options.publishCleanupResource }),
+    });
+    const viewerId = parseInstagramViewerId(
+      await transport.readCurrentViewerHtml(),
+    );
+    if (`instagram:${viewerId}` !== expectedSubject) {
+      throw new Error(
+        "instagram current viewer no longer matches the confirmed auth subject",
+      );
+    }
+    failureStage = "target";
+    const response = await transport.readProfileJson(prepared.profile);
+    const output = normalizeInstagramProfileStats(
+      response,
+      viewerId,
+      prepared.profile,
+      new Date((options.dependencies?.now ?? Date.now)()).toISOString(),
+    );
+    return {
+      status: "succeeded",
+      output,
+      finalUrl,
+      dispatchStarted: false,
+      dispatch: { planned: 0, started: 0, verified: 0 },
+    };
+  } catch (error) {
+    if (error instanceof PreservedBrowserArtifactsError) throw error;
+    const projected = instagramProfileBrowserFailure(error);
+    return failedProviderRead("Instagram profile", projected, finalUrl, {
+      stage: failureStage,
+      authenticated: true,
+      accountMismatch: (candidate) => candidate.message.includes(
+        "current viewer no longer matches the confirmed auth subject",
+      ) || candidate.message.includes(
+        "profile response did not bind the current viewer ID",
+      ) || candidate.message.includes(
+        "profile response did not bind the requested handle",
+      ),
+      authRepairRequired: (candidate) =>
+        candidate instanceof InstagramProfileBrowserFailure
+        && candidate.category === "authwall",
+    });
+  } finally {
+    await transport?.close();
+  }
 }
 
 function instagramMutationDispatchEvent(
@@ -2894,25 +2990,29 @@ async function executeInstagramVideoDelete(
   }
 }
 
-export async function executeMetaWebOperation(
+type MetaWebExecutionOptions = {
+  readonly fileResolver?: BrowserFileResolver;
+  readonly signal?: AbortSignal;
+  readonly operationDeadline?: WebSessionOperationDeadline;
+  readonly registerCleanupBarrier?: WebSessionCleanupBarrierRegistrar;
+  readonly publishCleanupResource?: WebSessionCleanupResourcePublisher;
+  readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
+  readonly afterProviderAcceptedMutationTarget?: (
+    event: WebSessionProviderAcceptedMutationTargetEvent,
+  ) => Promise<void>;
+  readonly afterProviderBoundMutationTarget?: (
+    event: WebSessionProviderBoundMutationTargetEvent,
+  ) => Promise<void>;
+  readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
+  readonly dependencies?: MetaWebRuntimeDependencies;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+};
+
+async function executeMetaWebOperationInternal(
   recipe: WebSessionRecipe,
   input: OperationInput,
   auth: WrenchAuth,
-  options: {
-    readonly fileResolver?: BrowserFileResolver;
-    readonly signal?: AbortSignal;
-    readonly operationDeadline?: WebSessionOperationDeadline;
-    readonly beforeDispatch?: (event: WebSessionDispatchEvent) => Promise<void>;
-    readonly afterProviderAcceptedMutationTarget?: (
-      event: WebSessionProviderAcceptedMutationTargetEvent,
-    ) => Promise<void>;
-    readonly afterProviderBoundMutationTarget?: (
-      event: WebSessionProviderBoundMutationTargetEvent,
-    ) => Promise<void>;
-    readonly afterDispatchVerified?: (event: WebSessionDispatchEvent) => Promise<void>;
-    readonly dependencies?: MetaWebRuntimeDependencies;
-    readonly environment?: Readonly<Record<string, string | undefined>>;
-  } = {},
+  options: MetaWebExecutionOptions = {},
 ): Promise<WebSessionExecution> {
   if (!isMetaSite(recipe.site)) {
     throw new Error("Meta authenticated web recipe is not installed");
@@ -2966,6 +3066,26 @@ export async function executeMetaWebOperation(
       authenticated: true,
       authRepairRequired: (candidate) => candidate.message.includes("auth subject"),
     });
+  }
+  if (prepared.kind === "instagram-profile") {
+    return executeInstagramProfileRead(
+      recipe,
+      prepared,
+      auth,
+      expectedSubject,
+      `${origin}/${prepared.profile}/`,
+      {
+        ...(options.dependencies === undefined
+          ? {}
+          : { dependencies: options.dependencies }),
+        ...(options.operationDeadline === undefined
+          ? {}
+          : { operationDeadline: options.operationDeadline }),
+        ...(options.publishCleanupResource === undefined
+          ? {}
+          : { publishCleanupResource: options.publishCleanupResource }),
+      },
+    );
   }
   const dependencies = metaWebSessionDependencies(
     recipe.site,
@@ -3023,37 +3143,6 @@ export async function executeMetaWebOperation(
       authRepairRequired: (candidate) => candidate.message.includes("cookie")
         || candidate instanceof ThreadsAuthRepairRequiredError,
     });
-  }
-  if (prepared.kind === "instagram-profile") {
-    try {
-      const response = await executeInstagramRead(
-        prepared,
-        client,
-        viewer.id,
-        recipe.maxOutputBytes,
-      );
-      const output = normalizeInstagramProfileStats(
-        response,
-        viewer.id,
-        prepared.profile,
-        new Date((options.dependencies?.now ?? Date.now)()).toISOString(),
-      );
-      return {
-        status: "succeeded",
-        output,
-        finalUrl: statisticsFinalUrl,
-        dispatchStarted: false,
-        dispatch: { planned: 0, started: 0, verified: 0 },
-      };
-    } catch (error) {
-      return failedProviderRead("Instagram profile", error, statisticsFinalUrl, {
-        stage: "target",
-        authenticated: true,
-        accountMismatch: (candidate) => candidate.message.includes(
-          "profile response did not bind the current viewer ID",
-        ),
-      });
-    }
   }
   if (prepared.kind === "threads-profile") {
     try {
@@ -3270,4 +3359,30 @@ export async function executeMetaWebOperation(
     dispatchStarted: false,
     dispatch: { planned: 0, started: 0, verified: 0 },
   };
+}
+
+export function executeMetaWebOperation(
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: MetaWebExecutionOptions = {},
+): Promise<WebSessionExecution> {
+  if (recipe.site === "instagram" && recipe.action === "profiles.read") {
+    return startWebSessionCleanupTrackedOperation(
+      options.registerCleanupBarrier,
+      (publishCleanupResource) => executeMetaWebOperationInternal(
+        recipe,
+        input,
+        auth,
+        {
+          ...options,
+          ...(publishCleanupResource === undefined
+            ? {}
+            : { publishCleanupResource }),
+        },
+      ),
+      browserCleanupBarrier,
+    );
+  }
+  return executeMetaWebOperationInternal(recipe, input, auth, options);
 }

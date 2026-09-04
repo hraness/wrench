@@ -10,6 +10,12 @@ function binding(surfaceId: string) {
 }
 
 describe("Meta web plugin account subjects", () => {
+  test("ships the browser-contained Instagram profile reader in the current plugin", () => {
+    expect(metaWebPlugin.version).toBe("1.5.0");
+    expect(metaWebPlugin.implementationSources.map((source) => source.label))
+      .toContain("providers/instagram-web-profile-browser.ts");
+  });
+
   test("accepts only canonical positive decimal account IDs", () => {
     const cases = [
       ["instagram", "instagram:"],
