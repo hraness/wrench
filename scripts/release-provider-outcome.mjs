@@ -532,7 +532,7 @@ export class WrenchPublicSite {
     const response = await this.#request(
       PUBLIC_WWW_ORIGIN,
       requestPath,
-      "application/json",
+      "text/plain",
       "manual",
       timeoutMilliseconds,
       label,

@@ -97,12 +97,20 @@ function expectedMarkerUrl(nonce = "nonce-0001"): string {
 
 describe("public production outcome transport", () => {
   test("uses bounded exact GET requests for the marker, health routes, and www redirect", async () => {
-    const { calls, site } = siteWithFetch((url) => {
+    const { calls, site } = siteWithFetch((url, init) => {
       const parsed = new URL(url);
       if (parsed.hostname === "www.wrench.rip") {
-        return responseAt(url, "Redirecting...\n", {
+        const requestsPlainText = (
+          init.headers as Readonly<Record<string, string>> | undefined
+        )?.Accept === "text/plain";
+        return responseAt(url, requestsPlainText
+          ? "Redirecting...\n"
+          : `${JSON.stringify({
+            redirect: `https://wrench.rip${parsed.pathname}${parsed.search}`,
+            status: "308",
+          })}\n`, {
           headers: {
-            "content-type": "text/plain",
+            "content-type": requestsPlainText ? "text/plain" : "application/json",
             location: `https://wrench.rip${parsed.pathname}${parsed.search}`,
           },
           status: 308,
@@ -159,7 +167,7 @@ describe("public production outcome transport", () => {
       "text/html",
       "text/html",
       "text/plain",
-      "application/json",
+      "text/plain",
     ]);
     expect(calls.map((call) => call.init.method)).toEqual(Array(5).fill("GET"));
     expect(calls.map((call) => call.init.cache)).toEqual(Array(5).fill("no-store"));
@@ -420,6 +428,8 @@ describe("public production outcome transport", () => {
         status: 308,
       });
     expect(valid.calls[0]?.init.redirect).toBe("manual");
+    expect((valid.calls[0]?.init.headers as Readonly<Record<string, string>>).Accept)
+      .toBe("text/plain");
 
     for (const request of ["/", "/.well-known/wrench-release.json", `${requestPath}#x`]) {
       await expect(valid.site.readWwwRedirect(request, { timeoutMilliseconds: 10_000 }))
