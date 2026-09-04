@@ -25,6 +25,7 @@ import {
 } from "./process-identity";
 
 const TEST_CHILD_SIGNAL_TIMEOUT_MS = 45_000;
+const PYTHON_EXECUTABLE_PROBE_TIMEOUT_MS = 5_000;
 
 const PYTHON_ZOMBIE_HOLDER = `
 import subprocess
@@ -79,12 +80,24 @@ function darwinUniqueProcessInfo(
   return buffer;
 }
 
-function findExecutable(name: string): string | undefined {
-  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+function probePythonExecutable(candidate: string): void {
+  accessSync(candidate, constants.X_OK);
+  execFileSync(candidate, ["-c", "import subprocess"], {
+    killSignal: "SIGKILL",
+    stdio: "ignore",
+    timeout: PYTHON_EXECUTABLE_PROBE_TIMEOUT_MS,
+  });
+}
+
+function findPythonExecutable(
+  searchPath = process.env.PATH ?? "",
+  probe: (candidate: string) => void = probePythonExecutable,
+): string | undefined {
+  for (const directory of searchPath.split(delimiter)) {
     if (directory === "") continue;
-    const candidate = join(directory, name);
+    const candidate = join(directory, "python3");
     try {
-      accessSync(candidate, constants.X_OK);
+      probe(candidate);
       return candidate;
     } catch {
       // Continue through the bounded PATH candidates.
@@ -93,7 +106,10 @@ function findExecutable(name: string): string | undefined {
   return undefined;
 }
 
-function firstLine(stream: Readable): Promise<string> {
+function firstLine(
+  stream: Readable,
+  endedMessage: () => string,
+): Promise<string> {
   stream.setEncoding("utf8");
   return new Promise((resolve, reject) => {
     let buffered = "";
@@ -111,7 +127,7 @@ function firstLine(stream: Readable): Promise<string> {
     };
     const onEnd = (): void => {
       cleanup();
-      reject(new Error("zombie helper ended before reporting its child"));
+      reject(new Error(endedMessage()));
     };
     const onError = (error: Error): void => {
       cleanup();
@@ -126,11 +142,11 @@ function firstLine(stream: Readable): Promise<string> {
 function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  message: string,
+  message: () => string,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(message));
+      reject(new Error(message()));
     }, timeoutMs);
     promise.then(
       (value) => {
@@ -477,6 +493,25 @@ describe("process identity record parsing", () => {
 });
 
 describe("process owner status", () => {
+  test("skips a dead Python shim before selecting a live interpreter", () => {
+    const deadRoot = "dead-python-root";
+    const liveRoot = "live-python-root";
+    const observed: string[] = [];
+    expect(findPythonExecutable(
+      [deadRoot, liveRoot].join(delimiter),
+      (candidate) => {
+        observed.push(candidate);
+        if (candidate === join(deadRoot, "python3")) {
+          throw new Error("dead test shim");
+        }
+      },
+    )).toBe(join(liveRoot, "python3"));
+    expect(observed).toEqual([
+      join(deadRoot, "python3"),
+      join(liveRoot, "python3"),
+    ]);
+  });
+
   test("keeps exact start identity live and rejects a reused identity", () => {
     const identity = currentProcessStartIdentity();
     expect(processOwnerStatus({ pid: process.pid, ...identity })).toBe(
@@ -491,7 +526,7 @@ describe("process owner status", () => {
     })).toBe("different-or-dead");
   });
 
-  const python = findExecutable("python3");
+  const python = findPythonExecutable();
   const canObserveZombie = (
     process.platform === "darwin" || process.platform === "linux"
   ) && python !== undefined;
@@ -522,13 +557,16 @@ describe("process owner status", () => {
       let stderr = "";
       helper.stderr.setEncoding("utf8");
       helper.stderr.on("data", (chunk: string) => {
-        if (stderr.length < 8_192) stderr += chunk;
+        stderr += chunk.slice(0, 8_192 - stderr.length);
       });
       try {
         const line = await withTimeout(
-          firstLine(helper.stdout),
+          firstLine(
+            helper.stdout,
+            () => `zombie helper ended before reporting its child: ${stderr.slice(0, 8_192)}`,
+          ),
           TEST_CHILD_SIGNAL_TIMEOUT_MS,
-          `zombie helper did not report its child: ${stderr}`,
+          () => `zombie helper did not report its child: ${stderr.slice(0, 8_192)}`,
         );
         const owner = parseOwnerIdentity(line);
         await observeZombie(owner.pid);

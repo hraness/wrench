@@ -1,9 +1,9 @@
 // After a clean Bun 1.3.14 build, two `bun pm pack` artifacts of the
-// LinkedIn profile-activity candidate were byte-identical: 2,050,616 packed bytes,
-// 12,058,977 unpacked bytes, and 460 files. Their SHA-256 was
-// 62b9b511386075f77fce7c49a57383e0fcbdc47f4c3b3f7d3b75578b69719474. Prior CI
+// LinkedIn profile-activity candidate were byte-identical: 2,052,492 packed bytes,
+// 12,068,435 unpacked bytes, and 460 files. Their SHA-256 was
+// 79808b56913255e4a536ee9f9591c997009744cd986046e502d8be02f8f63800. Prior CI
 // measured a 3,543-byte Linux/macOS gzip spread. Keep the existing 2,178,192 packed-byte ceiling
-// and 13,702 unpacked bytes of bounded headroom. File inventory is exact at 460
+// and 4,244 unpacked bytes of bounded headroom. File inventory is exact at 460
 // after adding linkedin-web-feed.ts, linkedin-web-feed-browser.ts, and
 // wrench-web-adapter.v1.19.0.json.
 export const MAX_PACKED_BYTES = 2_178_192;

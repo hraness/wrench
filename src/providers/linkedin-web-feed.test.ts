@@ -187,11 +187,22 @@ describe("LinkedIn profile-activity cursors and requests", () => {
 
 describe("LinkedIn profile-activity projection", () => {
   test("projects authored text, engagement, media, and a next cursor when the page is full", () => {
+    const nextPage = linkedInProfileActivityPageUrl({
+      queryId: QUERY_ID,
+      profileUrn: PROFILE_URN,
+      count: 1,
+      start: 1,
+    });
     const page = projectLinkedInProfileActivityPage({
       response: pageResponse([updateEntity({
         imageComponent: { images: [{}] },
-      })], [countsEntity()]),
+      })], [countsEntity()], {
+        count: 1,
+        start: 0,
+        links: [{ rel: "next", href: nextPage.href }],
+      }),
       target,
+      queryId: QUERY_ID,
       profileUrn: PROFILE_URN,
       limit: 1,
       start: 0,
@@ -240,12 +251,13 @@ describe("LinkedIn profile-activity projection", () => {
         },
         metadata: { createdAt: 1_725_000_000_000 },
       })], [], {
-        count: 1,
+        count: 10,
         start: 0,
         total: 1,
         links: [],
       }),
       target,
+      queryId: QUERY_ID,
       profileUrn: PROFILE_URN,
       limit: 10,
       start: 0,
@@ -263,18 +275,117 @@ describe("LinkedIn profile-activity projection", () => {
     });
   });
 
-  test("never claims complete when paging is omitted and never invents a zero count", () => {
+  test("reports unknown completeness without inventing a cursor when paging is omitted", () => {
     const page = projectLinkedInProfileActivityPage({
       response: pageResponse([updateEntity()], [], null),
       target,
+      queryId: QUERY_ID,
       profileUrn: PROFILE_URN,
       limit: 10,
       start: 0,
       observedAt: OBSERVED_AT,
     });
     expect(page.complete).toBeFalse();
-    expect(page.nextCursor).toBe(`${LINKEDIN_PROFILE_ACTIVITY_CURSOR_PREFIX}:j-hawkins:1`);
+    expect(page.nextCursor).toBeNull();
     expect(page.posts[0]?.reactionCount).toBeNull();
+  });
+
+  test("fails closed when an empty provider page claims or implies continuation", () => {
+    expect(() => projectLinkedInProfileActivityPage({
+      response: pageResponse([], [], null),
+      target,
+      queryId: QUERY_ID,
+      profileUrn: PROFILE_URN,
+      limit: 10,
+      start: 20,
+      observedAt: OBSERVED_AT,
+    })).toThrow("did not advance its cursor");
+    expect(() => projectLinkedInProfileActivityPage({
+      response: pageResponse([], [], {
+        count: 10,
+        start: 20,
+        links: [{
+          rel: "next",
+          href: linkedInProfileActivityPageUrl({
+            queryId: QUERY_ID,
+            profileUrn: PROFILE_URN,
+            count: 10,
+            start: 30,
+          }).href,
+        }],
+      }),
+      target,
+      queryId: QUERY_ID,
+      profileUrn: PROFILE_URN,
+      limit: 10,
+      start: 20,
+      observedAt: OBSERVED_AT,
+    })).toThrow("did not advance its cursor");
+  });
+
+  test("binds paging metadata and links to the exact requested collection", () => {
+    const project = (paging: Readonly<Record<string, unknown>>) =>
+      projectLinkedInProfileActivityPage({
+        response: pageResponse([updateEntity()], [], paging),
+        target,
+        queryId: QUERY_ID,
+        profileUrn: PROFILE_URN,
+        limit: 10,
+        start: 20,
+        observedAt: OBSERVED_AT,
+      });
+    const nextPage = linkedInProfileActivityPageUrl({
+      queryId: QUERY_ID,
+      profileUrn: PROFILE_URN,
+      count: 10,
+      start: 30,
+    });
+    expect(() => project({ count: 10, start: 0, links: [] }))
+      .toThrow("did not bind the exact requested page");
+    expect(() => project({ count: 1, start: 20, links: [] }))
+      .toThrow("did not bind the exact requested page");
+    expect(() => project({ count: 10, start: 20, links: {} }))
+      .toThrow("links were invalid");
+    expect(() => project({
+      count: 10,
+      start: 20,
+      links: [{ rel: "next", href: nextPage.href }],
+    })).toThrow("linked past a terminal short page");
+    const foreign = new URL(nextPage);
+    foreign.hostname = "example.com";
+    expect(() => project({
+      count: 10,
+      start: 20,
+      links: [{ rel: "next", href: foreign.href }],
+    })).toThrow("changed the exact collection");
+    const foreignQuery = linkedInProfileActivityPageUrl({
+      queryId: `${LINKEDIN_PROFILE_ACTIVITY_QUERY_PREFIX}.8f05a4e5ad12d9cb2b56eaa22afbcab9`,
+      profileUrn: PROFILE_URN,
+      count: 10,
+      start: 30,
+    });
+    expect(() => project({
+      count: 10,
+      start: 20,
+      links: [{ rel: "next", href: foreignQuery.href }],
+    })).toThrow("changed the exact collection");
+    const repeated = linkedInProfileActivityPageUrl({
+      queryId: QUERY_ID,
+      profileUrn: PROFILE_URN,
+      count: 10,
+      start: 20,
+    });
+    expect(() => project({
+      count: 10,
+      start: 20,
+      links: [{ rel: "next", href: repeated.href }],
+    })).toThrow("changed the exact collection");
+    expect(() => project({
+      count: 10,
+      start: 20,
+      total: 31,
+      links: [],
+    })).toThrow("page length contradicted its paging total");
   });
 
   test("fails closed on an over-limit provider page, conflicting counts, and missing updates", () => {
@@ -284,6 +395,7 @@ describe("LinkedIn profile-activity projection", () => {
     expect(() => projectLinkedInProfileActivityPage({
       response: pageResponse([updateEntity(), second], []),
       target,
+      queryId: QUERY_ID,
       profileUrn: PROFILE_URN,
       limit: 1,
       start: 0,
@@ -301,6 +413,7 @@ describe("LinkedIn profile-activity projection", () => {
         }),
       ]),
       target,
+      queryId: QUERY_ID,
       profileUrn: PROFILE_URN,
       limit: 10,
       start: 0,
@@ -320,6 +433,7 @@ describe("LinkedIn profile-activity projection", () => {
         included: [],
       },
       target,
+      queryId: QUERY_ID,
       profileUrn: PROFILE_URN,
       limit: 10,
       start: 0,

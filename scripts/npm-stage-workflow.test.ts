@@ -1122,14 +1122,14 @@ describe("npm publication contract", () => {
     expect(artifact).toContain('from "./package-budget.js"');
     expect(smoke).toContain('from "./package-budget.js"');
     expect(budget).toContain("two `bun pm pack` artifacts");
-    expect(budget).toContain("2,050,616 packed bytes");
-    expect(budget).toContain("12,058,977 unpacked bytes, and 460 files");
+    expect(budget).toContain("2,052,492 packed bytes");
+    expect(budget).toContain("12,068,435 unpacked bytes, and 460 files");
     expect(budget).toContain(
-      "62b9b511386075f77fce7c49a57383e0fcbdc47f4c3b3f7d3b75578b69719474",
+      "79808b56913255e4a536ee9f9591c997009744cd986046e502d8be02f8f63800",
     );
     expect(budget).toContain("measured a 3,543-byte Linux/macOS gzip spread");
     expect(budget).toContain("Keep the existing 2,178,192 packed-byte ceiling");
-    expect(budget).toContain("13,702 unpacked bytes of bounded headroom");
+    expect(budget).toContain("4,244 unpacked bytes of bounded headroom");
     expect(MAX_PACKED_BYTES).toBe(2_178_192);
     expect(MAX_PACKED_ENTRIES).toBe(460);
     expect(MAX_PACKED_FILES).toBe(460);
