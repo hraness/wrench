@@ -1,3 +1,8 @@
+import {
+  isProviderPluginOperationName,
+  isProviderPluginSurfaceId,
+} from "./provider-plugin-identifiers";
+
 export interface ReviewedBuiltInContractIdentityV1 {
   readonly schemaVersion: 1;
   readonly pluginVersion: string;
@@ -5,6 +10,11 @@ export interface ReviewedBuiltInContractIdentityV1 {
   readonly implementationSha256: string;
   /** Exact later current-distribution writer identities accepted only by readers. */
   readonly legacyCurrentReadImplementationSha256: readonly string[];
+  /** Exact historical distribution identities scoped to every route that distribution owned. */
+  readonly legacyDistributionReadImplementationSha256?: readonly Readonly<{
+    readonly implementationSha256: string;
+    readonly routes: readonly string[];
+  }>[];
   /** Exact later writer identities accepted only for routes that existed in that distribution. */
   readonly legacyRouteReadImplementationSha256?: Readonly<
     Record<string, readonly string[]>
@@ -24,14 +34,60 @@ export interface ReviewedBuiltInContractIdentityV1 {
   }> | null;
 }
 
+const BEEPER_V1_ROUTE_COORDINATES = Object.freeze([
+  "accounts.list", "accounts.read", "bridges.list", "bridges.read",
+  "contacts.list", "contacts.search", "contacts.read", "messaging.list",
+  "messaging.search", "conversations.read", "messaging.read",
+  "messaging.content.search", "messaging.message.read", "messaging.context.read",
+  "messaging.send", "reactions.set", "messaging.edit", "conversations.start",
+  "conversations.archive.set", "conversations.pin.set", "conversations.mute.set",
+  "conversations.read-state.set", "conversations.priority.set",
+  "conversations.notify", "conversations.title.set",
+  "conversations.description.set", "conversations.avatar.set",
+  "conversations.draft.set", "conversations.disappearing.set",
+  "conversations.reminder.set", "conversations.focus", "presence.set",
+].map((operation) => `${operation}@1`));
+
+const BEEPER_2_2_DIRECT_ROUTE_COORDINATES = Object.freeze([
+  "accounts.list@2",
+  "messaging.search@2",
+  "conversations.read@2",
+  "messaging.read@2",
+  "messaging.content.search@2",
+]);
+
+const BEEPER_V1_BINDING_ROUTE_COORDINATES = Object.freeze(
+  BEEPER_V1_ROUTE_COORDINATES.map((route) => `local-cli:beeper/${route}`),
+);
+const BEEPER_2_2_DIRECT_BINDING_ROUTE_COORDINATES = Object.freeze(
+  BEEPER_2_2_DIRECT_ROUTE_COORDINATES.map((route) => `local-cli:beeper/${route}`),
+);
+
 const identities = Object.freeze({
   "beeper-linked-device": {
     schemaVersion: 1,
-    pluginVersion: "2.2.0",
-    implementationSha256: "e6d49d29ece94d3c9eb1817ea194699bbe56ecb1170e3691e0242e16ef2c26eb",
-    legacyCurrentReadImplementationSha256: [
-      "89a51cc1e082b15ff89dd4e85e48e218653ca4bf7e49b5bbc824e5381bad86e1",
-      "1f5ed0abd4eaaef92e0d035452273e8a081f564da827897547b6e65939974a60",
+    pluginVersion: "2.3.0",
+    implementationSha256: "2d2cef38ce2d0c193f4e6890c51d59f8a3547d9011d5c3aa8df18f5f077ebcdd",
+    legacyCurrentReadImplementationSha256: [],
+    legacyDistributionReadImplementationSha256: [
+      {
+        implementationSha256:
+          "e6d49d29ece94d3c9eb1817ea194699bbe56ecb1170e3691e0242e16ef2c26eb",
+        routes: [
+          ...BEEPER_V1_BINDING_ROUTE_COORDINATES,
+          ...BEEPER_2_2_DIRECT_BINDING_ROUTE_COORDINATES,
+        ],
+      },
+      {
+        implementationSha256:
+          "89a51cc1e082b15ff89dd4e85e48e218653ca4bf7e49b5bbc824e5381bad86e1",
+        routes: BEEPER_V1_BINDING_ROUTE_COORDINATES,
+      },
+      {
+        implementationSha256:
+          "1f5ed0abd4eaaef92e0d035452273e8a081f564da827897547b6e65939974a60",
+        routes: BEEPER_V1_BINDING_ROUTE_COORDINATES,
+      },
     ],
     legacyRouteReadImplementationSha256: {
       "accounts.list@1": [
@@ -40,13 +96,7 @@ const identities = Object.freeze({
       "accounts.read@1": [
         "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
       ],
-      "bridges.list@1": [
-        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
-      ],
       "bridges.read@1": [
-        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
-      ],
-      "contacts.list@1": [
         "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
       ],
       "contacts.search@1": [
@@ -62,9 +112,6 @@ const identities = Object.freeze({
         "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
       ],
       "conversations.read@1": [
-        "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
-      ],
-      "messaging.read@1": [
         "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92",
       ],
       "messaging.content.search@1": [
@@ -363,9 +410,10 @@ const identities = Object.freeze({
   },
   "whatsapp-linked-device": {
     schemaVersion: 1,
-    pluginVersion: "1.1.0",
-    implementationSha256: "b098d86a3fedee6c2a0f5bbd10b683af7ad4c27e4a633930d61e4ee188206a00",
+    pluginVersion: "1.2.0",
+    implementationSha256: "f5690e617cb5ef3ac06e2a35dc6833af1f47947688934fb0ccdbdf6aa2620af7",
     legacyCurrentReadImplementationSha256: [
+      "b098d86a3fedee6c2a0f5bbd10b683af7ad4c27e4a633930d61e4ee188206a00",
       "4c58bd39ab0971764bc1361a8093f5965146c81e9be6785eb2c6c324765518c3",
     ],
     legacyReadImplementationSha256: {
@@ -444,6 +492,46 @@ const identities = Object.freeze({
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const MAXIMUM_LATER_CURRENT_IDENTITIES = 11;
+const MAXIMUM_ROUTE_SCOPED_IDENTITIES = 4_096;
+const MAXIMUM_LEGACY_DISTRIBUTIONS = 64;
+const reviewedBuiltInContractTransports = new Set([
+  "provider-api",
+  "web-session-api",
+  "linked-device",
+  "local-cli",
+]);
+
+export function isReviewedBuiltInContractRouteCoordinate(
+  value: unknown,
+): value is string {
+  if (typeof value !== "string") return false;
+  const separator = value.lastIndexOf("@");
+  if (separator < 1 || value.indexOf("@") !== separator) return false;
+  const operation = value.slice(0, separator);
+  const versionText = value.slice(separator + 1);
+  if (!isProviderPluginOperationName(operation) || !/^[1-9][0-9]*$/u.test(versionText)) {
+    return false;
+  }
+  const version = Number(versionText);
+  return Number.isSafeInteger(version)
+    && version >= 1
+    && version <= 1_000_000
+    && String(version) === versionText;
+}
+
+export function isReviewedBuiltInContractBindingRouteCoordinate(
+  value: unknown,
+): value is string {
+  if (typeof value !== "string") return false;
+  const slash = value.indexOf("/");
+  if (slash < 1 || value.lastIndexOf("/") !== slash) return false;
+  const binding = value.slice(0, slash);
+  const colon = binding.indexOf(":");
+  if (colon < 1 || binding.lastIndexOf(":") !== colon) return false;
+  return reviewedBuiltInContractTransports.has(binding.slice(0, colon))
+    && isProviderPluginSurfaceId(binding.slice(colon + 1))
+    && isReviewedBuiltInContractRouteCoordinate(value.slice(slash + 1));
+}
 
 for (const [pluginId, identity] of Object.entries(identities)) {
   const reviewedIdentity = identity as ReviewedBuiltInContractIdentityV1;
@@ -477,11 +565,62 @@ for (const [pluginId, identity] of Object.entries(identities)) {
     }
     reviewedIdentities.push(value);
   }
-  for (const [operation, values] of Object.entries(
+  const legacyDistributions =
+    reviewedIdentity.legacyDistributionReadImplementationSha256 ?? [];
+  if (
+    legacyDistributions.length > 0
+    && (
+      identity.legacyCurrentReadImplementationSha256.length > 0
+      || identity.legacyReadImplementationSha256 !== null
+      || identity.legacyE71ReadImplementationSha256 !== null
+    )
+  ) {
+    throw new Error(
+      `${pluginId} cannot combine global predecessor identities with route-scoped distributions`,
+    );
+  }
+  if (legacyDistributions.length > MAXIMUM_LEGACY_DISTRIBUTIONS) {
+    throw new Error(`${pluginId} has too many legacy contract distributions`);
+  }
+  for (const distribution of legacyDistributions) {
+    if (!SHA256_PATTERN.test(distribution.implementationSha256)) {
+      throw new Error(`${pluginId} legacy distribution identity is not one lowercase SHA-256`);
+    }
+    if (reviewedIdentities.includes(distribution.implementationSha256)) {
+      throw new Error(`${pluginId} legacy distribution identity is duplicated`);
+    }
+    if (
+      distribution.routes.length < 1
+      || distribution.routes.length > MAXIMUM_ROUTE_SCOPED_IDENTITIES
+    ) {
+      throw new Error(`${pluginId} legacy distribution route count is outside bounds`);
+    }
+    const routes = new Set<string>();
+    for (const route of distribution.routes) {
+      if (
+        !isReviewedBuiltInContractBindingRouteCoordinate(route)
+        || routes.has(route)
+      ) {
+        throw new Error(`${pluginId} has a malformed or repeated legacy distribution route`);
+      }
+      routes.add(route);
+    }
+    reviewedIdentities.push(distribution.implementationSha256);
+    Object.freeze(distribution.routes);
+    Object.freeze(distribution);
+  }
+  const routeIdentities = Object.entries(
     reviewedIdentity.legacyRouteReadImplementationSha256 ?? {},
-  )) {
-    if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+@[1-9][0-9]*$/u.test(operation)) {
+  );
+  if (routeIdentities.length > MAXIMUM_ROUTE_SCOPED_IDENTITIES) {
+    throw new Error(`${pluginId} has too many route-scoped reader identities`);
+  }
+  for (const [operation, values] of routeIdentities) {
+    if (!isReviewedBuiltInContractRouteCoordinate(operation)) {
       throw new Error(`${pluginId} has a malformed route-scoped reader identity`);
+    }
+    if (values.length < 1) {
+      throw new Error(`${pluginId}/${operation} has no operation-scoped reader identity`);
     }
     if (values.length > MAXIMUM_LATER_CURRENT_IDENTITIES) {
       throw new Error(`${pluginId}/${operation} has too many operation-scoped reader identities`);
@@ -499,6 +638,9 @@ for (const [pluginId, identity] of Object.entries(identities)) {
     Object.freeze(values);
   }
   Object.freeze(identity.legacyCurrentReadImplementationSha256);
+  if (reviewedIdentity.legacyDistributionReadImplementationSha256 !== undefined) {
+    Object.freeze(reviewedIdentity.legacyDistributionReadImplementationSha256);
+  }
   if (reviewedIdentity.legacyRouteReadImplementationSha256 !== undefined) {
     Object.freeze(reviewedIdentity.legacyRouteReadImplementationSha256);
   }
@@ -515,8 +657,22 @@ export function reviewedBuiltInContractIdentity(
   pluginId: string,
   pluginVersion: string,
 ): ReviewedBuiltInContractIdentityV1 {
+  const identity = reviewedBuiltInContractIdentityIfPresent(pluginId, pluginVersion);
+  if (identity === null) {
+    throw new Error(
+      `built-in provider plugin ${pluginId}@${pluginVersion} has no reviewed durable contract identity`,
+    );
+  }
+  return identity;
+}
+
+export function reviewedBuiltInContractIdentityIfPresent(
+  pluginId: string,
+  pluginVersion: string,
+): ReviewedBuiltInContractIdentityV1 | null {
   const identity = identities[pluginId as keyof typeof identities];
-  if (identity === undefined || identity.pluginVersion !== pluginVersion) {
+  if (identity === undefined) return null;
+  if (identity.pluginVersion !== pluginVersion) {
     throw new Error(
       `built-in provider plugin ${pluginId}@${pluginVersion} has no reviewed durable contract identity`,
     );

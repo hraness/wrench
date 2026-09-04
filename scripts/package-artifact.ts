@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 
-import { packageArtifactBudget } from "./package-budget.js";
+import {
+  MAX_PACKAGE_TAR_BYTES,
+  packageArtifactBudget,
+} from "./package-budget.js";
 
 const blockSize = 512;
 const packagePrefix = "package/";
-const maximumTarBytes = 12_000_000;
 
 const requiredPaths = Object.freeze([
   "CHANGELOG.md",
@@ -18,19 +20,26 @@ const requiredPaths = Object.freeze([
   "docs/rental-listings.md",
   "package.json",
   "tsconfig.json",
+  "dist/apple-photos-client.js",
   "dist/beeper-client.js",
   "dist/client.js",
   "dist/index.js",
   "dist/messaging.js",
   "dist/omni-client.js",
+  "dist/whatsapp-client.js",
   "skills/wrench/SKILL.md",
   "skills/wrench/agents/openai.yaml",
   "skills/wrench/references/install.md",
+  "src/apple-photos-cli.ts",
+  "src/assets/adapters/beeper/wrench-web-adapter.v2.2.0.json",
   "src/cli.ts",
   "src/index.ts",
+  "src/local-cli-surface-contract.ts",
   "src/message-like-me-agentic-messaging.ts",
+  "src/messaging.ts",
   "src/providers/imessage-direct-install.ts",
   "src/provider-plugin-registry.ts",
+  "src/whatsapp-message-like-me-cli.ts",
   "src/wrench.ts",
 ]);
 
@@ -197,7 +206,7 @@ export async function inspectPackageArtifact(
 
   let tar: Buffer;
   try {
-    tar = gunzipSync(compressed, { maxOutputLength: maximumTarBytes });
+    tar = gunzipSync(compressed, { maxOutputLength: MAX_PACKAGE_TAR_BYTES });
   } catch (error) {
     throw new Error("Package tarball could not be safely decompressed", { cause: error });
   }

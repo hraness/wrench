@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import beeperManifest from "./assets/adapters/beeper/wrench-web-adapter.json";
 import { providerPluginRegistry } from "./provider-plugins";
 import { webSessionContractDefinitions } from "./web-session-contract-definitions";
 import { BLUESKY_WEB_OPERATIONS } from "./providers/bluesky-web";
@@ -75,6 +76,22 @@ describe("provider operation contract parity", () => {
           state: contracts[operation]?.state,
         });
       }
+    }
+  });
+
+  test("binds generic Beeper planning to the validated current adapter coordinates", () => {
+    const contracts = webSessionContractDefinitions.beeper;
+    const binding = providerPluginRegistry.requireRoute("local-cli", "beeper");
+    for (const [operation, contract] of Object.entries(contracts)) {
+      const adapterOperation = beeperManifest.operations[
+        operation as keyof typeof beeperManifest.operations
+      ];
+      expect(contract.contractVersion, operation)
+        .toBe(adapterOperation.localCli.contractVersion);
+      expect(binding.operations.some((installed) =>
+        installed.name === operation
+        && installed.contractVersion === contract.contractVersion), operation)
+        .toBeTrue();
     }
   });
 });

@@ -22,13 +22,18 @@ import type { WrenchAuth } from "../auth";
 import { canonicalJson } from "../canonical-json";
 import type { LocalCliRecipe, OperationInput } from "../model";
 import { OperationDeadline } from "../operation-deadline";
+import type { ProviderPluginReconciliationContextV1 } from "../provider-plugin";
+import { beeperLinkedDevicePlugin } from "../plugins/beeper-linked-device/plugin";
 import { boundedJsonOutput } from "../runtime";
 import {
   materializeBeeperExactConversation,
   materializeBeeperMessagingList,
   materializeBeeperMessagingRead,
+  materializeBeeperMessagingReadV1,
+  materializeBeeperMessagingReadV2,
 } from "./beeper-omni";
 import {
+  BEEPER_LOCAL_MUTATION_ERROR_CODES,
   executeBeeperLocalOperation,
   beeperSubjectFromAccountsAndTarget,
   beeperDesiredChatStateForTest,
@@ -43,14 +48,23 @@ import {
   type BeeperCliInvocationResult,
 } from "./beeper-local-runtime";
 import {
+  BEEPER_CLI_V062_SURFACE_CONTRACT,
+  BEEPER_LOCAL_OPERATION_CONTRACT_VERSIONS,
+  BEEPER_LOCAL_OPERATION_NAMES,
+  BEEPER_LOCAL_OPERATIONS,
+  isBeeperLocalOperation,
+  isBeeperLocalOperationContractVersion,
+  parseBeeperContactsListInput,
   parseBeeperContactsSearchInput,
   parseBeeperOperationInput,
   parseBeeperMessagingSearchInput,
   parseBeeperMessagingReadInput,
+  parseBeeperMessagingReadInputV2,
   planBeeperAccountsListCommand,
   planBeeperMessageLikeMeExportCommand,
   planBeeperReadCommand,
   planBeeperVersionCommand,
+  type BeeperLocalOperationName,
 } from "./beeper-local";
 
 const ACCOUNT_ID = "account-beeper";
@@ -226,7 +240,7 @@ function messages(includeDirection = true): readonly unknown[] {
     seen: true,
     senderID: "signal:self",
     senderName: "Fixture Self",
-    sortKey: "00000000000000000001",
+    sortKey: "00000000000000000002",
     text: "one synthetic outgoing message",
     timestamp: "2026-08-21T14:00:01.000Z",
     type: "TEXT",
@@ -241,7 +255,7 @@ function messages(includeDirection = true): readonly unknown[] {
     isSender: false,
     senderID: "signal:ada",
     senderName: "Ada Fixture",
-    sortKey: "00000000000000000002",
+    sortKey: "00000000000000000001",
     text: "must not survive deletion projection",
     timestamp: "2026-08-21T14:00:03.000Z",
     type: "TEXT",
@@ -289,11 +303,13 @@ function auth(path: string): Extract<WrenchAuth, { readonly kind: "linked-device
   };
 }
 
-function recipe(action: string): LocalCliRecipe {
+function recipe(action: string, contractVersion?: number): LocalCliRecipe {
+  if (!isBeeperLocalOperation(action)) throw new Error("fixture action is not installed");
   return {
     surface: "beeper",
     action,
-    contractVersion: 1,
+    contractVersion: contractVersion
+      ?? (action === "bridges.list" || action === "contacts.list" ? 2 : 1),
     timeoutMs: 60_000,
     maxOutputBytes: 10 * 1024 * 1024,
   };
@@ -310,6 +326,7 @@ function runner(
     readonly contactReadData?: unknown;
     readonly targetStatusData?: unknown;
     readonly messageReadData?: unknown;
+    readonly messagesData?: readonly unknown[];
   } = {},
 ): (invocation: BeeperCliInvocation) => Promise<BeeperCliInvocationResult> {
   return async (invocation) => {
@@ -336,7 +353,7 @@ function runner(
     if (command === "chats search") return envelope(options.chatsData ?? chats());
     if (command === "chats show") return envelope(options.chatReadData ?? chats()[0]);
     if (command === "messages list") {
-      return envelope(messages(options.includeDirection ?? true));
+      return envelope(options.messagesData ?? messages(options.includeDirection ?? true));
     }
     if (command === "messages show") {
       return envelope(options.messageReadData ?? messages()[0]);
@@ -359,6 +376,7 @@ async function execute(
     readonly contactReadData?: unknown;
     readonly targetStatusData?: unknown;
     readonly messageReadData?: unknown;
+    readonly messagesData?: readonly unknown[];
   } = {},
 ) {
   return executeBeeperLocalOperation(recipe(action), input, auth(path), {
@@ -369,7 +387,639 @@ async function execute(
   });
 }
 
+const MATRIX_CONTACT_ID = "@ada:beeper.local";
+const MATRIX_REMINDER_AT = "2026-09-01T12:00:00.000Z";
+
+type MutationMatrixCase = Readonly<{
+  action: BeeperLocalOperationName;
+  input: OperationInput;
+  reconciliation: "accepted-target" | "desired-state" | "none";
+}>;
+
+const BEEPER_WRITE_MUTATION_MATRIX = Object.freeze([
+  Object.freeze({
+    action: "messaging.send",
+    input: Object.freeze({
+      account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID,
+      kind: "text", text: "matrix send text",
+    }),
+    reconciliation: "accepted-target",
+  }),
+  Object.freeze({
+    action: "reactions.set",
+    input: Object.freeze({
+      account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID,
+      message_id: "message-outgoing", reaction: "👍", enabled: true,
+    }),
+    reconciliation: "desired-state",
+  }),
+  Object.freeze({
+    action: "messaging.edit",
+    input: Object.freeze({
+      account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID,
+      message_id: "message-outgoing", text: "matrix edited text",
+    }),
+    reconciliation: "desired-state",
+  }),
+  Object.freeze({
+    action: "conversations.start",
+    input: Object.freeze({ account_id: NETWORK_ACCOUNT_ID, user_id: MATRIX_CONTACT_ID }),
+    reconciliation: "accepted-target",
+  }),
+  ...[
+    ["conversations.archive.set", "enabled", true],
+    ["conversations.pin.set", "enabled", true],
+    ["conversations.mute.set", "enabled", true],
+  ].map(([action, field, value]) => Object.freeze({
+    action: action as BeeperLocalOperationName,
+    input: Object.freeze({
+      account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID, [field as string]: value,
+    }) as OperationInput,
+    reconciliation: "desired-state" as const,
+  })),
+  Object.freeze({
+    action: "conversations.read-state.set",
+    input: Object.freeze({
+      account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID, unread: true,
+    }),
+    reconciliation: "desired-state",
+  }),
+  Object.freeze({
+    action: "conversations.priority.set",
+    input: Object.freeze({
+      account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID, level: "low",
+    }),
+    reconciliation: "desired-state",
+  }),
+  Object.freeze({
+    action: "conversations.notify",
+    input: Object.freeze({ account_id: ACCOUNT_ID, conversation_id: CHAT_ID }),
+    reconciliation: "none",
+  }),
+  Object.freeze({
+    action: "conversations.title.set",
+    input: Object.freeze({
+      account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID, title: "Matrix title",
+    }),
+    reconciliation: "desired-state",
+  }),
+  Object.freeze({
+    action: "conversations.description.set",
+    input: Object.freeze({
+      account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID,
+      clear: false, description: "Matrix description",
+    }),
+    reconciliation: "desired-state",
+  }),
+  Object.freeze({
+    action: "conversations.avatar.set",
+    input: Object.freeze({
+      account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID, clear: true,
+    }),
+    reconciliation: "desired-state",
+  }),
+  Object.freeze({
+    action: "conversations.draft.set",
+    input: Object.freeze({
+      account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID,
+      clear: false, text: "Matrix draft",
+    }),
+    reconciliation: "desired-state",
+  }),
+  Object.freeze({
+    action: "conversations.disappearing.set",
+    input: Object.freeze({
+      account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID, seconds: 3_600,
+    }),
+    reconciliation: "desired-state",
+  }),
+  Object.freeze({
+    action: "conversations.reminder.set",
+    input: Object.freeze({
+      account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID,
+      clear: false, when: MATRIX_REMINDER_AT, dismiss_on_message: false,
+    }),
+    reconciliation: "desired-state",
+  }),
+  Object.freeze({
+    action: "conversations.focus",
+    input: Object.freeze({ account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID }),
+    reconciliation: "none",
+  }),
+  Object.freeze({
+    action: "presence.set",
+    input: Object.freeze({
+      account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID, state: "typing",
+    }),
+    reconciliation: "none",
+  }),
+] as const satisfies readonly MutationMatrixCase[]);
+
+const BEEPER_SUPPORTED_WRITE_COMMAND_SEMANTICS = Object.freeze([
+  ["chats start", "conversations.start", {}],
+  ["chats archive", "conversations.archive.set", { enabled: true }],
+  ["chats unarchive", "conversations.archive.set", { enabled: false }],
+  ["chats pin", "conversations.pin.set", { enabled: true }],
+  ["chats unpin", "conversations.pin.set", { enabled: false }],
+  ["chats mute", "conversations.mute.set", { enabled: true }],
+  ["chats unmute", "conversations.mute.set", { enabled: false }],
+  ["chats mark-read", "conversations.read-state.set", { unread: false }],
+  ["chats mark-unread", "conversations.read-state.set", { unread: true }],
+  ["chats priority", "conversations.priority.set", {}],
+  ["chats notify-anyway", "conversations.notify", {}],
+  ["chats rename", "conversations.title.set", {}],
+  ["chats description", "conversations.description.set", {}],
+  ["chats avatar", "conversations.avatar.set", {}],
+  ["chats draft", "conversations.draft.set", {}],
+  ["chats disappear", "conversations.disappearing.set", {}],
+  ["chats remind", "conversations.reminder.set", { clear: false }],
+  ["chats unremind", "conversations.reminder.set", { clear: true }],
+  ["chats focus", "conversations.focus", {}],
+  ["messages edit", "messaging.edit", {}],
+  ["send text", "messaging.send", { kind: "text" }],
+  ["send file", "messaging.send", { kind: "file" }],
+  ["send react", "reactions.set", { enabled: true }],
+  ["send sticker", "messaging.send", { kind: "sticker" }],
+  ["send unreact", "reactions.set", { enabled: false }],
+  ["send voice", "messaging.send", { kind: "voice" }],
+  ["presence", "presence.set", {}],
+] as const);
+
+function mutationAccounts(): readonly unknown[] {
+  return Object.freeze(accounts().map((account, index) => index === 0
+    ? Object.freeze({
+        ...(account as Record<string, unknown>),
+        bridge: Object.freeze({ id: "imessage", provider: "local", type: "imessage" }),
+      })
+    : account));
+}
+
+const MATRIX_SUBJECT = beeperSubjectFromAccountsAndTarget(
+  parseBeeperExportAccounts(mutationAccounts()),
+  "http://127.0.0.1:23384",
+  BUNDLE_ID,
+  "4.2.0-fixture",
+);
+
+function mutationAuth(path: string): Extract<WrenchAuth, { readonly kind: "linked-device-store" }> {
+  return { ...auth(path), subject: MATRIX_SUBJECT };
+}
+
+function mutationCaseAccount(testCase: MutationMatrixCase): string {
+  return testCase.action === "conversations.notify" ? ACCOUNT_ID : NETWORK_ACCOUNT_ID;
+}
+
+function matrixChat(
+  testCase: MutationMatrixCase,
+  desired: boolean,
+): Readonly<Record<string, unknown>> {
+  const accountId = mutationCaseAccount(testCase);
+  const input = testCase.input as Readonly<Record<string, unknown>>;
+  const base: Record<string, unknown> = {
+    ...(chats()[0] as Record<string, unknown>),
+    accountID: accountId,
+    network: accountId === ACCOUNT_ID ? "iMessage" : "Signal",
+    type: "group",
+    title: "Matrix original title",
+    description: "Matrix original description",
+    imgURL: "mxc://fixture/original-avatar",
+    draft: null,
+    isArchived: false,
+    isLowPriority: false,
+    isMarkedUnread: false,
+    isMuted: false,
+    isPinned: false,
+    messageExpirySeconds: 0,
+    reminder: null,
+    unreadCount: 0,
+  };
+  if (!desired) return Object.freeze(base);
+  if (testCase.action === "conversations.archive.set") base.isArchived = input.enabled;
+  if (testCase.action === "conversations.pin.set") base.isPinned = input.enabled;
+  if (testCase.action === "conversations.mute.set") base.isMuted = input.enabled;
+  if (testCase.action === "conversations.read-state.set") {
+    base.isMarkedUnread = input.unread;
+    base.unreadCount = input.unread === true ? 1 : 0;
+  }
+  if (testCase.action === "conversations.priority.set") {
+    base.isLowPriority = input.level === "low";
+  }
+  if (testCase.action === "conversations.title.set") base.title = input.title;
+  if (testCase.action === "conversations.description.set") {
+    base.description = input.clear === true ? null : input.description;
+  }
+  if (testCase.action === "conversations.avatar.set") {
+    base.imgURL = input.clear === true ? null : "mxc://fixture/new-avatar";
+  }
+  if (testCase.action === "conversations.draft.set") {
+    base.draft = input.clear === true
+      ? null
+      : Object.freeze({ text: input.text, attachments: Object.freeze({}) });
+  }
+  if (testCase.action === "conversations.disappearing.set") {
+    base.messageExpirySeconds = input.seconds;
+  }
+  if (testCase.action === "conversations.reminder.set") {
+    base.reminder = input.clear === true
+      ? null
+      : Object.freeze({
+          remindAt: input.when,
+          dismissOnIncomingMessage: input.dismiss_on_message ?? false,
+        });
+  }
+  return Object.freeze(base);
+}
+
+function matrixMessage(
+  testCase: MutationMatrixCase,
+  desired: boolean,
+): Readonly<Record<string, unknown>> {
+  const input = testCase.input as Readonly<Record<string, unknown>>;
+  const base = { ...(messages()[0] as Record<string, unknown>) };
+  if (testCase.action === "messaging.edit" && desired) base.text = input.text;
+  if (testCase.action === "reactions.set" && desired) {
+    base.reactions = [{
+      emoji: true,
+      id: "matrix-self-reaction",
+      participantID: "signal:self",
+      reactionKey: input.reaction,
+    }];
+  }
+  if (testCase.action === "messaging.send" && desired) {
+    base.id = "matrix-final-message";
+    base.text = input.text;
+    base.isSender = true;
+  }
+  return Object.freeze(base);
+}
+
+function matrixMutationSuccess(
+  testCase: MutationMatrixCase,
+): unknown {
+  const input = testCase.input as Readonly<Record<string, unknown>>;
+  if (testCase.action === "messaging.send") return Object.freeze({
+    accepted: true,
+    state: "accepted",
+    chatID: CHAT_ID,
+    pendingMessageID: "matrix-pending-message",
+    hint: "Desktop accepted the send request. Pass --wait to wait for the final message or failure.",
+  });
+  if (testCase.action === "reactions.set") return Object.freeze({
+    chatID: CHAT_ID,
+    messageID: input.message_id,
+    reactionKey: input.reaction,
+    success: true,
+    transactionID: "matrix-reaction-transaction",
+  });
+  if (testCase.action === "messaging.edit") return Object.freeze({
+    ...matrixMessage(testCase, true),
+    messageID: input.message_id,
+    success: true,
+  });
+  if (testCase.action === "conversations.start") return Object.freeze({
+    ...matrixChat(testCase, true),
+    participants: Object.freeze({
+      hasMore: false,
+      items: Object.freeze([{
+        fullName: "Ada Fixture", id: MATRIX_CONTACT_ID, isSelf: false,
+      }, {
+        fullName: "Fixture Self", id: "signal:self", isSelf: true,
+      }]),
+      total: 2,
+    }),
+    chatID: CHAT_ID,
+    status: "created",
+  });
+  if (testCase.action === "conversations.reminder.set") return Object.freeze({
+    message: input.clear === true ? "Reminder cleared" : "Reminder set",
+    chatID: CHAT_ID,
+    ...(input.clear === true ? {} : { detail: input.when, remindAt: input.when }),
+  });
+  if (testCase.action === "conversations.focus") return Object.freeze({ success: true });
+  if (testCase.action === "presence.set") return Object.freeze({
+    message: `Sent ${String(input.state)} indicator`,
+    chatID: CHAT_ID,
+    state: input.state,
+  });
+  return matrixChat(testCase, true);
+}
+
+function matrixRunner(
+  testCase: MutationMatrixCase,
+  mode: "success" | "readback",
+  counters: { mutationInvocations: number; spawned: number; commands?: string[] },
+): (invocation: BeeperCliInvocation) => Promise<BeeperCliInvocationResult> {
+  let desired = mode === "readback";
+  return async (invocation) => {
+    const command = invocation.arguments.slice(0, 2).join(" ");
+    counters.commands?.push(command);
+    if (mode === "readback") {
+      expect(invocation.environment.BEEPER_READONLY, `${testCase.action} reconciliation ${command}`)
+        .toBe("1");
+    }
+    if (invocation.arguments[0] === "version") {
+      return envelope({ name: "@beeper/cli", version: "0.6.2" });
+    }
+    if (command === "targets status") return envelope(targetStatus());
+    if (command === "accounts list") return envelope(mutationAccounts());
+    if (command === "contacts show") return envelope({
+      accountID: NETWORK_ACCOUNT_ID,
+      contact: Object.freeze({
+        cannotMessage: false,
+        fullName: "Ada Fixture",
+        id: MATRIX_CONTACT_ID,
+      }),
+    });
+    if (command === "chats show") return envelope(matrixChat(testCase, desired));
+    if (command === "messages show") return envelope(matrixMessage(testCase, desired));
+    if (invocation.environment.BEEPER_READONLY !== "1") {
+      expect(invocation.arguments, `${testCase.action} mutation argv`).toContain("--yes");
+      expect(Object.hasOwn(invocation.environment, "BEEPER_READONLY"), testCase.action).toBeFalse();
+      counters.mutationInvocations += 1;
+      await invocation.beforeSpawn?.();
+      counters.spawned += 1;
+      desired = true;
+      return envelope(matrixMutationSuccess(testCase));
+    }
+    throw new Error(`unexpected matrix fixture command ${command}`);
+  };
+}
+
+describe("Beeper exact write runtime matrix", () => {
+  test("binds every supported write command path to its exact semantic inputs", () => {
+    const actual = Object.freeze(BEEPER_CLI_V062_SURFACE_CONTRACT.commands
+      .filter((command) =>
+        command.decision.disposition === "supported"
+        && command.reviewedEffect === "write")
+      .map((command) => Object.freeze([
+        command.path.join(" "),
+        command.decision.operation,
+        command.pathSemanticInputs,
+      ])));
+    expect(actual).toEqual(BEEPER_SUPPORTED_WRITE_COMMAND_SEMANTICS);
+    expect(actual).toHaveLength(27);
+  });
+
+  test("proves failure, success, uncertainty, reconciliation, and no retry for all 18 writes", async () => {
+    const declaredWrites = BEEPER_LOCAL_OPERATION_NAMES.filter((action) =>
+      BEEPER_LOCAL_OPERATIONS[action].effect === "write");
+    const matrixActions = BEEPER_WRITE_MUTATION_MATRIX.map((testCase) => testCase.action);
+    expect(declaredWrites).toHaveLength(18);
+    expect(new Set(matrixActions)).toHaveLength(18);
+    expect(new Set(matrixActions)).toEqual(new Set(declaredWrites));
+
+    for (const testCase of BEEPER_WRITE_MUTATION_MATRIX) {
+      const path = privateStore();
+      try {
+        const preDispatch = { mutationInvocations: 0, spawned: 0, commands: [] as string[] };
+        let failed: Awaited<ReturnType<typeof executeBeeperLocalOperation>>;
+        try {
+          failed = await executeBeeperLocalOperation(
+            recipe(testCase.action),
+            testCase.input,
+            mutationAuth(path),
+            {
+              beforeDispatch: async () => {
+                throw new Error("matrix durable fence rejected before spawn");
+              },
+              dependencies: {
+                binaryPath: "/fixture/beeper-0.6.2",
+                run: matrixRunner(testCase, "success", preDispatch),
+              },
+            },
+          );
+        } catch {
+          throw new Error(`${testCase.action} escaped before the matrix dispatch boundary after ${preDispatch.commands.join(",")}`);
+        }
+        expect(failed.status, testCase.action).toBe("failed");
+        expect(failed.error, testCase.action).toBe(
+          BEEPER_LOCAL_MUTATION_ERROR_CODES.preDispatchFailed,
+        );
+        expect(failed.dispatch, testCase.action).toEqual({ planned: 1, started: 0, verified: 0 });
+        expect({ mutationInvocations: preDispatch.mutationInvocations, spawned: preDispatch.spawned }, testCase.action)
+          .toEqual({ mutationInvocations: 1, spawned: 0 });
+
+        const acceptedEvents: Array<Readonly<{
+          id: string;
+          index: number;
+          target: Readonly<{ schemaVersion: 1; identifier: string }>;
+        }>> = [];
+        const successCounters = { mutationInvocations: 0, spawned: 0 };
+        let verifiedEvents = 0;
+        const succeeded = await executeBeeperLocalOperation(
+          recipe(testCase.action),
+          testCase.input,
+          mutationAuth(path),
+          {
+            afterProviderAcceptedMutationTarget: async (event) => {
+              acceptedEvents.push(event);
+            },
+            afterDispatchVerified: async () => {
+              verifiedEvents += 1;
+            },
+            dependencies: {
+              binaryPath: "/fixture/beeper-0.6.2",
+              run: matrixRunner(testCase, "success", successCounters),
+            },
+          },
+        );
+        expect(succeeded.status, testCase.action).toBe("succeeded");
+        expect(succeeded.dispatch, testCase.action).toEqual({ planned: 1, started: 1, verified: 1 });
+        expect(succeeded.noOp, testCase.action).not.toBeTrue();
+        expect(successCounters, testCase.action).toEqual({ mutationInvocations: 1, spawned: 1 });
+        expect(verifiedEvents, testCase.action).toBe(1);
+        expect(acceptedEvents, testCase.action).toHaveLength(
+          testCase.reconciliation === "accepted-target" ? 1 : 0,
+        );
+
+        const uncertainAcceptedEvents = [...acceptedEvents.slice(0, 0)];
+        const uncertainCounters = { mutationInvocations: 0, spawned: 0 };
+        let uncertaintyHookCalls = 0;
+        const uncertain = await executeBeeperLocalOperation(
+          recipe(testCase.action),
+          testCase.input,
+          mutationAuth(path),
+          {
+            afterProviderAcceptedMutationTarget: async (event) => {
+              uncertainAcceptedEvents.push(event);
+            },
+            afterDispatchVerified: async () => {
+              uncertaintyHookCalls += 1;
+              throw new Error("matrix durable verification write failed after provider success");
+            },
+            dependencies: {
+              binaryPath: "/fixture/beeper-0.6.2",
+              run: matrixRunner(testCase, "success", uncertainCounters),
+            },
+          },
+        );
+        expect(uncertain.status, testCase.action).toBe("indeterminate");
+        expect(uncertain.error, testCase.action).toBe(
+          BEEPER_LOCAL_MUTATION_ERROR_CODES.postDispatchUncertain,
+        );
+        expect(uncertain.dispatch, testCase.action).toEqual({ planned: 1, started: 1, verified: 0 });
+        expect(uncertainCounters, testCase.action).toEqual({ mutationInvocations: 1, spawned: 1 });
+        expect(uncertaintyHookCalls, testCase.action).toBe(1);
+
+        const reconciliationCounters = { mutationInvocations: 0, spawned: 0 };
+        const accepted = uncertainAcceptedEvents[0];
+        const context: ProviderPluginReconciliationContextV1 | undefined = accepted === undefined
+          ? undefined
+          : Object.freeze({
+              schemaVersion: 1,
+              kind: "provider-accepted-target-presence",
+              dispatch: Object.freeze({ id: accepted.id, index: accepted.index, planned: 1 }),
+              target: accepted.target,
+            });
+        const reconcile = () => reconcileBeeperLocalOperation(
+          testCase.action,
+          testCase.input,
+          mutationAuth(path),
+          context,
+          {
+            dependencies: {
+              binaryPath: "/fixture/beeper-0.6.2",
+              run: matrixRunner(testCase, "readback", reconciliationCounters),
+            },
+          },
+        );
+        if (testCase.reconciliation === "none") {
+          const descriptor = beeperLinkedDevicePlugin.bindings[0]?.operations.find((operation) =>
+            operation.name === testCase.action);
+          expect(descriptor?.reconciliation, testCase.action).toBeUndefined();
+          await expect(reconcile(), testCase.action).rejects.toThrow(
+            "could not obtain definitive protected evidence",
+          );
+        } else {
+          expect((await reconcile()).actualState, testCase.action).toBeTrue();
+        }
+        expect(reconciliationCounters, testCase.action)
+          .toEqual({ mutationInvocations: 0, spawned: 0 });
+      } finally {
+        rmSync(path, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("rejects the three input-dependent irreconcilable variants without dispatch", async () => {
+    const variants = Object.freeze([
+      Object.freeze({
+        action: "conversations.avatar.set" as const,
+        input: Object.freeze({
+          account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID, clear: false,
+          avatar: Object.freeze({ kind: "file" as const, reference: "unsafe-avatar" }),
+        }),
+      }),
+      Object.freeze({
+        action: "conversations.draft.set" as const,
+        input: Object.freeze({
+          account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID,
+          clear: false, text: "unsafe attachment draft",
+          attachment: Object.freeze({ kind: "file" as const, reference: "unsafe-draft" }),
+        }),
+      }),
+      Object.freeze({
+        action: "conversations.read-state.set" as const,
+        input: Object.freeze({
+          account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID,
+          unread: false, message_id: "message-outgoing",
+        }),
+      }),
+    ]);
+    for (const variant of variants) {
+      const path = privateStore();
+      try {
+        const testCase = BEEPER_WRITE_MUTATION_MATRIX.find((item) =>
+          item.action === variant.action)!;
+        const counters = { mutationInvocations: 0, spawned: 0, commands: [] as string[] };
+        await expect(reconcileBeeperLocalOperation(
+          variant.action,
+          variant.input,
+          mutationAuth(path),
+          undefined,
+          {
+            dependencies: {
+              binaryPath: "/fixture/beeper-0.6.2",
+              run: matrixRunner(testCase, "readback", counters),
+            },
+          },
+        ), variant.action).rejects.toThrow("could not obtain definitive protected evidence");
+        expect({ mutationInvocations: counters.mutationInvocations, spawned: counters.spawned }, variant.action)
+          .toEqual({ mutationInvocations: 0, spawned: 0 });
+        expect(counters.commands.some((command) =>
+          command === "chats show" || command === "messages show"
+        ), variant.action).toBeFalse();
+      } finally {
+        rmSync(path, { recursive: true, force: true });
+      }
+    }
+  });
+});
+
 describe("Beeper local read runtime", () => {
+  test("rejects noncanonical conversation IDs in every Omni read materializer", () => {
+    const materializers = [
+      ["messaging.read@1", materializeBeeperMessagingReadV1],
+      ["messaging.read@2", materializeBeeperMessagingReadV2],
+      ["messaging.read@3", materializeBeeperMessagingRead],
+    ] as const;
+    const malformedConversationIds = [
+      "chat-synthetic",
+      "!chat-synthetic",
+      "!chat-synthetic:",
+      "chat-synthetic:beeper.local",
+      "!chat:beeper.local:123456",
+      "!chat:beeper.local:443:extra",
+      "!chat synthetic:beeper.local",
+      "!chat\u0007:beeper.local",
+    ];
+    for (const malformed of malformedConversationIds) {
+      for (const [coordinate, materialize] of materializers) {
+        expect(() => materialize({
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: malformed,
+          limit: 1,
+        }, {}), `${coordinate} ${JSON.stringify(malformed)}`)
+          .toThrow(malformed.includes("\u0007")
+            ? "must be one bounded Beeper identifier"
+            : "must be one exact full Beeper/Matrix chat ID");
+      }
+      expect(() => materializeBeeperExactConversation({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: malformed,
+      }, {}), `conversations.read ${JSON.stringify(malformed)}`)
+        .toThrow(malformed.includes("\u0007")
+          ? "must be one bounded Beeper identifier"
+          : "must be one exact full Beeper/Matrix chat ID");
+    }
+  });
+
+  test("admits every historical and current coordinate and rejects every uninstalled version", async () => {
+    const invalidInput = Object.freeze({ __contract_probe: true });
+    const fixtureAuth = auth("/fixture/not-opened-for-input-rejection");
+    for (const action of BEEPER_LOCAL_OPERATION_NAMES) {
+      for (const contractVersion of [0, 1, 2, 3, 4]) {
+        let error: unknown;
+        try {
+          await executeBeeperLocalOperation(
+            recipe(action, contractVersion),
+            invalidInput,
+            fixtureAuth,
+          );
+        } catch (caught) {
+          error = caught;
+        }
+        expect(error, `${action}@${String(contractVersion)}`).toBeInstanceOf(Error);
+        if (isBeeperLocalOperationContractVersion(action, contractVersion)) {
+          expect((error as Error).message).not.toContain("recipe is not installed");
+        } else {
+          expect((error as Error).message).toContain("recipe is not installed");
+        }
+      }
+      expect(BEEPER_LOCAL_OPERATION_CONTRACT_VERSIONS[action]).toBeGreaterThanOrEqual(1);
+    }
+  });
+
   test("proves and materializes one exact account/network conversation", async () => {
     const path = privateStore();
     try {
@@ -388,7 +1038,7 @@ describe("Beeper local read runtime", () => {
       });
       expect(() => materializeBeeperExactConversation({
         ...input,
-        conversation_id: "another-chat",
+        conversation_id: "!another-chat:beeper.local",
       }, result.output)).toThrow("must bind the exact requested account and conversation");
     } finally {
       rmSync(path, { recursive: true, force: true });
@@ -639,6 +1289,32 @@ describe("Beeper local read runtime", () => {
     }
   });
 
+  test("filters platform-sdk locally without passing an unsupported upstream provider flag", async () => {
+    const path = privateStore();
+    const calls: BeeperCliInvocation[] = [];
+    const platform = {
+      ...(bridges()[0] as Record<string, unknown>),
+      id: "imessage",
+      displayName: "iMessage fixture",
+      provider: "platform-sdk",
+      type: "imessage",
+    };
+    try {
+      const result = await execute(path, "bridges.list", {
+        provider: "platform-sdk",
+        limit: 10,
+      }, calls, { bridgesData: [bridges()[0], platform] });
+      expect((result.output as { bridges: readonly { id: string }[] }).bridges)
+        .toMatchObject([{ id: "imessage" }]);
+      const invocation = calls.find((call) =>
+        call.arguments.slice(0, 2).join(" ") === "bridges list");
+      expect(invocation?.arguments).not.toContain("--provider");
+      expect(invocation?.arguments).not.toContain("platform-sdk");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   test("rejects valid bridge and chat rows that contradict exact requested filters", async () => {
     const path = privateStore();
     try {
@@ -718,6 +1394,53 @@ describe("Beeper local read runtime", () => {
       { level: "inbox" },
       chat,
     )).toBeTrue();
+  });
+
+  test("reconciles conversation booleans as actual state without false-state inversion", async () => {
+    const path = privateStore();
+    try {
+      for (const [action, rawField] of [
+        ["conversations.archive.set", "isArchived"],
+        ["conversations.pin.set", "isPinned"],
+        ["conversations.mute.set", "isMuted"],
+      ] as const) {
+        const input = {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          enabled: false,
+        };
+        const correct = await reconcileBeeperLocalOperation(
+          action,
+          input,
+          auth(path),
+          undefined,
+          {
+            dependencies: {
+              binaryPath: "/fixture/beeper-0.6.2",
+              run: runner([], { chatReadData: { ...chats()[0] as object, [rawField]: false } }),
+            },
+          },
+        );
+        const wrong = await reconcileBeeperLocalOperation(
+          action,
+          input,
+          auth(path),
+          undefined,
+          {
+            dependencies: {
+              binaryPath: "/fixture/beeper-0.6.2",
+              run: runner([], { chatReadData: { ...chats()[0] as object, [rawField]: true } }),
+            },
+          },
+        );
+        expect(correct.actualState, action).toBeFalse();
+        expect(correct.actualState === input.enabled, action).toBeTrue();
+        expect(wrong.actualState, action).toBeTrue();
+        expect(wrong.actualState === input.enabled, action).toBeFalse();
+      }
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
   });
 
   test("rejects lossy opaque IDs and non-data bounded JSON arrays", () => {
@@ -823,7 +1546,7 @@ describe("Beeper local read runtime", () => {
       "--timeout",
       "2s",
     ]);
-    const input = parseBeeperMessagingReadInput({
+    const input = parseBeeperMessagingReadInputV2({
       account_id: NETWORK_ACCOUNT_ID,
       conversation_id: CHAT_ID,
       before_cursor: "message-cursor",
@@ -833,6 +1556,7 @@ describe("Beeper local read runtime", () => {
     expect(command.argv.slice(0, 2)).toEqual(["messages", "list"]);
     expect(command.argv.indexOf("--read-only")).toBeGreaterThan(1);
     expect(command.argv).toContain("--before-cursor");
+    expect(command.argv).not.toContain("--sender");
     expect(command.argv.join(" ")).not.toMatch(/\b(?:api|export|send|download|watch)\b/u);
     expect(() => parseBeeperMessagingReadInput({
       account_id: NETWORK_ACCOUNT_ID,
@@ -840,6 +1564,28 @@ describe("Beeper local read runtime", () => {
       before_cursor: "before",
       after_cursor: "after",
     })).toThrow("only one cursor direction");
+    for (const sender of [undefined, "others"] as const) {
+      const directOnly = parseBeeperMessagingReadInput({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        ...(sender === undefined ? {} : { sender }),
+      });
+      expect(() => planBeeperReadCommand(
+        "messaging.read",
+        directOnly,
+        60_000,
+      )).toThrow("contract v3 is direct-only");
+    }
+
+    const contactList = parseBeeperContactsListInput({
+      account_id: NETWORK_ACCOUNT_ID,
+      query: "  Åda Fixture  ",
+      limit: 7,
+    });
+    expect(contactList.query).toBe("Åda Fixture");
+    expect(planBeeperReadCommand("contacts.list", contactList, 60_000).argv)
+      .toEqual(expect.arrayContaining(["--query", "Åda Fixture"]));
+
   });
 
   test("normalizes and bounds fuzzy search queries and plans only pinned search commands", () => {
@@ -1050,7 +1796,7 @@ describe("Beeper local read runtime", () => {
         cursor: { direction: "none", nextInput: null },
         entities: [{ kind: "conversation", title: "Ada Fixture" }],
       });
-      const readPage = materializeBeeperMessagingRead(
+      const readPage = materializeBeeperMessagingReadV1(
         { account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID, limit: 2 },
         readResult.output,
       );
@@ -1070,6 +1816,28 @@ describe("Beeper local read runtime", () => {
           state: "revoked",
         }],
       });
+      const nonTerminal = structuredClone(readResult.output) as Record<string, unknown>;
+      (nonTerminal.continuation as { cursor: string }).cursor = "message-outgoing";
+      expect(() => materializeBeeperMessagingReadV1(
+        { account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID, limit: 2 },
+        nonTerminal,
+      )).toThrow("terminal returned message ID");
+      const loop = structuredClone(readResult.output) as Record<string, unknown>;
+      loop.requestCursor = "message-deleted";
+      expect(() => materializeBeeperMessagingReadV1({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        before_cursor: "message-deleted",
+        limit: 2,
+      }, loop)).toThrow("must exclude the prior request cursor");
+      const overlap = structuredClone(readResult.output) as Record<string, unknown>;
+      overlap.requestCursor = "message-outgoing";
+      expect(() => materializeBeeperMessagingReadV1({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        before_cursor: "message-outgoing",
+        limit: 2,
+      }, overlap)).toThrow("exclude the prior request cursor");
 
       expect(calls).toHaveLength(12);
       for (const invocation of calls) {
@@ -1087,6 +1855,12 @@ describe("Beeper local read runtime", () => {
     const path = privateStore();
     const calls: BeeperCliInvocation[] = [];
     try {
+      const blendedListResult = await execute(
+        path,
+        "contacts.list",
+        { account_id: NETWORK_ACCOUNT_ID, query: "  Ada Fixture ", limit: 2 },
+        calls,
+      );
       const contactResult = await execute(
         path,
         "contacts.search",
@@ -1099,6 +1873,19 @@ describe("Beeper local read runtime", () => {
         { account_id: NETWORK_ACCOUNT_ID, query: "Ada Fixture", limit: 2 },
         calls,
       );
+
+      expect(blendedListResult.output).toMatchObject({
+        operation: "contacts.list",
+        projection: "bounded-local-desktop-provider-blended-candidates",
+        query: "Ada Fixture",
+        completeness: {
+          resultWindowComplete: false,
+          continuationAvailable: false,
+          warnings: expect.arrayContaining([
+            "beeper-cli-v0.6.2-contact-list-query-is-provider-blended-candidate-matching",
+          ]),
+        },
+      });
 
       expect(contactResult.output).toEqual({
         provider: "beeper",
@@ -1185,6 +1972,10 @@ describe("Beeper local read runtime", () => {
           "version --read-only",
           "targets status",
           "accounts list",
+          "contacts list",
+          "version --read-only",
+          "targets status",
+          "accounts list",
           "contacts search",
           "version --read-only",
           "targets status",
@@ -1240,6 +2031,13 @@ describe("Beeper local read runtime", () => {
         { account_id: NETWORK_ACCOUNT_ID, limit: 1 },
         [],
         { chatsData: repeatedChats },
+      )).rejects.toThrow("failed at a protected local boundary");
+      await expect(execute(
+        path,
+        "messaging.read",
+        { account_id: NETWORK_ACCOUNT_ID, conversation_id: CHAT_ID, limit: 1 },
+        [],
+        { messagesData: messages() },
       )).rejects.toThrow("failed at a protected local boundary");
       await expect(execute(
         path,
@@ -1435,7 +2233,7 @@ describe("Beeper local read runtime", () => {
         [],
         { includeDirection: false },
       );
-      const omni = materializeBeeperMessagingRead({
+      const omni = materializeBeeperMessagingReadV1({
         account_id: NETWORK_ACCOUNT_ID,
         conversation_id: CHAT_ID,
         limit: 2,
@@ -1443,6 +2241,723 @@ describe("Beeper local read runtime", () => {
       expect(omni.entities[0]?.kind).toBe("message");
       expect(omni.entities[0]?.kind === "message" && omni.entities[0].direction)
         .toBe("unknown");
+    } finally {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  test("filters direct read v3 by exact sender without splitting provider pages", async () => {
+    const path = privateStore();
+    try {
+      const outgoing = messages()[0]!;
+      const incoming = messages()[1]!;
+      const malformedIdentifiers = Object.freeze([
+        "opaque\r\nforged",
+        `opaque-${String.fromCharCode(0xd800)}`,
+        "opaque\tforged",
+        "opaque-\u0085forged",
+      ] as const);
+      const urls: URL[] = [];
+      let cliCalls = 0;
+      const result = await executeBeeperLocalOperation(
+        recipe("messaging.read", 3),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          sender: "others",
+          limit: 1,
+        },
+        auth(path),
+        {
+          dependencies: {
+            binaryPath: "/fixture/beeper-0.6.2",
+            run: () => {
+              cliCalls += 1;
+              return Promise.reject(new Error("direct read must not start the CLI"));
+            },
+          },
+          directDependencies: {
+            fetch: (request) => {
+              const url = String(request);
+              if (url.endsWith("/v1/info")) return Promise.resolve(directJsonResponse(directInfo()));
+              if (url.endsWith("/v1/accounts")) return Promise.resolve(directJsonResponse(accounts()));
+              const parsed = new URL(url);
+              urls.push(parsed);
+              return Promise.resolve(directJsonResponse(urls.length === 1
+                ? {
+                    items: [outgoing],
+                    hasMore: true,
+                    oldestCursor: "opaque-before-outgoing",
+                    newestCursor: "opaque-after-outgoing",
+                  }
+                : {
+                    items: [incoming],
+                    hasMore: true,
+                    oldestCursor: "opaque-before-incoming",
+                    newestCursor: "opaque-after-incoming",
+                  }));
+            },
+          },
+        },
+      );
+      expect(result.output).toMatchObject({
+        requestedSender: "others",
+        requestDirection: "before",
+        messages: [{ id: "message-deleted", isSender: false }],
+        continuation: { direction: "before", cursor: "opaque-before-incoming" },
+        completeness: { localPageComplete: false, limitReached: true },
+      });
+      expect(materializeBeeperMessagingRead({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        sender: "others",
+        limit: 1,
+      }, result.output).cursor.nextInput).toEqual({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        sender: "others",
+        limit: 1,
+        before_cursor: "opaque-before-incoming",
+      });
+      expect(urls.map((url) => url.searchParams.get("cursor")))
+        .toEqual([null, "opaque-before-outgoing"]);
+      expect(cliCalls).toBe(0);
+      expect(() => parseBeeperMessagingReadInput({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        sender: "--raw-flag",
+      })).toThrow("non-flag user ID");
+      for (const malformed of malformedIdentifiers) {
+        expect(() => parseBeeperMessagingReadInput({
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          sender: malformed,
+        }), `raw sender ${JSON.stringify(malformed)}`).toThrow();
+        expect(() => parseBeeperMessagingReadInput({
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          before_cursor: malformed,
+        }), `raw cursor ${JSON.stringify(malformed)}`).toThrow();
+      }
+
+      for (const selfEvidence of [false, null, undefined] as const) {
+        let messageRequests = 0;
+        const unprovenAccounts = accounts().map((item) => {
+          const account = item as Record<string, unknown>;
+          if (account.accountID !== NETWORK_ACCOUNT_ID) return item;
+          const user = {
+            ...(account.user as Record<string, unknown>),
+          };
+          if (selfEvidence === undefined) delete user.isSelf;
+          else user.isSelf = selfEvidence;
+          return { ...account, user };
+        });
+        await expect(executeBeeperLocalOperation(
+          recipe("messaging.read", 3),
+          {
+            account_id: NETWORK_ACCOUNT_ID,
+            conversation_id: CHAT_ID,
+            sender: "me",
+            limit: 1,
+          },
+          auth(path),
+          {
+            directDependencies: {
+              fetch: (request) => {
+                const url = String(request);
+                if (url.endsWith("/v1/info")) {
+                  return Promise.resolve(directJsonResponse(directInfo()));
+                }
+                if (url.endsWith("/v1/accounts")) {
+                  return Promise.resolve(directJsonResponse(unprovenAccounts));
+                }
+                messageRequests += 1;
+                return Promise.resolve(directJsonResponse({
+                  items: [outgoing],
+                  hasMore: false,
+                  oldestCursor: null,
+                  newestCursor: null,
+                }));
+              },
+            },
+          },
+        ), `isSelf=${String(selfEvidence)}`)
+          .rejects.toThrow("failed at a protected local boundary");
+        expect(messageRequests, `isSelf=${String(selfEvidence)}`).toBe(0);
+      }
+
+      const noMatch = await executeBeeperLocalOperation(
+        recipe("messaging.read", 3),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          sender: "others",
+          limit: 1,
+        },
+        auth(path),
+        {
+          directDependencies: {
+            fetch: (request) => {
+              const url = String(request);
+              return Promise.resolve(directJsonResponse(
+                url.endsWith("/v1/info")
+                  ? directInfo()
+                  : url.endsWith("/v1/accounts")
+                    ? accounts()
+                    : {
+                        items: [outgoing],
+                        hasMore: false,
+                        oldestCursor: null,
+                        newestCursor: null,
+                      },
+              ));
+            },
+          },
+        },
+      );
+      expect(noMatch.output).toMatchObject({
+        requestedSender: "others",
+        messages: [],
+        continuation: null,
+        completeness: { localPageComplete: true, limitReached: false },
+      });
+
+      for (const malformed of malformedIdentifiers) {
+        await expect(executeBeeperLocalOperation(
+          recipe("messaging.read", 3),
+          {
+            account_id: NETWORK_ACCOUNT_ID,
+            conversation_id: CHAT_ID,
+            sender: "me",
+            limit: 1,
+          },
+          auth(path),
+          {
+            directDependencies: {
+              fetch: (request) => {
+                const url = String(request);
+                return Promise.resolve(directJsonResponse(
+                  url.endsWith("/v1/info")
+                    ? directInfo()
+                    : url.endsWith("/v1/accounts")
+                      ? accounts()
+                      : {
+                          items: [outgoing],
+                          hasMore: true,
+                          oldestCursor: malformed,
+                          newestCursor: "valid-newest-cursor",
+                        },
+                ));
+              },
+            },
+          },
+        ), `provider cursor ${JSON.stringify(malformed)}`)
+          .rejects.toThrow("failed at a protected local boundary");
+      }
+
+      await expect(executeBeeperLocalOperation(
+        recipe("messaging.read", 3),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          sender: "me",
+          limit: 1,
+        },
+        auth(path),
+        {
+          directDependencies: {
+            fetch: (request) => {
+              const url = String(request);
+              return Promise.resolve(directJsonResponse(
+                url.endsWith("/v1/info")
+                  ? directInfo()
+                  : url.endsWith("/v1/accounts")
+                    ? accounts()
+                    : {
+                        items: [messages(false)[0]],
+                        hasMore: false,
+                        oldestCursor: null,
+                        newestCursor: null,
+                      },
+              ));
+            },
+          },
+        },
+      )).rejects.toThrow("failed at a protected local boundary");
+
+      const opaque = await executeBeeperLocalOperation(
+        recipe("messaging.read", 3),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          sender: "signal:ada",
+          limit: 1,
+        },
+        auth(path),
+        {
+          directDependencies: {
+            fetch: (request) => {
+              const url = String(request);
+              return Promise.resolve(directJsonResponse(
+                url.endsWith("/v1/info")
+                  ? directInfo()
+                  : url.endsWith("/v1/accounts")
+                    ? accounts()
+                    : {
+                        items: [{
+                          ...(messages(false)[0] as Record<string, unknown>),
+                          senderID: "signal:ada",
+                        }],
+                        hasMore: false,
+                        oldestCursor: null,
+                        newestCursor: null,
+                      },
+              ));
+            },
+          },
+        },
+      );
+      expect(opaque.output).toMatchObject({
+        requestedSender: "signal:ada",
+        messages: [{ senderId: "signal:ada", isSender: null }],
+      });
+      const opaqueOmni = materializeBeeperMessagingRead({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        sender: "signal:ada",
+        limit: 1,
+      }, opaque.output);
+      expect(opaqueOmni.entities).toHaveLength(1);
+      expect(opaqueOmni.cursor.nextInput).toBeNull();
+
+      const senderNullNonSelfDirection = structuredClone(result.output) as Record<string, unknown>;
+      senderNullNonSelfDirection.requestedSender = null;
+      ((senderNullNonSelfDirection.messages as Record<string, unknown>[])[0]!).isSender = true;
+      expect(() => materializeBeeperMessagingRead({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        limit: 1,
+      }, senderNullNonSelfDirection)).toThrow("must bind direction to the exact self user ID");
+
+      const senderNullSelfDirection = structuredClone(result.output) as Record<string, unknown>;
+      senderNullSelfDirection.requestedSender = null;
+      senderNullSelfDirection.selfUserId = "signal:ada";
+      expect(() => materializeBeeperMessagingRead({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        limit: 1,
+      }, senderNullSelfDirection)).toThrow("must bind direction to the exact self user ID");
+
+      const explicitDirectionContradiction = structuredClone(opaque.output) as Record<string, unknown>;
+      ((explicitDirectionContradiction.messages as Record<string, unknown>[])[0]!).isSender = true;
+      expect(() => materializeBeeperMessagingRead({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        sender: "signal:ada",
+        limit: 1,
+      }, explicitDirectionContradiction)).toThrow("must bind direction to the exact self user ID");
+
+      const malformedSelf = structuredClone(opaque.output) as Record<string, unknown>;
+      malformedSelf.selfUserId = "signal:\tself";
+      expect(() => materializeBeeperMessagingRead({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        sender: "signal:ada",
+        limit: 1,
+      }, malformedSelf)).toThrow("must be one bounded Beeper identifier");
+
+      for (const contradiction of [
+        {
+          label: "me with non-self sender",
+          sender: "me",
+          row: { ...(outgoing as Record<string, unknown>), senderID: "signal:ada", isSender: true },
+        },
+        {
+          label: "others with self sender",
+          sender: "others",
+          row: { ...(incoming as Record<string, unknown>), senderID: "signal:self", isSender: false },
+        },
+        {
+          label: "opaque other with contradictory self direction",
+          sender: "signal:ada",
+          row: { ...(outgoing as Record<string, unknown>), senderID: "signal:ada", isSender: true },
+        },
+        {
+          label: "opaque self with contradictory other direction",
+          sender: "signal:self",
+          row: { ...(incoming as Record<string, unknown>), senderID: "signal:self", isSender: false },
+        },
+      ] as const) {
+        await expect(executeBeeperLocalOperation(
+          recipe("messaging.read", 3),
+          {
+            account_id: NETWORK_ACCOUNT_ID,
+            conversation_id: CHAT_ID,
+            sender: contradiction.sender,
+            limit: 1,
+          },
+          auth(path),
+          {
+            directDependencies: {
+              fetch: (request) => {
+                const url = String(request);
+                return Promise.resolve(directJsonResponse(
+                  url.endsWith("/v1/info")
+                    ? directInfo()
+                    : url.endsWith("/v1/accounts")
+                      ? accounts()
+                      : {
+                          items: [contradiction.row],
+                          hasMore: false,
+                          oldestCursor: null,
+                          newestCursor: null,
+                        },
+                ));
+              },
+            },
+          },
+        ), contradiction.label).rejects.toThrow("failed at a protected local boundary");
+      }
+
+      const afterUrls: URL[] = [];
+      const after = await executeBeeperLocalOperation(
+        recipe("messaging.read", 3),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          after_cursor: "opaque-after-start",
+          sender: "me",
+          limit: 1,
+        },
+        auth(path),
+        {
+          directDependencies: {
+            fetch: (request) => {
+              const url = String(request);
+              if (url.endsWith("/v1/info")) return Promise.resolve(directJsonResponse(directInfo()));
+              if (url.endsWith("/v1/accounts")) return Promise.resolve(directJsonResponse(accounts()));
+              const parsed = new URL(url);
+              afterUrls.push(parsed);
+              return Promise.resolve(directJsonResponse({
+                items: [outgoing],
+                hasMore: true,
+                oldestCursor: "opaque-before-outgoing",
+                newestCursor: "opaque-after-outgoing",
+              }));
+            },
+          },
+        },
+      );
+      expect(afterUrls[0]?.searchParams.get("direction")).toBe("after");
+      expect(after.output).toMatchObject({
+        requestDirection: "after",
+        continuation: { direction: "after", cursor: "opaque-after-outgoing" },
+      });
+      expect(materializeBeeperMessagingRead({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        after_cursor: "opaque-after-start",
+        sender: "me",
+        limit: 1,
+      }, after.output).cursor.nextInput).toMatchObject({
+        after_cursor: "opaque-after-outgoing",
+        sender: "me",
+      });
+
+      await expect(executeBeeperLocalOperation(
+        recipe("messaging.read", 3),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          sender: "others",
+          limit: 1,
+        },
+        auth(path),
+        {
+          directDependencies: {
+            fetch: (request) => {
+              const url = String(request);
+              return Promise.resolve(directJsonResponse(
+                url.endsWith("/v1/info")
+                  ? directInfo()
+                  : url.endsWith("/v1/accounts")
+                    ? accounts()
+                    : {
+                        items: [incoming, {
+                          ...(incoming as Record<string, unknown>),
+                          id: "message-incoming-second",
+                          sortKey: "00000000000000000000",
+                        }],
+                        hasMore: true,
+                        oldestCursor: "opaque-overflow",
+                        newestCursor: "opaque-overflow-newest",
+                      },
+              ));
+            },
+          },
+        },
+      )).rejects.toThrow("failed at a protected local boundary");
+
+      let page = 0;
+      const bounded = await executeBeeperLocalOperation(
+        recipe("messaging.read", 3),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          sender: "others",
+          limit: 1,
+        },
+        auth(path),
+        {
+          directDependencies: {
+            fetch: (request) => {
+              const url = String(request);
+              if (url.endsWith("/v1/info")) return Promise.resolve(directJsonResponse(directInfo()));
+              if (url.endsWith("/v1/accounts")) return Promise.resolve(directJsonResponse(accounts()));
+              page += 1;
+              return Promise.resolve(directJsonResponse(page === 1
+                ? {
+                    items: [outgoing],
+                    hasMore: true,
+                    oldestCursor: "opaque-before-page-2",
+                    newestCursor: "opaque-after-page-1",
+                  }
+                : {
+                    items: [incoming, {
+                      ...(incoming as Record<string, unknown>),
+                      id: "message-incoming-second",
+                      sortKey: "00000000000000000000",
+                    }],
+                    hasMore: true,
+                    oldestCursor: "opaque-before-page-3",
+                    newestCursor: "opaque-after-page-2",
+                  }));
+            },
+          },
+        },
+      );
+      expect(bounded.output).toMatchObject({
+        messages: [],
+        continuation: {
+          direction: "before",
+          cursor: "opaque-before-page-2",
+        },
+        completeness: { localPageComplete: false, limitReached: false },
+      });
+
+      let repeatedPage = 0;
+      await expect(executeBeeperLocalOperation(
+        recipe("messaging.read", 3),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          sender: "others",
+          limit: 2,
+        },
+        auth(path),
+        {
+          directDependencies: {
+            fetch: (request) => {
+              const url = String(request);
+              if (url.endsWith("/v1/info")) return Promise.resolve(directJsonResponse(directInfo()));
+              if (url.endsWith("/v1/accounts")) return Promise.resolve(directJsonResponse(accounts()));
+              repeatedPage += 1;
+              return Promise.resolve(directJsonResponse({
+                items: [repeatedPage === 1 ? outgoing : incoming],
+                hasMore: true,
+                oldestCursor: "opaque-repeated",
+                newestCursor: `opaque-newest-${String(repeatedPage)}`,
+              }));
+            },
+          },
+        },
+      )).rejects.toThrow("failed at a protected local boundary");
+
+      await expect(executeBeeperLocalOperation(
+        recipe("messaging.read", 3),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          limit: 2,
+        },
+        auth(path),
+        {
+          directDependencies: {
+            fetch: (request) => {
+              const url = String(request);
+              return Promise.resolve(directJsonResponse(
+                url.endsWith("/v1/info")
+                  ? directInfo()
+                  : url.endsWith("/v1/accounts")
+                    ? accounts()
+                    : {
+                        items: [outgoing, outgoing],
+                        hasMore: false,
+                        oldestCursor: null,
+                        newestCursor: null,
+                      },
+              ));
+            },
+          },
+        },
+      )).rejects.toThrow("failed at a protected local boundary");
+
+      await expect(executeBeeperLocalOperation(
+        recipe("messaging.read", 3),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          limit: 2,
+        },
+        auth(path),
+        {
+          directDependencies: {
+            fetch: (request) => {
+              const url = String(request);
+              return Promise.resolve(directJsonResponse(
+                url.endsWith("/v1/info")
+                  ? directInfo()
+                  : url.endsWith("/v1/accounts")
+                    ? accounts()
+                    : {
+                        items: [incoming, outgoing],
+                        hasMore: false,
+                        oldestCursor: null,
+                        newestCursor: null,
+                      },
+              ));
+            },
+          },
+        },
+      )).rejects.toThrow("failed at a protected local boundary");
+
+      let boundedPages = 0;
+      const eightPageBound = await executeBeeperLocalOperation(
+        recipe("messaging.read", 3),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          sender: "signal:missing",
+          limit: 2,
+        },
+        auth(path),
+        {
+          directDependencies: {
+            fetch: (request) => {
+              const url = String(request);
+              if (url.endsWith("/v1/info")) return Promise.resolve(directJsonResponse(directInfo()));
+              if (url.endsWith("/v1/accounts")) return Promise.resolve(directJsonResponse(accounts()));
+              boundedPages += 1;
+              return Promise.resolve(directJsonResponse({
+                items: [{
+                  ...(outgoing as Record<string, unknown>),
+                  id: `bounded-message-${String(boundedPages)}`,
+                  sortKey: String(100 - boundedPages).padStart(20, "0"),
+                }],
+                hasMore: true,
+                oldestCursor: `opaque-before-bounded-${String(boundedPages)}`,
+                newestCursor: `opaque-after-bounded-${String(boundedPages)}`,
+              }));
+            },
+          },
+        },
+      );
+      expect(boundedPages).toBe(8);
+      expect(eightPageBound.output).toMatchObject({
+        messages: [],
+        continuation: {
+          direction: "before",
+          cursor: "opaque-before-bounded-8",
+        },
+      });
+
+      await expect(executeBeeperLocalOperation(
+        recipe("messaging.read", 2),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          sender: "others",
+          limit: 1,
+        },
+        auth(path),
+      )).rejects.toThrow("messaging.read input contained unsupported fields");
+      await expect(executeBeeperLocalOperation(
+        recipe("messaging.read", 1),
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          sender: "others",
+          limit: 1,
+        },
+        auth(path),
+      )).rejects.toThrow("messaging.read input contained unsupported fields");
+
+      const v1Calls: BeeperCliInvocation[] = [];
+      const v1 = await execute(
+        path,
+        "messaging.read",
+        {
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          limit: 1,
+        },
+        v1Calls,
+        { messagesData: [outgoing] },
+      );
+      expect(v1.output).toMatchObject({ messages: [{ id: "message-outgoing" }] });
+      expect(v1Calls.some((call) => call.arguments[0] === "messages")).toBeTrue();
+
+      for (const malformed of malformedIdentifiers) {
+        expect(() => materializeBeeperMessagingRead({
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          sender: malformed,
+          limit: 1,
+        }, result.output), `sender ${JSON.stringify(malformed)}`)
+          .toThrow("must be one bounded Beeper identifier");
+        expect(() => materializeBeeperMessagingRead({
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          before_cursor: malformed,
+          sender: "others",
+          limit: 1,
+        }, result.output), `request cursor ${JSON.stringify(malformed)}`)
+          .toThrow("must be one bounded Beeper identifier");
+        const malformedContinuation = structuredClone(result.output) as Record<string, unknown>;
+        malformedContinuation.continuation = {
+          direction: "before",
+          cursor: malformed,
+        };
+        expect(() => materializeBeeperMessagingRead({
+          account_id: NETWORK_ACCOUNT_ID,
+          conversation_id: CHAT_ID,
+          sender: "others",
+          limit: 1,
+        }, malformedContinuation), `continuation cursor ${JSON.stringify(malformed)}`)
+          .toThrow("must be one bounded Beeper identifier");
+      }
+
+      const forged = structuredClone(result.output) as Record<string, unknown>;
+      forged.requestedSender = "me";
+      expect(() => materializeBeeperMessagingRead({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        sender: "others",
+        limit: 1,
+      }, forged)).toThrow("must bind the requested sender");
+      const forgedContinuation = structuredClone(result.output) as Record<string, unknown>;
+      forgedContinuation.continuation = {
+        direction: "before",
+        cursor: "opaque-before-incoming",
+      };
+      forgedContinuation.requestCursor = "opaque-before-incoming";
+      expect(() => materializeBeeperMessagingRead({
+        account_id: NETWORK_ACCOUNT_ID,
+        conversation_id: CHAT_ID,
+        before_cursor: "opaque-before-incoming",
+        sender: "others",
+        limit: 1,
+      }, forgedContinuation)).toThrow("must advance");
     } finally {
       rmSync(path, { recursive: true, force: true });
     }

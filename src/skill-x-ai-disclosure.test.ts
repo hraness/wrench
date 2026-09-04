@@ -8,7 +8,17 @@ function readSkill(relativePath: string): string {
   return readFileSync(join(skillRoot, relativePath), "utf8");
 }
 
-describe("packaged Wrench skill X AI disclosure", () => {
+describe("packaged Wrench skill", () => {
+  test("states the split Beeper runtime boundary in its discovery summary", () => {
+    const skill = readSkill("SKILL.md");
+    const description = skill.slice(0, skill.indexOf("\n---", 4));
+
+    expect(description).toContain(
+      "across the pinned official CLI and fixed Desktop loopback operations",
+    );
+    expect(description).not.toContain("through an exact pinned native CLI");
+  });
+
   test("routes user-supplied cross-post copy through a fail-closed unlabeled rule", () => {
     const skill = readSkill("SKILL.md");
     expect(skill).toContain("references/x-ai-disclosure.md");

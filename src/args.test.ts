@@ -203,6 +203,37 @@ describe("wrench CLI grammar", () => {
     }
   });
 
+  test("parses only the transparent one-account WhatsApp Message Like Me export", () => {
+    expect(parseWrenchArguments([
+      "whatsapp",
+      "export-message-like-me",
+      "--auth",
+      "whatsapp-main",
+      "--output",
+      "/tmp/whatsapp-message-like-me",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "whatsapp-export-message-like-me",
+        authId: "whatsapp-main",
+        output: "/tmp/whatsapp-message-like-me",
+        json: true,
+      },
+    });
+    for (const raw of [
+      ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main"],
+      ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main", "--output", "relative"],
+      ["whatsapp", "messages"],
+      ["whatsapp", "export-message-like-me", "--auth", "Bad ID", "--output", "/tmp/export"],
+      ["whatsapp", "export-message-like-me", "--auth", `a${"b".repeat(48)}`, "--output", "/tmp/export"],
+      ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main", "--output", "/"],
+      ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main", "--output", "/tmp/export\nother"],
+      ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main", "--output", `/tmp/${"é".repeat(2_046)}`],
+      ["whatsapp", "export-message-like-me", "--auth", "whatsapp-main", "--output", "/tmp/export", "--limit-messages", "1"],
+    ]) expect(parseWrenchArguments(raw).ok).toBeFalse();
+  });
+
   test("parses the path-free Beeper contact interaction export", () => {
     expect(parseWrenchArguments([
       "beeper",
@@ -243,6 +274,40 @@ describe("wrench CLI grammar", () => {
       "beeper", "export-contact-interactions", "--auth", "beeper-main",
       "--max-participants", "2001",
     ]).ok).toBeFalse();
+  });
+
+  test("parses only the bounded Apple Photos contact-evidence export", () => {
+    expect(parseWrenchArguments([
+      "apple-photos",
+      "export-contact-evidence",
+      "--library",
+      "/private/tmp/Family.photoslibrary",
+      "--json",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "apple-photos-export-contact-evidence",
+        library: "/private/tmp/Family.photoslibrary",
+        json: true,
+      },
+    });
+    expect(parseWrenchArguments([
+      "apple-photos",
+      "export-contact-evidence",
+    ])).toEqual({
+      ok: true,
+      value: {
+        command: "apple-photos-export-contact-evidence",
+        json: false,
+      },
+    });
+    for (const raw of [
+      ["apple-photos", "read"],
+      ["apple-photos", "export-contact-evidence", "--library", "relative.photoslibrary"],
+      ["apple-photos", "export-contact-evidence", "--library", "/private/tmp/Photos.sqlite"],
+      ["apple-photos", "export-contact-evidence", "--output", "/private/output"],
+      ["apple-photos", "export-contact-evidence", "--json", "--json"],
+    ]) expect(parseWrenchArguments(raw).ok).toBeFalse();
   });
 
   test("parses adapter and capability management", () => {

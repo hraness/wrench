@@ -1,30 +1,26 @@
 #!/bin/sh
 set -eu
 
-version=0.13.0
-transport_version=wrench-private-v1
-wacli_commit=1e15f646d23598ef5db2bdb4659ac39cc5188ad2
-wacli_archive_sha256=0b6df982b3980f622df2c4aa38791a8918149d2d8fa096a3302cc9a9d3525c92
-wacli_patch_sha256=ffa7fb2a6100bfff1a4cfed300fb0f854d0d3254058d8e33d87073ad0c0bac9f
-whatsmeow_version=v0.0.0-20260716095330-85d99080dee8
-whatsmeow_archive_sha256=5fcf5195593e4b3cec63ee9798e66369fa713fead6f55b3e8e717279fac02f9e
-whatsmeow_patch_sha256=cbf6f0b72963b365ca4c81f86993cf8a77a7eec6ffcd973d13aa68fe7331fcdc
-go_version=1.25.12
-go_archive_sha256=fa2c88bbcf64bd3b2aef355f026cfec6d3a4a01c132f999c8f8c964eb767164f
-binary_sha256=526eba2dce946afb6cefc852b9080245e0f03f79b5c0472879b17c145b24a667
-wacli_source_url="https://codeload.github.com/openclaw/wacli/tar.gz/$wacli_commit"
-whatsmeow_source_url="https://proxy.golang.org/go.mau.fi/whatsmeow/@v/$whatsmeow_version.zip"
-go_source_url="https://go.dev/dl/go${go_version}.darwin-arm64.tar.gz"
+version=0.15.0
+transport_version=official-release
+release_tag=v0.15.0
+release_commit=a020de724180d31eccfa5241d45443402d62fb06
+archive_name=wacli_0.15.0_darwin_arm64.tar.gz
+archive_sha256=2b54f33d246e913a5c33525b4fc895a345363c2dcc673c70fa5f19cffb15d17d
+binary_sha256=a900af4d0dfd10471bcdf74105b9f256d1a08574242a041df3e5985a548826aa
+release_url="https://github.com/openclaw/wacli/releases/download/$release_tag/$archive_name"
+signature_identifier=org.openclaw.wacli
+signature_team=FWJYW4S8P8
+signature_authority='Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)'
+signature_cdhash=a67b5d50877d6a2c3386d969d24dfc991bcc6a85
+signature_cdhash_full=a67b5d50877d6a2c3386d969d24dfc991bcc6a8571a3343afc82e8d6de32e486
+signature_requirement='designated => identifier "org.openclaw.wacli" and anchor apple generic and certificate leaf[subject.OU] = FWJYW4S8P8'
 
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-source_root=$(CDPATH= cd -- "$script_directory/.." && pwd -P)
-vendor_directory=$source_root/vendor/whatsapp-private-transport
 state_home_resolver=$script_directory/resolve-state-home.ts
-wacli_patch=$vendor_directory/wacli-${wacli_commit}-wrench-private.patch
-whatsmeow_patch=$vendor_directory/whatsmeow-85d99080dee8-wrench-private.patch
 
 fail() {
-  printf '%s\n' "Wrench WhatsApp private transport installer: $1" >&2
+  printf '%s\n' "Wrench WhatsApp runtime installer: $1" >&2
   exit 1
 }
 
@@ -44,18 +40,89 @@ require_regular_file() {
   fi
 }
 
-if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
-  fail "the reviewed source build currently supports macOS arm64 only"
-fi
-if ! command -v xcrun >/dev/null 2>&1 || ! /usr/bin/xcrun --find clang >/dev/null 2>&1; then
-  fail "Apple Command Line Tools with clang are required"
-fi
-if ! /usr/bin/xcrun clang --version | /usr/bin/grep -Fq "Apple clang version 21.0.0 (clang-2100.1.1.101)"; then
-  fail "this checked current-platform build requires Apple clang 21.0.0 (clang-2100.1.1.101)"
-fi
+require_owned_private_directory() {
+  directory=$1
+  label=$2
+  if [ ! -d "$directory" ] || [ -L "$directory" ]; then
+    fail "$label is not a real directory"
+  fi
+  if [ "$(/usr/bin/stat -f '%u' "$directory")" != "$(/usr/bin/id -u)" ]; then
+    fail "$label is not owned by the current user"
+  fi
+  if [ "$(/usr/bin/stat -f '%Lp' "$directory")" != "700" ]; then
+    fail "$label must have mode 0700"
+  fi
+}
 
-require_regular_file "$wacli_patch" "$wacli_patch_sha256" "vendored Wacli patch"
-require_regular_file "$whatsmeow_patch" "$whatsmeow_patch_sha256" "vendored Whatsmeow patch"
+verify_signature() {
+  binary=$1
+  if ! /usr/bin/codesign --verify --strict --verbose=4 "$binary" >/dev/null 2>&1; then
+    fail "official binary code signature is invalid"
+  fi
+  signature_output=$(/usr/bin/codesign --display --verbose=4 "$binary" 2>&1) \
+    || fail "official binary signature metadata is unavailable"
+  printf '%s\n' "$signature_output" | /usr/bin/grep -Fqx \
+    "Identifier=$signature_identifier" \
+    || fail "official binary signing identifier mismatch"
+  printf '%s\n' "$signature_output" | /usr/bin/grep -Fqx \
+    "TeamIdentifier=$signature_team" \
+    || fail "official binary signing team mismatch"
+  application_authorities=$(printf '%s\n' "$signature_output" \
+    | /usr/bin/grep -c '^Authority=Developer ID Application:' || true)
+  if [ "$application_authorities" != "1" ]; then
+    fail "official binary must have one Developer ID Application authority"
+  fi
+  printf '%s\n' "$signature_output" | /usr/bin/grep -Fqx \
+    "Authority=$signature_authority" \
+    || fail "official binary Developer ID authority mismatch"
+  printf '%s\n' "$signature_output" | /usr/bin/grep -Eq \
+    'flags=0x[0-9a-fA-F]+\(runtime\)' \
+    || fail "official binary is missing hardened runtime"
+  printf '%s\n' "$signature_output" | /usr/bin/grep -Eq \
+    '^Timestamp=.+$' \
+    || fail "official binary is missing its trusted timestamp"
+  if printf '%s\n' "$signature_output" | /usr/bin/grep -Fqx 'Timestamp=none'; then
+    fail "official binary trusted timestamp is disabled"
+  fi
+  printf '%s\n' "$signature_output" | /usr/bin/grep -Fqx \
+    "CDHash=$signature_cdhash" \
+    || fail "official binary CDHash mismatch"
+  printf '%s\n' "$signature_output" | /usr/bin/grep -Fqx \
+    "CandidateCDHashFull sha256=$signature_cdhash_full" \
+    || fail "official binary full CDHash mismatch"
+
+  requirement_output=$(/usr/bin/codesign --display --requirements - "$binary" 2>&1) \
+    || fail "official binary designated requirement is unavailable"
+  printf '%s\n' "$requirement_output" | /usr/bin/grep -Fqx \
+    "$signature_requirement" \
+    || printf '%s\n' "$requirement_output" | /usr/bin/grep -Fqx \
+      'designated => identifier "org.openclaw.wacli" and anchor apple generic and certificate leaf[subject.OU] = "FWJYW4S8P8"' \
+    || fail "official binary designated requirement mismatch"
+
+  if ! /usr/bin/codesign --verify --strict --check-notarization \
+    -R=notarized "$binary" >/dev/null 2>&1; then
+    fail "official binary notarization constraint is not satisfied"
+  fi
+}
+
+verify_binary() {
+  binary=$1
+  require_regular_file "$binary" "$binary_sha256" "official binary"
+  if [ "$(/usr/bin/lipo -archs "$binary")" != "arm64" ]; then
+    fail "official binary architecture mismatch"
+  fi
+  verify_signature "$binary"
+  if [ "$("$binary" version)" != "$version" ]; then
+    fail "official binary version mismatch"
+  fi
+}
+
+if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
+  fail "the pinned official archive currently supports macOS arm64 only"
+fi
+if [ ! -x /usr/bin/codesign ] || [ ! -x /usr/bin/lipo ]; then
+  fail "Apple code-signing tools are required"
+fi
 if [ ! -f "$state_home_resolver" ] || [ -L "$state_home_resolver" ]; then
   fail "state-home resolver is not a real file"
 fi
@@ -75,27 +142,38 @@ case "$bun_path" in
   /*) ;;
   *) fail "Bun path must be absolute" ;;
 esac
-if [ ! -x "$bun_path" ] || [ "$($bun_path --version)" != "1.3.14" ]; then
+if [ ! -x "$bun_path" ] || [ "$("$bun_path" --version)" != "1.3.14" ]; then
   fail "Bun path must name an executable Bun 1.3.14"
 fi
 
-state_home=$($bun_path run --no-install "$state_home_resolver" "$version")
-target_directory=$state_home/tools/wacli/$version/$transport_version
+state_home=$("$bun_path" run --no-install "$state_home_resolver" "$version")
+runtime_parent=$state_home/tools/wacli/$version
+target_directory=$runtime_parent/$transport_version
 target=$target_directory/wacli
-if [ -L "$target" ]; then
-  fail "refusing symbolic-link target"
+require_owned_private_directory "$runtime_parent" "runtime version directory"
+if [ -e "$target_directory" ] || [ -L "$target_directory" ]; then
+  require_owned_private_directory "$target_directory" "official runtime directory"
+else
+  /bin/mkdir -m 0700 -- "$target_directory"
 fi
-if [ -e "$target" ]; then
-  if [ ! -f "$target" ] || [ "$(file_sha256 "$target")" != "$binary_sha256" ]; then
-    fail "existing private-transport target has unexpected contents"
+if [ -e "$target" ] || [ -L "$target" ]; then
+  if [ ! -f "$target" ] || [ -L "$target" ]; then
+    fail "official runtime target is not a real file"
   fi
-  chmod 0700 "$target"
-  printf '%s\n' "Pinned WhatsApp private transport is already installed at $target"
+  if [ "$(/usr/bin/stat -f '%u' "$target")" != "$(/usr/bin/id -u)" ]; then
+    fail "official runtime target is not owned by the current user"
+  fi
+  if [ "$(/usr/bin/stat -f '%Lp' "$target")" != "700" ]; then
+    fail "official runtime target must have mode 0700"
+  fi
+  verify_binary "$target"
+  printf '%s\n' "Pinned official WhatsApp runtime is already installed"
   exit 0
 fi
 
 umask 077
-temporary_directory=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/wrench-wacli-private-install.XXXXXX")
+temporary_directory=$(/usr/bin/mktemp -d \
+  "${TMPDIR:-/tmp}/wrench-wacli-official-install.XXXXXX")
 cleanup() {
   if [ -n "${temporary_target:-}" ]; then
     case "$temporary_target" in
@@ -103,7 +181,7 @@ cleanup() {
     esac
   fi
   case "$temporary_directory" in
-    "${TMPDIR:-/tmp}"/wrench-wacli-private-install.*)
+    "${TMPDIR:-/tmp}"/wrench-wacli-official-install.*)
       /bin/chmod -R u+w "$temporary_directory" 2>/dev/null || true
       /bin/rm -rf -- "$temporary_directory"
       ;;
@@ -111,88 +189,42 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-wacli_archive=$temporary_directory/wacli.tar.gz
-whatsmeow_archive=$temporary_directory/whatsmeow.zip
-go_archive=$temporary_directory/go.tar.gz
-/usr/bin/curl --fail --location --proto '=https' --tlsv1.2 --output "$wacli_archive" "$wacli_source_url"
-/usr/bin/curl --fail --location --proto '=https' --tlsv1.2 --output "$whatsmeow_archive" "$whatsmeow_source_url"
-/usr/bin/curl --fail --location --proto '=https' --tlsv1.2 --output "$go_archive" "$go_source_url"
-require_regular_file "$wacli_archive" "$wacli_archive_sha256" "Wacli source archive"
-require_regular_file "$whatsmeow_archive" "$whatsmeow_archive_sha256" "Whatsmeow source archive"
-require_regular_file "$go_archive" "$go_archive_sha256" "Go toolchain archive"
-
-wacli_source=$temporary_directory/wacli
-built_binary=$temporary_directory/wacli-built
-whatsmeow_extract=$temporary_directory/whatsmeow-extract
-toolchain=$temporary_directory/toolchain
-/bin/mkdir -- "$wacli_source" "$whatsmeow_extract" "$toolchain"
-/usr/bin/tar -xzf "$wacli_archive" -C "$wacli_source" --strip-components=1
-/usr/bin/unzip -q "$whatsmeow_archive" -d "$whatsmeow_extract"
-/usr/bin/tar -xzf "$go_archive" -C "$toolchain"
-go_bin=$toolchain/go/bin/go
-whatsmeow_source=$whatsmeow_extract/go.mau.fi/whatsmeow@$whatsmeow_version
-if [ ! -x "$go_bin" ] || [ "$($go_bin env GOVERSION)" != "go$go_version" ]; then
-  fail "extracted Go toolchain version mismatch"
-fi
-if [ ! -f "$wacli_source/go.mod" ] || [ -L "$wacli_source/go.mod" ]; then
-  fail "Wacli source archive omitted go.mod"
-fi
-if [ ! -f "$whatsmeow_source/go.mod" ] || [ -L "$whatsmeow_source/go.mod" ]; then
-  fail "Whatsmeow source archive omitted go.mod"
+archive=$temporary_directory/$archive_name
+/usr/bin/curl --fail --location --proto '=https' --tlsv1.2 \
+  --output "$archive" "$release_url"
+require_regular_file "$archive" "$archive_sha256" \
+  "official release archive for commit $release_commit"
+archive_entries=$(/usr/bin/tar -tzf "$archive") \
+  || fail "official release archive could not be listed"
+expected_entries='LICENSE
+README.md
+wacli'
+if [ "$archive_entries" != "$expected_entries" ]; then
+  fail "official release archive inventory mismatch"
 fi
 
-/usr/bin/git -C "$wacli_source" apply --check --whitespace=nowarn "$wacli_patch"
-/usr/bin/git -C "$wacli_source" apply --whitespace=nowarn "$wacli_patch"
-/bin/chmod -R u+w "$whatsmeow_source"
-/usr/bin/git -C "$whatsmeow_source" apply --check "$whatsmeow_patch"
-/usr/bin/git -C "$whatsmeow_source" apply "$whatsmeow_patch"
-/bin/mv -- "$whatsmeow_source" "$wacli_source/third_party-whatsmeow"
-/bin/cp -- "$wacli_source/go.mod" "$wacli_source/wrench.mod"
-/bin/cp -- "$wacli_source/go.sum" "$wacli_source/wrench.sum"
+extracted=$temporary_directory/extracted
+/bin/mkdir -m 0700 -- "$extracted"
+/usr/bin/tar -xzf "$archive" -C "$extracted"
+for entry in LICENSE README.md wacli; do
+  if [ ! -f "$extracted/$entry" ] || [ -L "$extracted/$entry" ]; then
+    fail "official release archive contains an unsafe $entry"
+  fi
+done
+verify_binary "$extracted/wacli"
 
-(
-  cd "$wacli_source"
-  env GOTOOLCHAIN=local "$go_bin" mod edit -modfile=wrench.mod -replace=go.mau.fi/whatsmeow=./third_party-whatsmeow
-  (
-    cd third_party-whatsmeow
-    env GOTOOLCHAIN=local GOFLAGS=-modcacherw GOMODCACHE="$temporary_directory/go-mod-cache" GOCACHE="$temporary_directory/go-build-cache" \
-      "$go_bin" test . -run TestWrenchReceiveBarrier -count=1
-  )
-  env GOTOOLCHAIN=local GOFLAGS=-modcacherw GOMODCACHE="$temporary_directory/go-mod-cache" GOCACHE="$temporary_directory/go-build-cache" \
-    "$go_bin" test -modfile=wrench.mod -tags wrench_private_transport ./cmd/wacli ./internal/app ./internal/wa -count=1
-  env GOTOOLCHAIN=local GOFLAGS=-modcacherw GOMODCACHE="$temporary_directory/go-mod-cache" GOCACHE="$temporary_directory/go-build-cache" \
-    CGO_ENABLED=1 CGO_CFLAGS=-Wno-error=missing-braces \
-    "$go_bin" build -modfile=wrench.mod -trimpath -buildvcs=false \
-      -tags 'sqlite_fts5 wrench_private_transport' -o "$built_binary" ./cmd/wacli
-)
-
-if [ ! -f "$built_binary" ] || [ -L "$built_binary" ]; then
-  fail "checked build omitted a real wacli binary"
-fi
-if [ "$(file_sha256 "$built_binary")" != "$binary_sha256" ]; then
-  fail "checked Wacli binary SHA-256 mismatch"
-fi
-if [ "$($built_binary version)" != "$version" ]; then
-  fail "checked Wacli binary version mismatch"
-fi
-if ! "$built_binary" wrench-private --help >/dev/null; then
-  fail "checked Wacli binary omitted the private transport command"
-fi
-
-if [ ! -d "$state_home/tools/wacli/$version" ] || [ -L "$state_home/tools/wacli/$version" ]; then
-  fail "refusing unexpected installation parent"
-fi
-/bin/mkdir -m 0700 -- "$target_directory"
 temporary_target=$target_directory/.wacli-install.$$
 if [ -e "$temporary_target" ] || [ -L "$temporary_target" ]; then
   fail "temporary publication target already exists"
 fi
-/bin/cp -- "$built_binary" "$temporary_target"
-chmod 0700 "$temporary_target"
-if [ "$(file_sha256 "$temporary_target")" != "$binary_sha256" ]; then
-  fail "staged binary changed before publication"
+/bin/cp -- "$extracted/wacli" "$temporary_target"
+/bin/chmod 0700 "$temporary_target"
+verify_binary "$temporary_target"
+if ! /bin/ln -- "$temporary_target" "$target"; then
+  fail "official runtime publication target already exists"
 fi
-/bin/mv -- "$temporary_target" "$target"
+/bin/rm -f -- "$temporary_target"
 temporary_target=
+verify_binary "$target"
 
-printf '%s\n' "Installed pinned WhatsApp private transport $version at $target"
+printf '%s\n' "Installed pinned official WhatsApp runtime $version"

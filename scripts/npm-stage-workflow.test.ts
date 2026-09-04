@@ -12,7 +12,9 @@ import {
   type PackageArtifactInventory,
 } from "./package-artifact.js";
 import {
+  MAX_PACKAGE_TAR_BYTES,
   MAX_PACKED_BYTES,
+  MAX_PACKED_ENTRIES,
   MAX_PACKED_FILES,
   MAX_UNPACKED_BYTES,
   packageArtifactBudget,
@@ -66,9 +68,11 @@ const releaseRefWriterHelperUrl = new URL("./release-ref-writer.mjs", import.met
 const providerOutcomeHelperUrl = new URL("./release-provider-outcome.mjs", import.meta.url);
 const manifestUrl = new URL("../package.json", import.meta.url);
 const packageSmokeUrl = new URL("./package-smoke.ts", import.meta.url);
+const standaloneSmokeUrl = new URL("./standalone-smoke.ts", import.meta.url);
 const packageArtifactUrl = new URL("./package-artifact.ts", import.meta.url);
 const packageBudgetUrl = new URL("./package-budget.ts", import.meta.url);
 const packageIdentityUrl = new URL("./npm-package-identity.ts", import.meta.url);
+const tsconfigUrl = new URL("../tsconfig.json", import.meta.url);
 const publishingGuideUrl = new URL("../docs/publishing.md", import.meta.url);
 const agentGuideUrl = new URL("../AGENTS.md", import.meta.url);
 const websiteAgentGuideUrl = new URL("../website/AGENTS.md", import.meta.url);
@@ -78,6 +82,33 @@ const changelogUrl = new URL("../CHANGELOG.md", import.meta.url);
 const skillInstallGuideUrl = new URL("../skills/wrench/references/install.md", import.meta.url);
 const npmRegistry = "https://registry.npmjs.org";
 const repository = fileURLToPath(new URL("../", import.meta.url));
+const publicExportKeys = Object.freeze([
+  ".",
+  "./client",
+  "./beeper",
+  "./apple-photos",
+  "./whatsapp",
+  "./omni",
+  "./messaging",
+]);
+const publicImportSpecifiers = Object.freeze([
+  "@hraness/wrench",
+  "@hraness/wrench/client",
+  "@hraness/wrench/beeper",
+  "@hraness/wrench/apple-photos",
+  "@hraness/wrench/whatsapp",
+  "@hraness/wrench/omni",
+  "@hraness/wrench/messaging",
+]);
+const publicDistEntrypoints = Object.freeze([
+  "dist/index.js",
+  "dist/client.js",
+  "dist/beeper-client.js",
+  "dist/apple-photos-client.js",
+  "dist/whatsapp-client.js",
+  "dist/omni-client.js",
+  "dist/messaging.js",
+]);
 
 function workflowStepScript(workflow: string, name: string): string {
   const stepMarker = `      - name: ${name}\n`;
@@ -847,6 +878,32 @@ async function providerReceipts(mode: "advanced" | "already-exact"): Promise<Rea
 }
 
 describe("npm publication contract", () => {
+  test("derives the tar expansion ceiling from the reviewed package budget", async () => {
+    const artifact = await readFile(packageArtifactUrl, "utf8");
+
+    expect(MAX_PACKAGE_TAR_BYTES).toBe(
+      Math.ceil(
+        (MAX_UNPACKED_BYTES + MAX_PACKED_ENTRIES * 1_023 + 1_024) / 512,
+      ) * 512,
+    );
+    expect(MAX_PACKAGE_TAR_BYTES).toBe(12_442_112);
+    expect(MAX_PACKAGE_TAR_BYTES % 512).toBe(0);
+    expect(artifact).toContain("maxOutputLength: MAX_PACKAGE_TAR_BYTES");
+    expect(artifact).not.toContain("const maximumTarBytes");
+  });
+
+  test("enforces the derived package decompression ceiling", () => {
+    const atCeiling = gzipSync(Buffer.alloc(MAX_PACKAGE_TAR_BYTES));
+    const overCeiling = gzipSync(Buffer.alloc(MAX_PACKAGE_TAR_BYTES + 512));
+
+    expect(
+      gunzipSync(atCeiling, { maxOutputLength: MAX_PACKAGE_TAR_BYTES }).byteLength,
+    ).toBe(MAX_PACKAGE_TAR_BYTES);
+    expect(() =>
+      gunzipSync(overCeiling, { maxOutputLength: MAX_PACKAGE_TAR_BYTES })
+    ).toThrow();
+  });
+
   test("keeps both complete CI checks within the reviewed wall-time budget", async () => {
     const workflow = await readFile(ciWorkflowUrl, "utf8");
     const checkStart = workflow.indexOf("\n  check:\n");
@@ -887,24 +944,28 @@ describe("npm publication contract", () => {
 
     expect(artifact).toContain('from "./package-budget.js"');
     expect(smoke).toContain('from "./package-budget.js"');
+    expect(budget).toContain("two npm 11.19.0 packs");
+    expect(budget).toContain("2,171,458 packed bytes");
+    expect(budget).toContain("11,959,639 unpacked bytes, and 457 files");
     expect(budget).toContain(
-      "packed the rebased v0.16.2 Beeper direct-read candidate",
+      "982198b98fb3734d06c135932194ab7e2fd3c8be5584cf17e9ffe73d48ad09ea",
     );
-    expect(budget).toContain("11,320,511 unpacked bytes, and 437 files");
-    expect(budget).toContain("earlier v0.16.2 payload measured a 3,543-byte");
-    expect(budget).toContain("2,052,563 packed bytes");
-    expect(MAX_PACKED_BYTES).toBe(2_075_000);
-    expect(MAX_PACKED_FILES).toBe(450);
-    expect(MAX_UNPACKED_BYTES).toBe(11_425_000);
+    expect(budget).toContain("measured a 3,543-byte Linux/macOS gzip spread");
+    expect(budget).toContain("Keep 6,734 packed bytes");
+    expect(budget).toContain("13,702 unpacked bytes of bounded headroom");
+    expect(MAX_PACKED_BYTES).toBe(2_178_192);
+    expect(MAX_PACKED_ENTRIES).toBe(457);
+    expect(MAX_PACKED_FILES).toBe(457);
+    expect(MAX_UNPACKED_BYTES).toBe(11_973_341);
     expect(Object.isFrozen(packageArtifactBudget)).toBe(true);
     for (const range of Object.values(packageArtifactBudget)) {
       expect(Object.isFrozen(range)).toBe(true);
     }
     expect(packageArtifactBudget).toEqual({
-      entryCount: { min: 350, max: 450 },
-      fileCount: { min: 350, max: 450 },
-      packedBytes: { min: 1_600_000, max: 2_075_000 },
-      unpackedBytes: { min: 9_000_000, max: 11_425_000 },
+      entryCount: { min: 457, max: 457 },
+      fileCount: { min: 457, max: 457 },
+      packedBytes: { min: 1_600_000, max: 2_178_192 },
+      unpackedBytes: { min: 9_000_000, max: 11_973_341 },
     });
   });
 
@@ -919,15 +980,108 @@ describe("npm publication contract", () => {
     });
   });
 
-  test("keeps the reviewed package file inventory unique", async () => {
-    const value: unknown = JSON.parse(await readFile(manifestUrl, "utf8"));
+  test("keeps the exact seven public SDK entrypoints and required source inventory", async () => {
+    const [manifestSource, tsconfigSource, artifact, packageSmoke, standaloneSmoke]
+      = await Promise.all([
+        readFile(manifestUrl, "utf8"),
+        readFile(tsconfigUrl, "utf8"),
+        readFile(packageArtifactUrl, "utf8"),
+        readFile(packageSmokeUrl, "utf8"),
+        readFile(standaloneSmokeUrl, "utf8"),
+      ]);
+    const value: unknown = JSON.parse(manifestSource);
     expect(typeof value).toBe("object");
     expect(value).not.toBeNull();
-    const manifest = value as { readonly files?: unknown };
+    const manifest = value as { readonly exports?: unknown; readonly files?: unknown };
+    expect(typeof manifest.exports).toBe("object");
+    expect(manifest.exports).not.toBeNull();
+    expect(Object.keys(manifest.exports as object)).toEqual(publicExportKeys);
     expect(Array.isArray(manifest.files)).toBe(true);
     const files = manifest.files as readonly unknown[];
     expect(files.every((path) => typeof path === "string" && path.length > 0)).toBe(true);
     expect(new Set(files).size).toBe(files.length);
+    for (const requiredSource of [
+      "src/assets/adapters/beeper/wrench-web-adapter.v2.2.0.json",
+      "src/local-cli-surface-contract.ts",
+      "src/messaging.ts",
+    ] as const) {
+      expect(files).toContain(requiredSource);
+      expect(artifact).toContain(`"${requiredSource}"`);
+    }
+    const tsconfig: unknown = JSON.parse(tsconfigSource);
+    expect(
+      (tsconfig as {
+        readonly compilerOptions?: { readonly paths?: Record<string, unknown> };
+      }).compilerOptions?.paths,
+    ).toEqual({
+      "@hraness/wrench": ["./src/index.ts"],
+      "@hraness/wrench/client": ["./src/client.ts"],
+      "@hraness/wrench/beeper": ["./src/beeper-client.ts"],
+      "@hraness/wrench/apple-photos": ["./src/apple-photos-client.ts"],
+      "@hraness/wrench/whatsapp": ["./src/whatsapp-client.ts"],
+      "@hraness/wrench/omni": ["./src/omni-client.ts"],
+      "@hraness/wrench/messaging": ["./src/messaging.ts"],
+    });
+    for (const specifier of publicImportSpecifiers) {
+      expect(packageSmoke).toContain(`"${specifier}"`);
+      expect(standaloneSmoke).toContain(`"${specifier}"`);
+    }
+  });
+
+  test("keeps separate truthful Wrench 0.16.3 and 0.16.4 changelog sections", async () => {
+    const changelog = await readFile(changelogUrl, "utf8");
+    const unreleasedHeader = "## Unreleased\n";
+    const releaseHeader = "## 0.16.4 - 2026-09-03\n";
+    const incidentHeader = "## 0.16.3 - 2026-09-01\n";
+    const unreleasedStart = changelog.indexOf(unreleasedHeader);
+    const releaseStart = changelog.indexOf(releaseHeader);
+    const incidentStart = changelog.indexOf(incidentHeader);
+
+    expect(changelog.match(/^## Unreleased$/gmu) ?? []).toHaveLength(1);
+    expect(changelog.match(/^## 0\.16\.4 - 2026-09-03$/gmu) ?? []).toHaveLength(1);
+    expect(changelog.match(/^## 0\.16\.3 - 2026-09-01$/gmu) ?? []).toHaveLength(1);
+    expect(unreleasedStart).toBeGreaterThan(-1);
+    expect(releaseStart).toBeGreaterThan(unreleasedStart);
+    expect(incidentStart).toBeGreaterThan(releaseStart);
+    expect(changelog.slice(unreleasedStart + unreleasedHeader.length, releaseStart).trim()).toBe("");
+
+    const nextReleaseStart = changelog.indexOf("\n## ", releaseStart + releaseHeader.length);
+    expect(nextReleaseStart).toBe(incidentStart - 1);
+    const releaseSection = changelog.slice(releaseStart, nextReleaseStart);
+    for (const requiredFact of [
+      "Omarchy",
+      "production promotion",
+      "release App",
+      "Beeper",
+      "signed-in X account's bookmarks",
+      "Apple Photos",
+      "WhatsApp",
+    ] as const) {
+      expect(releaseSection).toContain(requiredFact);
+    }
+    expect(releaseSection.match(/\bX\b/gmu) ?? []).toHaveLength(1);
+    expect(releaseSection).not.toContain("CreateTweet");
+    expect(releaseSection).not.toContain("UserTweets");
+    expect(releaseSection).not.toContain("SearchTimeline");
+
+    const nextIncidentStart = changelog.indexOf("\n## ", incidentStart + incidentHeader.length);
+    expect(nextIncidentStart).toBeGreaterThan(incidentStart);
+    const incidentSection = changelog.slice(incidentStart, nextIncidentStart);
+    const normalizedIncidentSection = incidentSection.replace(/\s+/gu, " ");
+    for (const retainedFact of [
+      "stale-source npm-only",
+      "npm published it on 2026-09-03",
+      "no matching Git tag, GitHub Release, or production promotion",
+      "not a completed Wrench release",
+      "CreateTweet",
+      "UserTweets",
+      "SearchTimeline",
+      "cleanup-required",
+    ] as const) {
+      expect(normalizedIncidentSection).toContain(retainedFact);
+    }
+    expect(incidentSection).not.toContain("Apple Photos");
+    expect(incidentSection).not.toContain("WhatsApp Message Like Me");
   });
 
   test("separates read-only classification and verification from checkout-free terminal staging", async () => {
@@ -2228,13 +2382,7 @@ fi
     expect(publishScript).not.toContain("-f make_latest=true");
     expect(publishScript).not.toContain("gh release view");
     expect(publishScript).not.toContain("gh release create");
-    for (const checkedSurface of [
-      "dist/index.js",
-      "dist/client.js",
-      "dist/beeper-client.js",
-      "dist/omni-client.js",
-      "dist/messaging.js",
-    ] as const) {
+    for (const checkedSurface of publicDistEntrypoints) {
       expect(ciWorkflow).toContain(checkedSurface);
       expect(workflow).toContain(checkedSurface);
       expect(artifact).toContain(`"${checkedSurface}"`);
@@ -7116,6 +7264,18 @@ fi
     const manifest = JSON.parse(manifestText) as { readonly version: string };
     const exactPackage = `@hraness/wrench@${manifest.version}`;
     const nextReleaseVersion = "0.16.4";
+    const tagFailFastBoundary = 'set -eu\ncase "${STAGE_RUN_ID:-}" in';
+    const stageRunIdGuard = 'case "${STAGE_RUN_ID:-}" in';
+    const stageSourceBinding = 'C="$(gh api \\';
+    const stageSourceObjectProof = 'test "$(git rev-parse --verify "$C^{commit}")" = "$C"';
+    const stagedManifestRead = 'git show "${C}:package.json"';
+    const stagedPackageCoordinateProof =
+      `test "$package_coordinate" = "@hraness/wrench@${nextReleaseVersion}"`;
+    const sourceArtifactDownload = 'gh run download "$STAGE_RUN_ID" \\';
+    const registryArtifactDownload = `npm pack @hraness/wrench@${nextReleaseVersion} \\`;
+    const registryIdentityCheck = "bun run ./scripts/npm-package-identity.ts \\";
+    const registrySmokeCheck = "bun run ./scripts/package-smoke.ts \\";
+    const exactTagCommand = `git tag v${nextReleaseVersion} "$C"`;
     const oneTimeBootstrap =
       "This section records the one-time bootstrap of `@hraness/wrench@0.15.1`.";
     const doNotReuseBootstrap =
@@ -7145,7 +7305,34 @@ fi
       "scripts/npm-package-identity.ts",
       "--source-archive \"$wrench_npm_archive\"",
       "--registry-archive \"$wrench_registry_archive\"",
-      `git tag v${nextReleaseVersion}`,
+      tagFailFastBoundary,
+      stageRunIdGuard,
+      stageSourceBinding,
+      ".workflow_id == 344213783",
+      '.name == "Stage npm package"',
+      '.path == ".github/workflows/npm-stage.yml"',
+      '.event == "workflow_dispatch"',
+      '.head_branch == "main"',
+      '.status == "completed"',
+      '.conclusion == "success"',
+      ".run_attempt == 1",
+      'test "${#C}" -eq 40',
+      '*[!0-9a-f]*) exit 1 ;;',
+      'test "$(git cat-file -t "$C")" = commit',
+      stageSourceObjectProof,
+      stagedManifestRead,
+      'JSON.parse(require("node:fs").readFileSync(0, "utf8"))',
+      'manifest?.name !== "@hraness/wrench"',
+      `manifest?.version !== "${nextReleaseVersion}"`,
+      stagedPackageCoordinateProof,
+      sourceArtifactDownload,
+      'wrench_source_name="npm-package-0.16.4-$C-$STAGE_RUN_ID-1"',
+      '--name "$wrench_source_name"',
+      registryArtifactDownload,
+      registryIdentityCheck,
+      registrySmokeCheck,
+      `--expected-version ${nextReleaseVersion}`,
+      exactTagCommand,
       "npm stage approve <stage-id>",
       "The exact npm keyword list is checked by `scripts/package-smoke.ts`",
       "Repository topics are maintainer-managed discovery",
@@ -7361,10 +7548,28 @@ fi
     const commands = npmCommands(guide);
     expect(commands.length).toBeGreaterThan(0);
     for (const command of commands) expect(command).toContain(`--registry=${npmRegistry}`);
+    expect(guide.split("\n")).toContain(exactTagCommand);
+    expect(guide.split("\n")).not.toContain(`git tag v${nextReleaseVersion}`);
+    const stageSectionIndex = guide.indexOf("## Stage a later version");
+    const stageIndexOf = (value: string) => guide.indexOf(value, stageSectionIndex);
+    expect(stageIndexOf(tagFailFastBoundary)).toBeLessThan(stageIndexOf(stageSourceBinding));
+    expect(stageIndexOf(stageRunIdGuard)).toBeLessThan(stageIndexOf(stageSourceBinding));
+    expect(stageIndexOf(stageSourceBinding)).toBeLessThan(stageIndexOf(stageSourceObjectProof));
+    expect(stageIndexOf(stageSourceObjectProof)).toBeLessThan(stageIndexOf(stagedManifestRead));
+    expect(stageIndexOf(stagedManifestRead))
+      .toBeLessThan(stageIndexOf(stagedPackageCoordinateProof));
+    expect(stageIndexOf(stagedPackageCoordinateProof))
+      .toBeLessThan(stageIndexOf(sourceArtifactDownload));
+    expect(stageIndexOf(sourceArtifactDownload))
+      .toBeLessThan(stageIndexOf(registryArtifactDownload));
+    expect(stageIndexOf(registryArtifactDownload))
+      .toBeLessThan(stageIndexOf(registryIdentityCheck));
+    expect(stageIndexOf(registryIdentityCheck)).toBeLessThan(stageIndexOf(registrySmokeCheck));
+    expect(stageIndexOf(registrySmokeCheck)).toBeLessThan(stageIndexOf(exactTagCommand));
     expect(guide.indexOf("npm publish \"$wrench_npm_archive\""))
       .toBeLessThan(guide.indexOf("npm trust github @hraness/wrench"));
     expect(guide.indexOf("npm trust github @hraness/wrench"))
-      .toBeLessThan(guide.indexOf(`git tag v${nextReleaseVersion}`));
+      .toBeLessThan(guide.indexOf(exactTagCommand));
 
     expect(agents).toContain("Follow `docs/publishing.md`");
     expect(agents).toContain("automatically enter the exact staging pipeline");

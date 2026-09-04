@@ -410,7 +410,11 @@ const BEEPER_LOCAL_OPERATIONS = operationPolicies("beeper", [
   "messaging.list",
   "messaging.search",
   "messaging.read",
-]);
+], {
+  "contacts.list": 2,
+  "messaging.search": 2,
+  "messaging.read": 3,
+});
 const SUBSTACK_WEB_OPERATIONS = operationPolicies("substack", [
   "articles.read",
   "comments.read",
@@ -685,11 +689,11 @@ const whatsapp = {
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
 const beeper = {
-  "contacts.list": contract("beeper", "contacts.list", BEEPER_LOCAL_OPERATIONS["contacts.list"].risk, BEEPER_LOCAL_OPERATIONS["contacts.list"].state, BEEPER_LOCAL_OPERATIONS["contacts.list"].reason),
-  "contacts.search": contract("beeper", "contacts.search", BEEPER_LOCAL_OPERATIONS["contacts.search"].risk, BEEPER_LOCAL_OPERATIONS["contacts.search"].state, BEEPER_LOCAL_OPERATIONS["contacts.search"].reason),
-  "messaging.list": contract("beeper", "messaging.list", BEEPER_LOCAL_OPERATIONS["messaging.list"].risk, BEEPER_LOCAL_OPERATIONS["messaging.list"].state, BEEPER_LOCAL_OPERATIONS["messaging.list"].reason),
-  "messaging.search": contract("beeper", "messaging.search", BEEPER_LOCAL_OPERATIONS["messaging.search"].risk, BEEPER_LOCAL_OPERATIONS["messaging.search"].state, BEEPER_LOCAL_OPERATIONS["messaging.search"].reason),
-  "messaging.read": contract("beeper", "messaging.read", BEEPER_LOCAL_OPERATIONS["messaging.read"].risk, BEEPER_LOCAL_OPERATIONS["messaging.read"].state, BEEPER_LOCAL_OPERATIONS["messaging.read"].reason),
+  "contacts.list": contract("beeper", "contacts.list", BEEPER_LOCAL_OPERATIONS["contacts.list"].risk, BEEPER_LOCAL_OPERATIONS["contacts.list"].state, BEEPER_LOCAL_OPERATIONS["contacts.list"].reason, BEEPER_LOCAL_OPERATIONS["contacts.list"].contractVersion),
+  "contacts.search": contract("beeper", "contacts.search", BEEPER_LOCAL_OPERATIONS["contacts.search"].risk, BEEPER_LOCAL_OPERATIONS["contacts.search"].state, BEEPER_LOCAL_OPERATIONS["contacts.search"].reason, BEEPER_LOCAL_OPERATIONS["contacts.search"].contractVersion),
+  "messaging.list": contract("beeper", "messaging.list", BEEPER_LOCAL_OPERATIONS["messaging.list"].risk, BEEPER_LOCAL_OPERATIONS["messaging.list"].state, BEEPER_LOCAL_OPERATIONS["messaging.list"].reason, BEEPER_LOCAL_OPERATIONS["messaging.list"].contractVersion),
+  "messaging.search": contract("beeper", "messaging.search", BEEPER_LOCAL_OPERATIONS["messaging.search"].risk, BEEPER_LOCAL_OPERATIONS["messaging.search"].state, BEEPER_LOCAL_OPERATIONS["messaging.search"].reason, BEEPER_LOCAL_OPERATIONS["messaging.search"].contractVersion),
+  "messaging.read": contract("beeper", "messaging.read", BEEPER_LOCAL_OPERATIONS["messaging.read"].risk, BEEPER_LOCAL_OPERATIONS["messaging.read"].state, BEEPER_LOCAL_OPERATIONS["messaging.read"].reason, BEEPER_LOCAL_OPERATIONS["messaging.read"].contractVersion),
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
 const substack = {

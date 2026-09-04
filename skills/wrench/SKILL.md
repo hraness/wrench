@@ -11,7 +11,7 @@ description: >-
   capabilities; inspect or develop bounded provider contracts for X, LinkedIn,
   Bluesky, Substack Notes, Threads, TikTok, Instagram, and YouTube Shorts; save
   private native article drafts; operate reviewed Beeper messaging actions
-  through an exact pinned native CLI; and build or run typed provider plugins
+  across the pinned official CLI and fixed Desktop loopback operations; and build or run typed provider plugins
   from recorded browser-session APIs or versioned provider CLIs. Trigger for web capture,
   URL clipping, authenticated sites, social media posting or cross-posting,
   media download or archiving, transcription, email and messaging integrations,
@@ -42,6 +42,16 @@ automation.
 - Search public Puerto Rico rentals: `wrench clasificados-web listings.search --input '{"location":"San Juan, PR","beds_min":2,"max_price":5500}' --json`. Keep `location` to the reviewed San Juan tokens. Neighborhood comes from street, ZIP, known address, or list-card coordinates, never from broker copy. Zillow-group and Puerto Rico MLS public search are not installed.
 - Operate Beeper: inspect `wrench capabilities beeper-local --json`, then use
   only its typed read or action operation with the bound local Desktop realm.
+- Export an existing WhatsApp local projection for Message Like Me: follow
+  [WhatsApp local Message Like Me export](references/whatsapp-adapter.md).
+  This route does not pair, sync, or send, and its seven-file output is private.
+- Export exact local Apple Photos contact evidence: follow
+  [Apple Photos contact evidence](references/apple-photos.md). This source has
+  no auth or network authority. Its cluster identifiers and counts are private
+  biometric-derived metadata. It does not open, copy, or ask Photos to
+  materialize referenced photo or video asset files. Its transient `VACUUM
+  INTO` copies are full private SQLite databases that can include unselected
+  columns and raw blobs; the exclusions apply only to the returned JSON.
 - Read or act on a live conversation: follow
   [agentic messaging](references/messaging.md). Keep one exact provider route,
   use private artifacts for prose and capability references, and never expose a

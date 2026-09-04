@@ -27,6 +27,7 @@ import ts from "typescript";
 
 import {
   reviewedBuiltInContractIdentity,
+  reviewedBuiltInContractIdentityIfPresent,
 } from "./provider-plugin-contract-identity";
 import {
   MAX_PROVIDER_PLUGIN_BINDINGS,
@@ -3053,6 +3054,50 @@ function createProviderPluginRegistryInternal(
     }
   }
 
+  for (const plugin of plugins) {
+    if (plugin.sourceKind !== "built-in") continue;
+    const identity = reviewedBuiltInContractIdentityIfPresent(plugin.id, plugin.version);
+    if (identity === null) continue;
+    const ownedBindingCoordinates = new Set<string>();
+    const ownedRouteCoordinates = new Map<string, number>();
+    for (const binding of plugin.bindings) {
+      for (const operation of binding.operations) {
+        for (const contractVersion of operation.contractVersions) {
+          ownedBindingCoordinates.add(operationKey(
+            binding.transport,
+            binding.surfaceId,
+            operation.name,
+            contractVersion,
+          ));
+          const routeCoordinate = `${operation.name}@${contractVersion}`;
+          ownedRouteCoordinates.set(
+            routeCoordinate,
+            (ownedRouteCoordinates.get(routeCoordinate) ?? 0) + 1,
+          );
+        }
+      }
+    }
+    for (const distribution of
+      identity.legacyDistributionReadImplementationSha256 ?? []) {
+      for (const route of distribution.routes) {
+        if (!ownedBindingCoordinates.has(route)) {
+          throw new Error(
+            `built-in provider plugin ${plugin.id}@${plugin.version} legacy distribution owns uninstalled route ${route}`,
+          );
+        }
+      }
+    }
+    for (const route of Object.keys(
+      identity.legacyRouteReadImplementationSha256 ?? {},
+    )) {
+      if (ownedRouteCoordinates.get(route) !== 1) {
+        throw new Error(
+          `built-in provider plugin ${plugin.id}@${plugin.version} legacy identity requires one uniquely owned route ${route}`,
+        );
+      }
+    }
+  }
+
   for (
     const [path, snapshot] of [...registryRepositorySourceSnapshots.entries()]
       .sort(([left], [right]) => compareIdentityText(left, right))
@@ -3218,13 +3263,25 @@ function createProviderPluginRegistryInternal(
     const legacy = identity.legacyReadImplementationSha256;
     const e71Legacy = identity.legacyE71ReadImplementationSha256;
     const currentLegacy = identity.legacyCurrentReadImplementationSha256;
+    const coordinate = `${operation}@${contractVersion}`;
+    const bindingCoordinate = operationKey(
+      binding.transport,
+      binding.surfaceId,
+      operation,
+      contractVersion,
+    );
+    const distributionLegacy =
+      identity.legacyDistributionReadImplementationSha256
+        ?.filter((distribution) => distribution.routes.includes(bindingCoordinate))
+        .map((distribution) => distribution.implementationSha256) ?? [];
     const routeLegacy = identity.legacyRouteReadImplementationSha256?.[
-      `${operation}@${contractVersion}`
+      coordinate
     ] ?? [];
     if (
       legacy === null
       && e71Legacy === null
       && currentLegacy.length === 0
+      && distributionLegacy.length === 0
       && routeLegacy.length === 0
     ) {
       return Object.freeze([]);
@@ -3235,7 +3292,7 @@ function createProviderPluginRegistryInternal(
           `built-in provider plugin ${plugin.id}@${plugin.version} has an incomplete legacy contract identity`,
         );
       }
-      return Object.freeze([...currentLegacy, ...routeLegacy]
+      return Object.freeze([...currentLegacy, ...distributionLegacy, ...routeLegacy]
         .map((value) => Buffer.from(value, "hex")));
     }
     return Object.freeze([
@@ -3247,6 +3304,7 @@ function createProviderPluginRegistryInternal(
       Buffer.from(e71Legacy.production, "hex"),
       Buffer.from(e71Legacy.development, "hex"),
       ...currentLegacy.map((value) => Buffer.from(value, "hex")),
+      ...distributionLegacy.map((value) => Buffer.from(value, "hex")),
       ...routeLegacy.map((value) => Buffer.from(value, "hex")),
     ]);
   };

@@ -1,15 +1,33 @@
-// npm 11.19.0 packed the rebased v0.16.2 Beeper direct-read candidate at
-// 2,052,563 packed bytes, 11,320,511 unpacked bytes, and 437 files. Prior CI for
-// the earlier v0.16.2 payload measured a 3,543-byte Linux/macOS gzip spread.
-// Keep bounded room for that observed transport variance and small reviewed
-// payload drift.
-export const MAX_PACKED_BYTES = 2_075_000;
-export const MAX_PACKED_FILES = 450;
-export const MAX_UNPACKED_BYTES = 11_425_000;
+// After a clean Bun 1.3.14 build, two npm 11.19.0 packs of the converged
+// v0.16.4 product candidate were byte-identical: 2,171,458 packed bytes,
+// 11,959,639 unpacked bytes, and 457 files. Their SHA-256 was
+// 982198b98fb3734d06c135932194ab7e2fd3c8be5584cf17e9ffe73d48ad09ea. Prior CI
+// measured a 3,543-byte Linux/macOS gzip spread. Keep 6,734 packed bytes and
+// 13,702 unpacked bytes of bounded headroom, while admitting no package-inventory
+// expansion.
+export const MAX_PACKED_BYTES = 2_178_192;
+export const MAX_PACKED_ENTRIES = 457;
+export const MAX_PACKED_FILES = 457;
+export const MAX_UNPACKED_BYTES = 11_973_341;
+
+const TAR_BLOCK_BYTES = 512;
+const TAR_ENTRY_ALLOWANCE_BYTES = TAR_BLOCK_BYTES + (TAR_BLOCK_BYTES - 1);
+const TAR_TRAILER_BYTES = TAR_BLOCK_BYTES * 2;
+
+// Each reviewed tar entry needs one 512-byte header plus at most 511 bytes of
+// payload padding. Reserve that allowance for every admitted entry, the
+// required two-block trailer, and round to the parser's 512-byte alignment.
+export const MAX_PACKAGE_TAR_BYTES = Math.ceil(
+  (
+    MAX_UNPACKED_BYTES
+    + MAX_PACKED_ENTRIES * TAR_ENTRY_ALLOWANCE_BYTES
+    + TAR_TRAILER_BYTES
+  ) / TAR_BLOCK_BYTES,
+) * TAR_BLOCK_BYTES;
 
 export const packageArtifactBudget = Object.freeze({
-  entryCount: Object.freeze({ min: 350, max: MAX_PACKED_FILES }),
-  fileCount: Object.freeze({ min: 350, max: MAX_PACKED_FILES }),
+  entryCount: Object.freeze({ min: MAX_PACKED_ENTRIES, max: MAX_PACKED_ENTRIES }),
+  fileCount: Object.freeze({ min: MAX_PACKED_FILES, max: MAX_PACKED_FILES }),
   packedBytes: Object.freeze({ min: 1_600_000, max: MAX_PACKED_BYTES }),
   unpackedBytes: Object.freeze({ min: 9_000_000, max: MAX_UNPACKED_BYTES }),
 });

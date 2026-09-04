@@ -1,15 +1,19 @@
 import {
   BEEPER_CLI_COMMAND_COVERAGE,
   BEEPER_CLI_PIN,
+  BEEPER_CLI_V062_SURFACE_CONTRACT,
   BEEPER_DESKTOP_API_PIN,
   BEEPER_LOCAL_OPERATION_NAMES,
+  BEEPER_LOCAL_OPERATION_RUNTIME_TRANSPORTS,
 } from "../src/providers/beeper-local";
+import { WHATSAPP_PROTOCOL_PIN } from "../src/providers/whatsapp-web";
 import type {
   ProviderCapabilityAttestation,
   ProviderCapabilityAttestationRow,
 } from "./provider-capability-attestation";
 
 type ProviderIcon =
+  | "beeper"
   | "broadcast"
   | "chat"
   | "code"
@@ -30,7 +34,7 @@ type ProviderPresentationDefinition = Readonly<{
 }>;
 
 export const PROVIDER_PRESENTATIONS = Object.freeze([
-  { accent: "blue", icon: "chat", name: "Beeper", surfaceId: "beeper" },
+  { accent: "blue", icon: "beeper", name: "Beeper", surfaceId: "beeper" },
   { accent: "blue", icon: "network", name: "Bluesky", surfaceId: "bluesky" },
   { accent: "gold", icon: "store", name: "ClasificadosOnline", surfaceId: "clasificados" },
   { accent: "blue", icon: "network", name: "Facebook", surfaceId: "facebook" },
@@ -81,13 +85,18 @@ export type ProviderDirectory = Readonly<{
 export type BeeperPresentationFacts = Readonly<{
   adapterVersion: string;
   artifactTable: string;
+  cliBackedOperationCount: number;
   cliCommandCount: number;
   cliCommit: string;
   cliReleaseManifestSha256: string;
   cliReleaseUrl: string;
+  cliSourceDeclaredVersion: string;
+  cliSourcePackagePath: string;
+  cliSourceVersionDiscrepancy: string;
   cliVersion: string;
   desktopApiCommit: string;
   desktopApiVersion: string;
+  desktopLoopbackOperationCount: number;
   observedOperationCount: number;
   pageDescription: string;
   pageTitle: string;
@@ -95,11 +104,59 @@ export type BeeperPresentationFacts = Readonly<{
   semanticContractVersions: readonly number[];
 }>;
 
+export type BeeperPresentationTransportCounts = Readonly<{
+  cliBackedOperationCount: number;
+  desktopLoopbackOperationCount: number;
+}>;
+
+export type WhatsAppPresentationFacts = Readonly<{
+  adapterVersion: string;
+  archiveSha256: typeof WHATSAPP_PROTOCOL_PIN.darwinArm64ArchiveSha256;
+  binarySha256: typeof WHATSAPP_PROTOCOL_PIN.darwinArm64BinarySha256;
+  observedOperationCount: 4;
+  pageDescription: string;
+  pageTitle: string;
+  wacliCommit: typeof WHATSAPP_PROTOCOL_PIN.commit;
+  wacliVersion: typeof WHATSAPP_PROTOCOL_PIN.version;
+}>;
+
+export const BEEPER_PRESENTATION_TRANSPORT_COUNTS = Object.freeze(
+  BEEPER_LOCAL_OPERATION_NAMES.reduce<BeeperPresentationTransportCounts>(
+    (counts, operation) => {
+      const transport = BEEPER_LOCAL_OPERATION_RUNTIME_TRANSPORTS[operation];
+      return transport === "desktop-loopback"
+        ? Object.freeze({
+          ...counts,
+          desktopLoopbackOperationCount: counts.desktopLoopbackOperationCount + 1,
+        })
+        : Object.freeze({
+          ...counts,
+          cliBackedOperationCount: counts.cliBackedOperationCount + 1,
+        });
+    },
+    Object.freeze({ cliBackedOperationCount: 0, desktopLoopbackOperationCount: 0 }),
+  ),
+);
+
+if (
+  BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount
+    + BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount
+  !== BEEPER_LOCAL_OPERATION_NAMES.length
+  || BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount < 1
+  || BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount < 1
+) throw new Error("Beeper presentation runtime transport classification is incomplete");
+
 export const BEEPER_PAGE_METADATA = Object.freeze({
   description:
-    `Use ${BEEPER_LOCAL_OPERATION_NAMES.length} supported Wrench actions to read and act through the official Beeper CLI ${BEEPER_CLI_PIN.version} and one connected Beeper Desktop account.`,
+    `Use ${BEEPER_LOCAL_OPERATION_NAMES.length} supported Wrench actions with one connected Beeper Desktop account: ${BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount} CLI-backed operations and ${BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount} fixed Desktop loopback reads.`,
   title:
     `Beeper support in Wrench: ${BEEPER_LOCAL_OPERATION_NAMES.length} supported actions`,
+} as const);
+
+export const WHATSAPP_PAGE_METADATA = Object.freeze({
+  description:
+    `Read four bounded local WhatsApp projections and export an existing Wacli ${WHATSAPP_PROTOCOL_PIN.version} store as a private Message Like Me bundle without pairing, syncing, or sending.`,
+  title: "WhatsApp support in Wrench: bounded local reads and private export",
 } as const);
 
 function capabilityLabel(operation: string): string {
@@ -268,8 +325,8 @@ export function createProviderDirectory(
         capabilityLabel(row.operation)))].sort(compareStrings)),
       captureRequiredCount,
       contractVersions: Object.freeze(contractVersions),
-      href: definition.surfaceId === "beeper"
-        ? "/providers/beeper/"
+      href: definition.surfaceId === "beeper" || definition.surfaceId === "whatsapp"
+        ? `/providers/${definition.surfaceId}/`
         : `/provider-capabilities/#provider-${definition.surfaceId}`,
       icon: definition.icon,
       name: definition.name,
@@ -281,6 +338,45 @@ export function createProviderDirectory(
     })];
   });
   return Object.freeze({ entries: Object.freeze(entries), providerCount: entries.length });
+}
+
+export function createWhatsAppPresentationFacts(
+  directory: ProviderDirectory,
+  attestation: ProviderCapabilityAttestation,
+): WhatsAppPresentationFacts {
+  const entry = directory.entries.find((candidate) => candidate.surfaceId === "whatsapp");
+  const observedRows = attestation.rows.filter((row) =>
+    row.surfaceId === "whatsapp" && row.completeness === "observed");
+  const expectedOperations = [
+    "contacts.list",
+    "media.read",
+    "messaging.list",
+    "messaging.read",
+  ] as const;
+  const observedOperations = observedRows.map((row) => row.operation).sort();
+  if (
+    entry === undefined
+    || entry.supportedActionCount !== 4
+    || entry.observedCount !== 4
+    || entry.adapterIdentities.length !== 1
+    || entry.adapterIdentities[0]?.id !== "whatsapp-web"
+    || !entry.transports.includes("linked-device")
+    || observedRows.some((row) => row.risk !== "R1")
+    || observedOperations.length !== expectedOperations.length
+    || observedOperations.some((operation, index) => operation !== expectedOperations[index])
+  ) {
+    throw new Error("WhatsApp provider page is reviewed for exactly four linked-device R1 reads");
+  }
+  return Object.freeze({
+    adapterVersion: entry.adapterIdentities[0].version,
+    archiveSha256: WHATSAPP_PROTOCOL_PIN.darwinArm64ArchiveSha256,
+    binarySha256: WHATSAPP_PROTOCOL_PIN.darwinArm64BinarySha256,
+    observedOperationCount: 4,
+    pageDescription: WHATSAPP_PAGE_METADATA.description,
+    pageTitle: WHATSAPP_PAGE_METADATA.title,
+    wacliCommit: WHATSAPP_PROTOCOL_PIN.commit,
+    wacliVersion: WHATSAPP_PROTOCOL_PIN.version,
+  });
 }
 
 function transportLabel(transport: ProviderCapabilityAttestationRow["transport"]): string {
@@ -297,6 +393,10 @@ function entryCountLabel(entry: ProviderDirectoryEntry): string {
 }
 
 const providerIconPaths: Readonly<Record<ProviderIcon, readonly string[]>> = Object.freeze({
+  beeper: Object.freeze([
+    '<path d="M5.5 5.5h13a2.5 2.5 0 0 1 2.5 2.5v6.5a2.5 2.5 0 0 1-2.5 2.5H11l-5.5 3v-3A2.5 2.5 0 0 1 3 16.5V8a2.5 2.5 0 0 1 2.5-2.5Z"></path>',
+    '<path d="M8 10h.01M12 10h.01M16 10h.01M8 13.5h8"></path>',
+  ]),
   broadcast: Object.freeze([
     '<rect x="4" y="7" width="16" height="11" rx="2"></rect>',
     '<path d="m9 22 3-4 3 4M8 3c2.7 2.3 5.3 2.3 8 0"></path>',
@@ -361,7 +461,7 @@ export function renderProviderOverviewCards(directory: ProviderDirectory): strin
     `<p class="provider-capabilities">${entry.capabilities.map(escapeHtml).join(" · ")}</p>`,
     `<p class="provider-transport">${entry.transports.map(transportLabel).join(" + ")}</p>`,
     entry.surfaceId === "beeper"
-      ? '<p class="provider-feature-copy">Read conversations and messages, then preview and confirm sends, edits, reactions, drafts, reminders, and other supported actions.</p>'
+      ? `<p class="provider-feature-copy">${String(BEEPER_LOCAL_OPERATION_NAMES.length)} reviewed actions: ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount)} through one pinned CLI and ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount)} fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.</p>`
       : "",
     "</article>",
   ].join("")).join("");
@@ -495,19 +595,35 @@ export function createBeeperPresentationFacts(
   if (adapterIdentity.version.length < 1 || beeper.contractVersions.length < 1) {
     throw new Error("Beeper presentation lost its adapter version");
   }
+  const cliSourceVersionDiscrepancy =
+    BEEPER_CLI_V062_SURFACE_CONTRACT.source.versionDiscrepancy;
+  if (
+    cliSourceVersionDiscrepancy === null
+    || BEEPER_CLI_V062_SURFACE_CONTRACT.source.packageDeclaredVersion
+      === BEEPER_CLI_PIN.version
+  ) {
+    throw new Error("Beeper presentation lost its reviewed source/executable version discrepancy");
+  }
   const semanticContractVersionLabel = beeper.contractVersions.length === 1
     ? `Contract version ${beeper.contractVersions[0]}`
     : `Contract versions ${beeper.contractVersions.join(", ")}`;
   return Object.freeze({
     adapterVersion: adapterIdentity.version,
     artifactTable: renderBeeperArtifactTable(),
+    cliBackedOperationCount: BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount,
     cliCommandCount: Object.keys(BEEPER_CLI_COMMAND_COVERAGE).length,
     cliCommit: BEEPER_CLI_PIN.commit,
     cliReleaseManifestSha256: BEEPER_CLI_PIN.releaseManifestSha256,
     cliReleaseUrl: BEEPER_CLI_PIN.releaseUrl,
+    cliSourceDeclaredVersion:
+      BEEPER_CLI_V062_SURFACE_CONTRACT.source.packageDeclaredVersion,
+    cliSourcePackagePath: BEEPER_CLI_V062_SURFACE_CONTRACT.source.packagePath,
+    cliSourceVersionDiscrepancy,
     cliVersion: BEEPER_CLI_PIN.version,
     desktopApiCommit: BEEPER_DESKTOP_API_PIN.commit,
     desktopApiVersion: BEEPER_DESKTOP_API_PIN.version,
+    desktopLoopbackOperationCount:
+      BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount,
     observedOperationCount: beeper.observedCount,
     pageDescription: BEEPER_PAGE_METADATA.description,
     pageTitle: BEEPER_PAGE_METADATA.title,

@@ -49,14 +49,14 @@
         <header class="guide-hero provider-guide-hero">
           <p class="eyebrow">Beeper adapter · {{WRENCH_RELEASE}}</p>
           <h1>Use Beeper through {{BEEPER_OBSERVED_OPERATION_COUNT}} supported actions.</h1>
-          <p class="answer-lede">Wrench exposes {{BEEPER_OBSERVED_OPERATION_COUNT}} semantic operations over the official Beeper CLI {{BEEPER_CLI_VERSION}} and an already-authorized Beeper Desktop target. Each request binds one executable, account realm, Desktop target, operation contract, input, output, and risk level.</p>
+          <p class="answer-lede">Wrench exposes {{BEEPER_OBSERVED_OPERATION_COUNT}} semantic operations for one already-authorized <a href="https://www.beeper.com/">Beeper Desktop</a> account: {{BEEPER_CLI_BACKED_OPERATION_COUNT}} operations use the pinned official Beeper CLI {{BEEPER_CLI_VERSION}}, while {{BEEPER_DESKTOP_LOOPBACK_OPERATION_COUNT}} are fixed Desktop loopback reads. Each request binds its executable or fixed endpoint, account realm, Desktop target, operation contract, input, output, and risk level.</p>
           <p class="review-note">This page describes adapter <code>beeper-local</code> {{BEEPER_ADAPTER_VERSION}} in {{WRENCH_RELEASE}}. Run <code>wrench capabilities beeper-local --json</code> for the exact state installed on your machine.</p>
         </header>
 
         <section aria-labelledby="choose-beeper-path">
           <h2 id="choose-beeper-path">Choose direct Beeper or Wrench</h2>
-          <p><strong>Use Beeper directly for the lowest-friction access to its first-party breadth.</strong> Connect the <a href="https://developers.beeper.com/desktop-api/mcp/">built-in Beeper Desktop MCP</a> to a supported client, or use the <a href="https://github.com/beeper/cli">official Beeper CLI</a> for its broader first-party command surface.</p>
-          <p><strong>Choose Wrench when the boundary is part of the requirement.</strong> Wrench adds exact CLI artifact and adapter-version pinning; a named semantic allowlist; write previews, durable receipts, and no blind retry after an indeterminate dispatch; encrypted snapshots; and versioned Message Like Me and contact-interaction exports. It wraps only the actions listed for this release.</p>
+          <p><strong>Use Beeper directly when you want its first-party breadth.</strong> Connect the <a href="https://developers.beeper.com/desktop-api/mcp/">built-in Beeper Desktop MCP</a> to a supported client, or use the <a href="https://github.com/beeper/cli">official Beeper CLI</a> for its broader first-party command surface.</p>
+          <p><strong>Choose Wrench when the boundary is part of the requirement.</strong> Native Beeper CLI and Desktop MCP paths may expose broader first-party breadth. Wrench adds exact executable and adapter-version pinning; a named, typed semantic allowlist; write previews, durable receipts, contract-specific reconciliation for generic CLI mutations, and no blind retry after an indeterminate dispatch; encrypted snapshots; and versioned Message Like Me and contact-interaction exports. It wraps only the actions listed for this release.</p>
         </section>
 
         <section aria-labelledby="actions">
@@ -75,24 +75,24 @@
               <p>Send text, files, stickers, or voice; edit an authored message; start a conversation; change read state or group metadata; set disappearing-message retention; send Notify Anyway; and emit bounded presence.</p>
             </article>
           </div>
-          <p><a href="/provider-capabilities/#provider-beeper">Inspect the operation-level contracts, risks, and limits</a>.</p>
+          <p>Browse <a href="/provider-capabilities/#provider-beeper">Beeper's supported action names and access methods</a>.</p>
         </section>
 
         <section aria-labelledby="setup">
           <h2 id="setup">Bind one official CLI and one Desktop target</h2>
-          <p>Install the official CLI, authorize it to the local Desktop app, install Wrench's reviewed adapter manifests, then bind an auth identity to the exact Beeper account and Desktop realm.</p>
+          <p>Install the pinned official CLI, authorize it to the local Desktop app, install Wrench's reviewed adapter manifests, then bind an auth identity to the exact Beeper account and Desktop realm.</p>
           <div class="command-panel"><pre><code>brew install beeper/tap/cli
 beeper setup
 wrench adapter sync-bundled --json
 wrench auth add beeper-main --linked-device beeper \
   --device-store "${HOME}/.beeper"
 wrench auth bind beeper-main --site beeper</code></pre></div>
-          <p>If a package manager installs different bytes, extract the matching release asset for your platform and place the executable at <code>&lt;WRENCH_STATE_HOME&gt;/tools/beeper/{{BEEPER_CLI_VERSION}}/beeper</code>. When <code>WRENCH_STATE_HOME</code> is unset, the default state root is <code>~/.local/share/wrench</code>. The artifact table below links the direct official asset for every supported macOS and Linux architecture. Wrench rejects an unpinned executable before private work. A Beeper Desktop update changes the bound runtime realm and requires explicit review and rebind.</p>
+          <p>If a package manager installs different bytes, extract the matching release asset for your platform and place the executable at <code>&lt;WRENCH_STATE_HOME&gt;/tools/beeper/{{BEEPER_CLI_VERSION}}/beeper</code>. When <code>WRENCH_STATE_HOME</code> is unset, the default state root is <code>~/.local/share/wrench</code>. The artifact table below links the direct official asset for every supported macOS and Linux architecture. Wrench rejects an unpinned executable before private work. The authoritative executable identity is <code>@beeper/cli</code> {{BEEPER_CLI_VERSION}}. Its exact reviewed provenance records this discrepancy: {{BEEPER_CLI_SOURCE_VERSION_DISCREPANCY}} The tagged source path is <code>{{BEEPER_CLI_SOURCE_PACKAGE_PATH}}</code>, and its declared {{BEEPER_CLI_SOURCE_DECLARED_VERSION}} is provenance only. A Beeper Desktop update changes the bound runtime realm and requires explicit review and rebind.</p>
         </section>
 
         <section aria-labelledby="boundary">
           <h2 id="boundary">What Wrench adds to the official Beeper CLI</h2>
-          <p><a href="https://github.com/beeper/cli">Beeper publishes the upstream CLI</a>. Wrench exposes reviewed outcomes from that CLI instead of exposing a command name and arbitrary arguments. The caller cannot select a command, flag, endpoint, target, environment variable, output path, or user-installed CLI plugin.</p>
+          <p><a href="https://github.com/beeper/cli">Beeper publishes the upstream CLI</a>. Wrench exposes reviewed outcomes from that CLI for {{BEEPER_CLI_BACKED_OPERATION_COUNT}} operations and from {{BEEPER_DESKTOP_LOOPBACK_OPERATION_COUNT}} fixed Desktop loopback reads instead of exposing a command name and arbitrary arguments or a caller-selected request. The caller cannot select a command, flag, endpoint, target, environment variable, output path, or user-installed CLI plugin.</p>
           <p>Wrench starts the executable directly without a shell, removes ambient credentials and target defaults, isolates oclif user-plugin state, and stages files only from digest-bound plan assets. Private text accepted by the upstream CLI as an argument can remain visible to same-account local process inspection while the child runs.</p>
           <p>Each supported platform is bound to exact archive and executable SHA-256 values. A reported version, package-manager formula, release tag, or compatible-looking update is not execution authority.</p>
         </section>
@@ -139,7 +139,7 @@ wrench messaging preview --input @/absolute/private/beeper-turn.json \
           <div class="command-panel"><pre><code>wrench confirm &lt;preview-digest&gt; \
   --private-output /absolute/private/beeper-receipt.json \
   --receipt-binding-output /absolute/private/beeper-receipt-binding.json --json</code></pre></div>
-          <p>Wrench durably records dispatch and invokes Beeper without <code>--wait</code>. An accepted pending target is evidence of submission, not network delivery. After the child may have reached Desktop, a timeout, signal, malformed response, or lost response remains indeterminate. Wrench does not retry it. Reconcile the same run from a separately obtained exact read.</p>
+          <p>For agentic text sends, Wrench performs one fixed POST to the bound Beeper Desktop loopback endpoint after the exact route and context preflight. This path does not call the CLI or SDK and never retries. Desktop's returned <code>pendingMessageID</code> proves submission to Desktop only, not network delivery. A separately obtained exact read may be inspected after a timeout, signal, malformed response, or lost response, but it cannot match this run by body, recipient, time, or nearby messages. Without an already accepted exact provider message identity, the run remains indeterminate and unretriable; only that identity could make reconciliation categorical.</p>
         </section>
 
         <section aria-labelledby="exports">
@@ -156,13 +156,16 @@ wrench beeper export-contact-interactions --auth beeper-main --json \
 
         <section aria-labelledby="limits">
           <h2 id="limits">Limits remain visible</h2>
-          <p>Beeper CLI {{BEEPER_CLI_VERSION}} exposes no continuation for several list and search commands and may cap results below the requested limit. Wrench returns bounded candidate windows instead of claiming complete history.</p>
-          <p>The checked coverage ledger accounts for all {{BEEPER_CLI_COMMAND_COUNT}} canonical CLI commands. Account setup and removal, authentication and verification, target and server administration, software and plugin lifecycle, raw API or RPC, watches and webhooks, arbitrary exports, media download, and message deletion remain unavailable or R4.</p>
+          <p>Beeper CLI {{BEEPER_CLI_VERSION}} exposes no continuation for several list and search commands and may cap results below the requested limit. Desktop message reads use opaque before/after cursors returned by the reviewed endpoint and an optional sender filter; callers must pass those returned values rather than deriving cursors from message IDs. Wrench returns bounded candidate windows instead of claiming complete history.</p>
+          <p>The checked coverage ledger fully accounts for all {{BEEPER_CLI_COMMAND_COUNT}} public manual command paths; that is provenance coverage, not supported-command parity. Forty-one paths collapse to the {{BEEPER_OBSERVED_OPERATION_COUNT}} semantic operations. <code>accounts use</code> is absorbed into explicit account IDs; <code>targets status</code>, <code>version</code>, and top-level <code>export</code> are internal; <code>accounts add</code>, <code>accounts remove</code>, and <code>messages delete</code> are R4 and unavailable to provider dispatch; and plain <code>status</code> is among the 53 unsupported paths. None of those three R4 paths appears in the selected {{BEEPER_OBSERVED_OPERATION_COUNT}}-operation provider adapter.</p>
+          <p><code>messages.delete</code> is deliberately inert. Upstream <code>--for-everyone</code> requests can fall back to deletion for only the authenticated user when a network cannot delete for everyone, while the reviewed Desktop endpoint returns a void success response. Wrench therefore cannot prove the requested network-visible effect, never dispatches this action, and does not turn a local disappearance into a deletion receipt.</p>
+          <p><code>media.download</code> remains unavailable because the official CLI buffers the complete media body to stdout before Wrench can enforce a streaming byte bound; no reviewed bounded worker accepts only a prior-message-bound opaque media handle. <code>watch</code> and outbound webhooks remain unavailable because their open-ended stream has no reviewed finite supervisor and proven termination contract. The top-level CLI export is internal-only: Wrench invokes a fixed, bounded, owner-private shard workflow with <code>--no-attachments</code>; callers cannot select raw export arguments, paths, or coverage claims.</p>
+          <p><a href="https://developers.beeper.com/desktop-api/">Beeper recommends its Desktop API for personal use</a> and warns that sending too many messages may result in suspension by connected networks. Wrench bounds each operation, but it cannot waive Beeper's terms or a network's throttling, automation, or suspension rules.</p>
         </section>
 
         <aside class="guide-callout" aria-labelledby="beeper-next">
           <h2 id="beeper-next">Inspect the local state before binding an account</h2>
-          <p>Install <a href="/getting-started/">Wrench {{WRENCH_RELEASE}}</a>, run <code>wrench doctor --json</code>, inspect <a href="/provider-capabilities/#provider-beeper">all Beeper contracts</a>, then read the <a href="/security/">security and local-custody guide</a>.</p>
+          <p>Install <a href="/getting-started/">Wrench {{WRENCH_RELEASE}}</a>, run <code>wrench doctor --json</code>, browse <a href="/provider-capabilities/#provider-beeper">Beeper's supported action names and access methods</a>, then read the <a href="/security/">security and local-custody guide</a>.</p>
         </aside>
       </article>
     </main>

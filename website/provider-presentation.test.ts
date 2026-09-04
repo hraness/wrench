@@ -7,8 +7,10 @@ import {
 } from "./provider-capability-attestation";
 import {
   BEEPER_PAGE_METADATA,
+  BEEPER_PRESENTATION_TRANSPORT_COUNTS,
   createBeeperPresentationFacts,
   createProviderDirectory,
+  createWhatsAppPresentationFacts,
   PROVIDER_PRESENTATIONS,
   renderProviderAttestationGroups,
   renderProviderOverviewCards,
@@ -38,9 +40,9 @@ describe("provider presentation", () => {
 
     expect(directory.entries[0]).toMatchObject({
       adapterCount: 1,
-      adapterIdentities: [{ id: "beeper-local", version: "2.2.0" }],
+      adapterIdentities: [{ id: "beeper-local", version: "2.3.0" }],
       captureRequiredCount: 0,
-      contractVersions: [1, 2],
+      contractVersions: [1, 2, 3],
       href: "/providers/beeper/",
       name: "Beeper",
       observedCount: 32,
@@ -48,6 +50,13 @@ describe("provider presentation", () => {
       supportedActionCount: 32,
       surfaceId: "beeper",
       transports: ["local-cli"],
+    });
+    expect(directory.entries.find((entry) => entry.surfaceId === "whatsapp")).toMatchObject({
+      adapterIdentities: [{ id: "whatsapp-web", version: "1.4.0" }],
+      href: "/providers/whatsapp/",
+      observedCount: 4,
+      supportedActionCount: 4,
+      transports: ["linked-device"],
     });
     for (const entry of directory.entries) {
       const supportedRows = attestation.rows.filter((row) =>
@@ -65,25 +74,62 @@ describe("provider presentation", () => {
     }
   });
 
+  test("binds the WhatsApp page to four R1 reads and exact Wacli provenance", async () => {
+    const attestation = await loadProviderCapabilityAttestation(repositoryRoot);
+    const facts = createWhatsAppPresentationFacts(
+      createProviderDirectory(attestation),
+      attestation,
+    );
+    expect(facts).toMatchObject({
+      adapterVersion: "1.4.0",
+      archiveSha256: "2b54f33d246e913a5c33525b4fc895a345363c2dcc673c70fa5f19cffb15d17d",
+      binarySha256: "a900af4d0dfd10471bcdf74105b9f256d1a08574242a041df3e5985a548826aa",
+      observedOperationCount: 4,
+      wacliCommit: "a020de724180d31eccfa5241d45443402d62fb06",
+      wacliVersion: "0.15.0",
+    });
+
+    const driftedRows = attestation.rows.map((row) =>
+      row.surfaceId === "whatsapp" && row.completeness === "observed"
+        ? Object.freeze({ ...row, risk: "R2" as const })
+        : row);
+    const drifted = Object.freeze({ ...attestation, rows: Object.freeze(driftedRows) });
+    expect(() => createWhatsAppPresentationFacts(
+      createProviderDirectory(drifted),
+      drifted,
+    )).toThrow("exactly four linked-device R1 reads");
+  });
+
   test("binds Beeper marketing facts to reviewed code and adapter identity", async () => {
     const directory = createProviderDirectory(
       await loadProviderCapabilityAttestation(repositoryRoot),
     );
     const facts = createBeeperPresentationFacts(directory);
     expect(facts).toMatchObject({
-      adapterVersion: "2.2.0",
+      adapterVersion: "2.3.0",
+      cliBackedOperationCount:
+        BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount,
       cliCommandCount: 101,
       cliCommit: "a416af06023449a87312dc11e54643fd9dc94b8c",
       cliReleaseUrl: "https://github.com/beeper/cli/releases/tag/v0.6.2",
+      cliSourceDeclaredVersion: "0.6.1",
+      cliSourcePackagePath: "packages/cli/package.json",
+      cliSourceVersionDiscrepancy:
+        "Official v0.6.2 binaries.json and the exact executable report 0.6.2, while package.json at tag a416af06023449a87312dc11e54643fd9dc94b8c declares 0.6.1; executable runtime identity remains authoritative.",
       cliVersion: "0.6.2",
       desktopApiCommit: "b9c1714410139c2139b597338cd002d785653e85",
       desktopApiVersion: "5.0.0",
+      desktopLoopbackOperationCount:
+        BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount,
       observedOperationCount: 32,
       pageDescription: BEEPER_PAGE_METADATA.description,
       pageTitle: BEEPER_PAGE_METADATA.title,
-      semanticContractVersionLabel: "Contract versions 1, 2",
-      semanticContractVersions: [1, 2],
+      semanticContractVersionLabel: "Contract versions 1, 2, 3",
+      semanticContractVersions: [1, 2, 3],
     });
+    expect(
+      facts.cliBackedOperationCount + facts.desktopLoopbackOperationCount,
+    ).toBe(facts.observedOperationCount);
     expect(facts.artifactTable.match(/<tbody><tr>/gu)).toHaveLength(1);
     expect(facts.artifactTable.match(/<tr>/gu)).toHaveLength(5);
     expect(facts.artifactTable).toContain("macOS arm64");
@@ -104,8 +150,8 @@ describe("provider presentation", () => {
       rows: Object.freeze(changedRows),
     }));
 
-    expect(facts.semanticContractVersions).toEqual([1, 2]);
-    expect(facts.semanticContractVersionLabel).toBe("Contract versions 1, 2");
+    expect(facts.semanticContractVersions).toEqual([1, 2, 3]);
+    expect(facts.semanticContractVersionLabel).toBe("Contract versions 1, 2, 3");
   });
 
   test("renders supported tasks without exposing internal readiness states", async () => {
@@ -114,6 +160,7 @@ describe("provider presentation", () => {
     const cards = renderProviderOverviewCards(directory);
     const groups = renderProviderAttestationGroups(directory, attestation);
     const iconSignatures = {
+      beeper: '<path d="M5.5 5.5h13a2.5 2.5 0 0 1 2.5 2.5v6.5a2.5 2.5 0 0 1-2.5 2.5H11l-5.5 3v-3A2.5 2.5 0 0 1 3 16.5V8a2.5 2.5 0 0 1 2.5-2.5Z"></path>',
       broadcast: '<rect x="4" y="7" width="16" height="11" rx="2"></rect>',
       chat: '<path d="M5.5 5.5h13a2.5 2.5 0 0 1 2.5 2.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-5.5 3v-3A2.5 2.5 0 0 1 3 15V8a2.5 2.5 0 0 1 2.5-2.5Z"></path>',
       code: '<path d="m9 7-5 5 5 5M15 7l5 5-5 5M13.5 4 10.5 20"></path>',
@@ -145,6 +192,10 @@ describe("provider presentation", () => {
     expect(cards.indexOf(">Beeper</a>")).toBeLessThan(cards.indexOf(">Bluesky</a>"));
     expect(cards).toContain("32 supported actions");
     expect(cards).toContain("Accounts · Bridges · Contacts · Conversations · Messages · Presence · Reactions");
+    expect(cards).toContain(
+      `${String(directory.entries[0]?.observedCount)} reviewed actions: ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount)} through one pinned CLI and ${String(BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount)} fixed Desktop reads; writes are previewed and uncertain outcomes stay unretriable.`,
+    );
+    expect(cards).not.toContain("other supported actions");
     expect(cards).not.toContain("{{");
     expect(cards).not.toMatch(/observed|capture-required|adapter/iu);
     expect(groups.match(/class="provider-attestation-group"/gu)).toHaveLength(directory.providerCount);

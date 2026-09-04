@@ -8,12 +8,15 @@ import {
   MAX_PACKED_FILES,
   MAX_UNPACKED_BYTES,
 } from "./package-budget.js";
+import { packedPrivateSourceClientRuntimeProgram } from "./private-source-client-runtime-smoke.js";
 
 const packageName = "@hraness/wrench";
 const importSpecifiers = [
   "@hraness/wrench",
   "@hraness/wrench/client",
   "@hraness/wrench/beeper",
+  "@hraness/wrench/apple-photos",
+  "@hraness/wrench/whatsapp",
   "@hraness/wrench/omni",
   "@hraness/wrench/messaging",
 ];
@@ -465,6 +468,7 @@ async function verifyPackagedSkill(
     readonly name?: unknown;
     readonly version?: unknown;
     readonly contentPolicy?: unknown;
+    readonly dependencies?: unknown;
     readonly engines?: unknown;
     readonly keywords?: unknown;
     readonly publishConfig?: unknown;
@@ -527,6 +531,36 @@ async function verifyPackagedSkill(
     || manifest.contentPolicy.class !== "dual-use"
   ) {
     throw new Error("Packed Wrench must retain npm dual-use metadata.");
+  }
+  if (
+    typeof manifest.dependencies !== "object"
+    || manifest.dependencies === null
+    || !("@hraness/message-like-me" in manifest.dependencies)
+    || manifest.dependencies["@hraness/message-like-me"]
+      !== "github:hraness/message-like-me#v0.7.0"
+  ) {
+    throw new Error("Packed Wrench must pin the immutable Message Like Me v0.7.0 consumer contract.");
+  }
+  const messageLikeMeRoot = join(
+    consumer,
+    "node_modules",
+    "@hraness",
+    "message-like-me",
+  );
+  const messageLikeMeManifest = JSON.parse(
+    await readFile(join(messageLikeMeRoot, "package.json"), "utf8"),
+  ) as Readonly<{ version?: unknown }>;
+  if (messageLikeMeManifest.version !== "0.7.0") {
+    throw new Error("Clean Wrench consumer did not resolve Message Like Me v0.7.0.");
+  }
+  const messageLikeMeContractSha256 = createHash("sha256")
+    .update(await readFile(join(messageLikeMeRoot, "dist", "message-bundle-v2.js")))
+    .digest("hex");
+  if (
+    messageLikeMeContractSha256
+      !== "aeab7249da34df33c4620b27b105fafdd19e9bfe74c92317ae61bf4d0291da21"
+  ) {
+    throw new Error("Clean Wrench consumer resolved unreviewed Message Like Me v2 contract bytes.");
   }
   if (
     typeof manifest.engines !== "object"
@@ -659,6 +693,11 @@ try {
     consumer,
     `${packageVersion}\n`,
   );
+  await run([
+    process.execPath,
+    "--eval",
+    packedPrivateSourceClientRuntimeProgram,
+  ], consumer);
   await runExpectingFailure([
     join(consumer, "node_modules", ".bin", "wrench"),
     "imessage",
@@ -701,12 +740,31 @@ try {
     "-e",
     "await import('./node_modules/@hraness/wrench/src/beeper-message-like-me-cli.ts')",
   ], consumer);
+  await run([
+    process.execPath,
+    "-e",
+    "await import('./node_modules/@hraness/wrench/src/whatsapp-message-like-me-cli.ts')",
+  ], consumer);
+  await run([
+    process.execPath,
+    "-e",
+    "const surface = await import('./node_modules/@hraness/wrench/src/local-cli-surface-contract.ts'); if (typeof surface.parseLocalCliSurfaceContractV1 !== 'function') process.exit(1)",
+  ], consumer);
   await runExpectingFailure([
     join(consumer, "node_modules", ".bin", "wrench"),
     "beeper",
     "export-message-like-me",
     "--auth",
     "beeper-main",
+    "--output",
+    "relative",
+  ], consumer, 2, "normalized-absolute-directory");
+  await runExpectingFailure([
+    join(consumer, "node_modules", ".bin", "wrench"),
+    "whatsapp",
+    "export-message-like-me",
+    "--auth",
+    "whatsapp-main",
     "--output",
     "relative",
   ], consumer, 2, "normalized-absolute-directory");
@@ -725,7 +783,9 @@ import * as surface0 from "@hraness/wrench";
 import * as surface1 from "@hraness/wrench/client";
 import * as surface2 from "@hraness/wrench/omni";
 import * as surface3 from "@hraness/wrench/beeper";
-import * as surface4 from "@hraness/wrench/messaging";
+import * as surface4 from "@hraness/wrench/apple-photos";
+import * as surface5 from "@hraness/wrench/whatsapp";
+import * as surface6 from "@hraness/wrench/messaging";
 import {
   discoverMessagingRoutes,
   parseMessagingRouteResolveRequestV1,
@@ -755,6 +815,8 @@ void [
   surface2,
   surface3,
   surface4,
+  surface5,
+  surface6,
   discovered,
   resolved,
   parseMessagingRouteResolveRequestV1,

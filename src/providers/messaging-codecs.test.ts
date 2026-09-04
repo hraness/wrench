@@ -21,7 +21,6 @@ import {
 import {
   whatsappMessagingDefinition,
 } from "./whatsapp-messaging";
-import { qualifiedWhatsAppPrivateMessagingAction } from "./whatsapp-private-transport";
 
 const accountId = "account-signal";
 const rawConversationId = "!chat:beeper.local";
@@ -249,21 +248,46 @@ describe("provider messaging coordinate codecs", () => {
   });
 
   test("round-trips raw IDs only inside the exact Beeper account scope", () => {
-    const rawIds = [
+    const rawConversationIds = [
+      "!chat:beeper.local",
+      "!chat:matrix.example:8448",
+      "!chat:matrix.example:99999",
+    ];
+    for (const rawId of rawConversationIds) {
+      const conversation = normalizeBeeperConversationProviderId(accountId, rawId);
+      expect(rawBeeperConversationId(accountId, conversation)).toBe(rawId);
+      expect(() => rawBeeperConversationId("foreign-account", conversation))
+        .toThrow("exact account");
+    }
+
+    const rawMessageIds = [
       "!chat:beeper.local",
       "$event:beeper.local",
       "colon:slash/plus+unicode-🐝",
     ];
-    for (const rawId of rawIds) {
-      const conversation = normalizeBeeperConversationProviderId(accountId, rawId);
+    for (const rawId of rawMessageIds) {
       const event = normalizeBeeperMessageProviderId(accountId, rawId);
-      expect(rawBeeperConversationId(accountId, conversation)).toBe(rawId);
       expect(rawBeeperMessageId(accountId, event)).toBe(rawId);
-      expect(() => rawBeeperConversationId("foreign-account", conversation))
-        .toThrow("exact account");
       expect(() => rawBeeperMessageId("foreign-account", event))
         .toThrow("exact account");
     }
+    for (const rawId of [
+      "$event:beeper.local",
+      "colon:slash/plus+unicode-🐝",
+      "!missing-server",
+      "!chat:beeper.local:123456",
+    ]) {
+      expect(() => normalizeBeeperConversationProviderId(accountId, rawId))
+        .toThrow("exact full Beeper/Matrix chat ID");
+    }
+    const forgedNoncanonicalConversation = [
+      "beeper",
+      Buffer.from(accountId, "utf8").toString("base64url"),
+      "chat",
+      Buffer.from("$event:beeper.local", "utf8").toString("base64url"),
+    ].join(":");
+    expect(() => rawBeeperConversationId(accountId, forgedNoncanonicalConversation))
+      .toThrow("exact full Beeper/Matrix chat ID");
     expect(() => rawBeeperMessageId(accountId, `beeper:YWNjb3VudC1zaWduYWw:message:%%%`))
       .toThrow("malformed encoding");
     expect(() => normalizeBeeperMessageProviderId(accountId, "bad\ud800id"))
@@ -630,21 +654,7 @@ describe("provider messaging coordinate codecs", () => {
       state: "unavailable",
       reply: "unsupported",
       reason:
-        "capture-required: the checked private no-retry transport still needs a controlled live fixture, fresh context proof, and exact accepted-message reconciliation",
+        "capture-required: the official read runtime has no Wrench-qualified mutation transport",
     });
-    expect(qualifiedWhatsAppPrivateMessagingAction.state).toBe(
-      "supported",
-    );
-    expect(qualifiedWhatsAppPrivateMessagingAction.compileTurnPart(
-      { conversationJid: "15551234567@s.whatsapp.net" },
-      { partId: "part-1", text: "hello", replyToProviderId: null },
-    )).toEqual({
-      conversation_jid: "15551234567@s.whatsapp.net",
-      body: "hello",
-    });
-    expect(() => qualifiedWhatsAppPrivateMessagingAction.compileTurnPart(
-      { conversationJid: "15551234567@s.whatsapp.net" },
-      { partId: "part-1", text: "hello", replyToProviderId: "MSG-1" },
-    )).toThrow("has not qualified replies");
   });
 });

@@ -78,6 +78,10 @@ export const wrenchUsage = `Usage:
   wrench auth sync <id> --once [--json]       Explicitly connect and refresh the local projection
   wrench auth remove <id> --yes
 
+  wrench apple-photos export-contact-evidence
+                [--library <normalized-absolute-.photoslibrary>] [--json]
+                # private cluster evidence; returned JSON has no images, crops, or templates
+
   wrench beeper export-message-like-me --auth <id> --output <new-absolute-directory>
                 [--limit-chats <n>] [--limit-messages <n>]
                 [--max-participants <n>] [--json]
@@ -85,6 +89,10 @@ export const wrenchUsage = `Usage:
                 [--limit-chats <n>] [--limit-messages <n>]
                 [--max-participants <n>] [--json]
                 # body-free receipt/output envelope on stdout; progress on stderr
+
+  wrench whatsapp export-message-like-me --auth <id>
+                  --output <new-absolute-directory> [--json]
+                  # local wacli.db bundle only; no send, pairing, or cloud sync
 
   wrench messaging routes --input <-|@absolute-private-file>
                           --private-output <absolute-mode-0600-file> [--json]

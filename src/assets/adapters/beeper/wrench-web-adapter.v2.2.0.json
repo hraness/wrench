@@ -1,0 +1,1475 @@
+{
+  "schemaVersion": 6,
+  "id": "beeper-local",
+  "version": "2.2.0",
+  "displayName": "Beeper (Pinned Local CLI)",
+  "surfaceId": "beeper",
+  "origins": [
+    "https://www.beeper.com"
+  ],
+  "browserDomains": [
+    "www.beeper.com"
+  ],
+  "operations": {
+    "accounts.list": {
+      "description": "List the exact account realm bound to the fixed local Beeper Desktop target.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {},
+        "required": []
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "accounts.list",
+        "contractVersion": 2,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "accounts.read": {
+      "description": "Read one exact connected Beeper account.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "account_id"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "accounts.read",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "bridges.list": {
+      "description": "List one bounded, secret-free bridge capability catalog.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "Optional exact bridge provider class",
+            "minLength": 1,
+            "maxLength": 32,
+            "enum": [
+              "local",
+              "cloud",
+              "self-hosted"
+            ]
+          },
+          "available": {
+            "type": "boolean",
+            "description": "Optionally require current availability"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected bridges",
+            "minimum": 1,
+            "maximum": 128
+          }
+        },
+        "required": []
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "bridges.list",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "bridges.read": {
+      "description": "Read one exact bridge and its secret-free capabilities.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "bridge_id": {
+            "type": "string",
+            "description": "Exact bridge ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "bridge_id"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "bridges.read",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "contacts.list": {
+      "description": "List one bounded account-aware contact projection.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected contacts",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": []
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "contacts.list",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "contacts.search": {
+      "description": "Search one bounded contact candidate window.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Normalized bounded contact lookup text",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum candidate contacts",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "contacts.search",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "contacts.read": {
+      "description": "Read one exact account-bound contact identity.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "contact_id": {
+            "type": "string",
+            "description": "Exact contact ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "account_id",
+          "contact_id"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "contacts.read",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.list": {
+      "description": "List one bounded account-aware conversation projection.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected conversations",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "archived": {
+            "type": "boolean",
+            "description": "Filter by archived state"
+          },
+          "pinned": {
+            "type": "boolean",
+            "description": "Filter by pinned state"
+          },
+          "muted": {
+            "type": "boolean",
+            "description": "Filter by muted state"
+          },
+          "unread": {
+            "type": "boolean",
+            "description": "Filter by unread state"
+          },
+          "low_priority": {
+            "type": "boolean",
+            "description": "Filter by low-priority state"
+          }
+        },
+        "required": []
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "messaging.list",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.search": {
+      "description": "Search one bounded conversation candidate window.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Normalized bounded conversation lookup text",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum candidate conversations",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "messaging.search",
+        "contractVersion": 2,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.read": {
+      "description": "Read one exact account-bound conversation.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "max_participants": {
+            "type": "number",
+            "description": "Maximum projected participants",
+            "minimum": 1,
+            "maximum": 500
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.read",
+        "contractVersion": 2,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.read": {
+      "description": "Read one bounded page from one exact conversation.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "before_cursor": {
+            "type": "string",
+            "description": "Exact provider cursor returned by a prior page",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "after_cursor": {
+            "type": "string",
+            "description": "Exact provider cursor returned by a prior page",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected messages",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "messaging.read",
+        "contractVersion": 2,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.content.search": {
+      "description": "Search and paginate one bounded message-content candidate window through the exact local provider index.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Normalized bounded message lookup text",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "chat_type": {
+            "type": "string",
+            "description": "Exact chat type filter",
+            "minLength": 1,
+            "maxLength": 16,
+            "enum": [
+              "group",
+              "single"
+            ]
+          },
+          "after": {
+            "type": "string",
+            "description": "Canonical UTC ISO timestamp",
+            "minLength": 20,
+            "maxLength": 64
+          },
+          "before": {
+            "type": "string",
+            "description": "Canonical UTC ISO timestamp",
+            "minLength": 20,
+            "maxLength": 64
+          },
+          "before_cursor": {
+            "type": "string",
+            "description": "Exact opaque provider cursor returned by a prior older-results page",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "after_cursor": {
+            "type": "string",
+            "description": "Exact opaque provider cursor returned by a prior newer-results page",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "exclude_low_priority": {
+            "type": "boolean",
+            "description": "Exclude low-priority chats"
+          },
+          "include_muted": {
+            "type": "boolean",
+            "description": "Include muted chats"
+          },
+          "media": {
+            "type": "array",
+            "description": "Exact media-kind filters",
+            "items": {
+              "type": "string",
+              "description": "One exact media kind",
+              "minLength": 1,
+              "maxLength": 16,
+              "enum": [
+                "any",
+                "video",
+                "image",
+                "link",
+                "file"
+              ]
+            },
+            "minItems": 0,
+            "maxItems": 5
+          },
+          "sender": {
+            "type": "string",
+            "description": "Exact sender selector returned by this adapter",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum projected message candidates",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": []
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "messaging.content.search",
+        "contractVersion": 2,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.message.read": {
+      "description": "Read one exact message from one exact conversation.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Exact message ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "message_id"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "messaging.message.read",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.context.read": {
+      "description": "Read bounded context around one exact message.",
+      "risk": "R1",
+      "sideEffect": "none",
+      "idempotency": "none",
+      "dedupeWindowMs": 0,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Exact message ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "before": {
+            "type": "number",
+            "description": "Messages before the exact target",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "after": {
+            "type": "number",
+            "description": "Messages after the exact target",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "message_id"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "messaging.context.read",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.send": {
+      "description": "Submit one confirmed text, file, sticker, or voice request to Beeper Desktop; network delivery is not asserted.",
+      "risk": "R3",
+      "sideEffect": "externally visible provider or Desktop mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "kind": {
+            "type": "string",
+            "description": "Exact bounded send kind",
+            "minLength": 1,
+            "maxLength": 16,
+            "enum": [
+              "text",
+              "file",
+              "sticker",
+              "voice"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "Message text or optional file caption",
+            "minLength": 0,
+            "maxLength": 65536
+          },
+          "file": {
+            "type": "file",
+            "description": "Plan-bound file, sticker, or voice-note bytes",
+            "maxBytes": 524288000
+          },
+          "filename": {
+            "type": "string",
+            "description": "Provider-visible filename",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "mime_type": {
+            "type": "string",
+            "description": "Exact media type",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "duration_seconds": {
+            "type": "number",
+            "description": "Voice-note duration in seconds",
+            "minimum": 1,
+            "maximum": 86400
+          },
+          "reply_to": {
+            "type": "string",
+            "description": "Exact message ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "mentions": {
+            "type": "array",
+            "description": "Canonical Matrix/Beeper participant IDs",
+            "items": {
+              "type": "string",
+              "description": "Canonical Matrix/Beeper user ID",
+              "minLength": 3,
+              "maxLength": 2048
+            },
+            "minItems": 0,
+            "maxItems": 25
+          },
+          "no_preview": {
+            "type": "boolean",
+            "description": "Disable link previews for text"
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "kind"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "messaging.send",
+        "contractVersion": 1,
+        "timeoutMs": 300000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "reactions.set": {
+      "description": "Set one exact reaction desired state.",
+      "risk": "R2",
+      "sideEffect": "reversible provider or private desired-state mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Exact message ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "reaction": {
+            "type": "string",
+            "description": "Exact reaction text",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Desired reaction presence"
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "message_id",
+          "reaction",
+          "enabled"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "reactions.set",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "messaging.edit": {
+      "description": "Edit one exact message authored by the bound account.",
+      "risk": "R3",
+      "sideEffect": "externally visible provider or Desktop mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Exact message ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "text": {
+            "type": "string",
+            "description": "Replacement message text",
+            "minLength": 1,
+            "maxLength": 65536
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "message_id",
+          "text"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "messaging.edit",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.start": {
+      "description": "Start one conversation with one exact account-bound user.",
+      "risk": "R3",
+      "sideEffect": "externally visible provider or Desktop mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "user_id": {
+            "type": "string",
+            "description": "Canonical Matrix/Beeper user ID",
+            "minLength": 3,
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "account_id",
+          "user_id"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.start",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.archive.set": {
+      "description": "Set one conversation archive desired state.",
+      "risk": "R2",
+      "sideEffect": "reversible provider or private desired-state mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Desired archived state"
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "enabled"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.archive.set",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.pin.set": {
+      "description": "Set one conversation pin desired state.",
+      "risk": "R2",
+      "sideEffect": "reversible provider or private desired-state mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Desired pinned state"
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "enabled"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.pin.set",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.mute.set": {
+      "description": "Set one conversation mute desired state.",
+      "risk": "R2",
+      "sideEffect": "reversible provider or private desired-state mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Desired muted state"
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "enabled"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.mute.set",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.read-state.set": {
+      "description": "Set one conversation read marker, potentially emitting a network receipt.",
+      "risk": "R3",
+      "sideEffect": "externally visible provider or Desktop mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "unread": {
+            "type": "boolean",
+            "description": "Desired marked-unread state"
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Exact message ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "unread"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.read-state.set",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.priority.set": {
+      "description": "Set one conversation inbox priority desired state.",
+      "risk": "R2",
+      "sideEffect": "reversible provider or private desired-state mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "level": {
+            "type": "string",
+            "description": "Desired inbox priority",
+            "minLength": 1,
+            "maxLength": 16,
+            "enum": [
+              "inbox",
+              "low"
+            ]
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "level"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.priority.set",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.notify": {
+      "description": "Send one explicit iMessage Notify Anyway alert.",
+      "risk": "R3",
+      "sideEffect": "externally visible provider or Desktop mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.notify",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.title.set": {
+      "description": "Set one exact group-conversation title.",
+      "risk": "R3",
+      "sideEffect": "externally visible provider or Desktop mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "title": {
+            "type": "string",
+            "description": "Replacement group title",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "title"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.title.set",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.description.set": {
+      "description": "Set or clear one exact group-conversation description.",
+      "risk": "R3",
+      "sideEffect": "externally visible provider or Desktop mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "clear": {
+            "type": "boolean",
+            "description": "Clear the description"
+          },
+          "description": {
+            "type": "string",
+            "description": "Replacement group description",
+            "minLength": 1,
+            "maxLength": 65536
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "clear"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.description.set",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.avatar.set": {
+      "description": "Set or clear one exact group-conversation avatar.",
+      "risk": "R3",
+      "sideEffect": "externally visible provider or Desktop mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "clear": {
+            "type": "boolean",
+            "description": "Clear the avatar"
+          },
+          "avatar": {
+            "type": "file",
+            "description": "Plan-bound replacement avatar bytes",
+            "maxBytes": 16777216
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "clear"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.avatar.set",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.draft.set": {
+      "description": "Set or clear one private Desktop draft.",
+      "risk": "R2",
+      "sideEffect": "reversible provider or private desired-state mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "clear": {
+            "type": "boolean",
+            "description": "Clear the draft"
+          },
+          "text": {
+            "type": "string",
+            "description": "Replacement private draft text",
+            "minLength": 0,
+            "maxLength": 65536
+          },
+          "attachment": {
+            "type": "file",
+            "description": "Plan-bound private draft attachment",
+            "maxBytes": 524288000
+          },
+          "filename": {
+            "type": "string",
+            "description": "Attachment filename",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "mime_type": {
+            "type": "string",
+            "description": "Attachment media type",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "clear"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.draft.set",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.disappearing.set": {
+      "description": "Set one disappearing-message retention interval.",
+      "risk": "R3",
+      "sideEffect": "externally visible provider or Desktop mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "seconds": {
+            "type": "number",
+            "description": "Desired disappearing-message interval; zero disables",
+            "minimum": 0,
+            "maximum": 31536000
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "seconds"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.disappearing.set",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.reminder.set": {
+      "description": "Set or clear one private Desktop reminder.",
+      "risk": "R2",
+      "sideEffect": "reversible provider or private desired-state mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "clear": {
+            "type": "boolean",
+            "description": "Clear the reminder"
+          },
+          "when": {
+            "type": "string",
+            "description": "Canonical UTC ISO timestamp",
+            "minLength": 20,
+            "maxLength": 64
+          },
+          "dismiss_on_message": {
+            "type": "boolean",
+            "description": "Dismiss when a message arrives"
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "clear"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.reminder.set",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "conversations.focus": {
+      "description": "Focus one exact Desktop conversation with optional plan-bound draft state.",
+      "risk": "R2",
+      "sideEffect": "reversible provider or private desired-state mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Exact message ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "draft": {
+            "type": "string",
+            "description": "Plan-bound Desktop draft text",
+            "minLength": 0,
+            "maxLength": 65536
+          },
+          "attachment": {
+            "type": "file",
+            "description": "Plan-bound Desktop draft attachment",
+            "maxBytes": 524288000
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "conversations.focus",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    },
+    "presence.set": {
+      "description": "Send one bounded typing or paused presence indication.",
+      "risk": "R3",
+      "sideEffect": "externally visible provider or Desktop mutation",
+      "idempotency": "local-at-most-once",
+      "dedupeWindowMs": 86400000,
+      "input": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "description": "Exact Beeper account ID returned by this adapter",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Canonical full Beeper/Matrix chat ID returned by this adapter",
+            "minLength": 3,
+            "maxLength": 2048
+          },
+          "state": {
+            "type": "string",
+            "description": "Exact presence state",
+            "minLength": 1,
+            "maxLength": 16,
+            "enum": [
+              "typing",
+              "paused"
+            ]
+          },
+          "duration_seconds": {
+            "type": "number",
+            "description": "Bounded typing duration before a separately journaled paused dispatch",
+            "minimum": 1,
+            "maximum": 30
+          }
+        },
+        "required": [
+          "account_id",
+          "conversation_id",
+          "state"
+        ]
+      },
+      "localCli": {
+        "surface": "beeper",
+        "action": "presence.set",
+        "contractVersion": 1,
+        "timeoutMs": 120000,
+        "maxOutputBytes": 10485760
+      }
+    }
+  }
+}

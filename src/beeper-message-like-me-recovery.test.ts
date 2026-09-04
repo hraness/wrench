@@ -20,10 +20,14 @@ import { canonicalJson } from "./canonical-json";
 
 import {
   acquireBeeperMessageLikeMeExportAdmission,
+  beginBeeperMessageLikeMeHelperLaunch,
+  bindBeeperMessageLikeMeHelperOwner,
   createBeeperMessageLikeMeDirectoryLease,
+  markBeeperMessageLikeMeHelperCleanupUnsafe,
   recoverBeeperMessageLikeMeDirectoryLeases,
   releaseBeeperMessageLikeMeExportAdmission,
   releaseBeeperMessageLikeMeDirectoryLease,
+  settleBeeperMessageLikeMeHelper,
   updateBeeperMessageLikeMeDirectoryLease,
 } from "./beeper-message-like-me-recovery";
 
@@ -139,6 +143,303 @@ describe("Beeper Message Like Me export admission", () => {
       .toThrow("export admission changed before release");
     expect(readFileSync(admission.claimPath, "utf8")).toBe(replacement);
     expect(admission.released).toBeFalse();
+  });
+
+  test("keeps same-boot launch uncertainty but recovers it after a proved reboot", () => {
+    const fixture = recoveryFixture("export-admission-launch-reboot");
+    const first = acquireBeeperMessageLikeMeExportAdmission({ environment: fixture.environment });
+    beginBeeperMessageLikeMeHelperLaunch(first);
+    expect(() => acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: first.claim.owner.bootId,
+    })).toThrow("prior export owner cannot be inspected safely");
+
+    const rebootBootId = first.claim.owner.bootId === "a".repeat(64)
+      ? "b".repeat(64)
+      : "a".repeat(64);
+    const afterReboot = acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: rebootBootId,
+    });
+    expect(afterReboot.claimId).not.toBe(first.claimId);
+    releaseBeeperMessageLikeMeExportAdmission(afterReboot);
+  });
+
+  test("keeps a dead legacy-v1 owner indeterminate until a proved reboot", () => {
+    const fixture = recoveryFixture("export-admission-legacy-v1");
+    const current = acquireBeeperMessageLikeMeExportAdmission({ environment: fixture.environment });
+    const claimPath = current.claimPath;
+    const legacy = Object.freeze({
+      schemaVersion: 1 as const,
+      kind: "beeper-message-like-me-export-admission" as const,
+      id: current.claim.id,
+      owner: current.claim.owner,
+    });
+    releaseBeeperMessageLikeMeExportAdmission(current);
+    writeFileSync(claimPath, `${canonicalJson(legacy)}\n`, { mode: 0o600 });
+
+    expect(() => acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: legacy.owner.bootId,
+    })).toThrow("prior export owner cannot be inspected safely");
+    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(legacy);
+
+    const rebootBootId = legacy.owner.bootId === "a".repeat(64)
+      ? "b".repeat(64)
+      : "a".repeat(64);
+    const recovered = acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: rebootBootId,
+    });
+    expect(recovered.claim.id).not.toBe(legacy.id);
+    expect(recovered.claim.revision).toMatch(/^[0-9a-f-]{36}$/u);
+    releaseBeeperMessageLikeMeExportAdmission(recovered);
+  });
+
+  test("migrates a recoverable pre-revision v2 claim to a revisioned owner", () => {
+    const fixture = recoveryFixture("export-admission-legacy-v2");
+    const current = acquireBeeperMessageLikeMeExportAdmission({ environment: fixture.environment });
+    const claimPath = current.claimPath;
+    const { revision: _revision, ...legacyV2 } = current.claim;
+    releaseBeeperMessageLikeMeExportAdmission(current);
+    writeFileSync(claimPath, `${canonicalJson(legacyV2)}\n`, { mode: 0o600 });
+
+    const migrated = acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: legacyV2.owner.bootId,
+    });
+    expect(migrated.claim.id).not.toBe(legacyV2.id);
+    expect(migrated.claim.revision).toMatch(/^[0-9a-f-]{36}$/u);
+    releaseBeeperMessageLikeMeExportAdmission(migrated);
+  });
+
+  test("keeps helper-active same-boot after owner death and recovers it only after reboot", () => {
+    const fixture = recoveryFixture("export-admission-helper-dead");
+    const first = acquireBeeperMessageLikeMeExportAdmission({ environment: fixture.environment });
+    beginBeeperMessageLikeMeHelperLaunch(first);
+    bindBeeperMessageLikeMeHelperOwner(first, process.pid);
+    expect(() => acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "unknown",
+      currentBootIdForTest: first.claim.owner.bootId,
+    })).toThrow("prior export owner cannot be inspected safely");
+    expect(() => acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: first.claim.owner.bootId,
+    })).toThrow("prior export owner cannot be inspected safely");
+
+    const rebootBootId = first.claim.owner.bootId === "a".repeat(64)
+      ? "b".repeat(64)
+      : "a".repeat(64);
+    const recovered = acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: rebootBootId,
+    });
+    releaseBeeperMessageLikeMeExportAdmission(recovered);
+  });
+
+  test("keeps stale helper-active same-boot when cleanup-unsafe CAS fails", () => {
+    const fixture = recoveryFixture("export-admission-cleanup-unsafe-cas");
+    const admission = acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+    });
+    beginBeeperMessageLikeMeHelperLaunch(admission);
+    bindBeeperMessageLikeMeHelperOwner(admission, process.pid);
+    const retainedClaim = Object.freeze({
+      ...(JSON.parse(readFileSync(admission.claimPath, "utf8")) as Readonly<
+        Record<string, unknown>
+      >),
+      id: "00000000-0000-4000-8000-000000000001",
+    });
+    const retained = `${canonicalJson(retainedClaim)}\n`;
+    writeFileSync(admission.claimPath, retained, { mode: 0o600 });
+
+    expect(() => markBeeperMessageLikeMeHelperCleanupUnsafe(admission))
+      .toThrow("export admission changed before lifecycle update");
+    expect(() => acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: admission.claim.owner.bootId,
+    })).toThrow("prior export owner cannot be inspected safely");
+    expect(readFileSync(admission.claimPath, "utf8")).toBe(retained);
+
+    const rebootBootId = admission.claim.owner.bootId === "a".repeat(64)
+      ? "b".repeat(64)
+      : "a".repeat(64);
+    const afterReboot = acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: rebootBootId,
+    });
+    releaseBeeperMessageLikeMeExportAdmission(afterReboot);
+  });
+
+  test("keeps cleanup-unsafe across same-boot process death and recovers only after reboot", async () => {
+    const fixture = recoveryFixture("export-admission-cleanup-unsafe-reboot");
+    const moduleUrl = pathToFileURL(join(
+      import.meta.dir,
+      "beeper-message-like-me-recovery.ts",
+    )).href;
+    const source = `
+      import {
+        acquireBeeperMessageLikeMeExportAdmission,
+        beginBeeperMessageLikeMeHelperLaunch,
+        bindBeeperMessageLikeMeHelperOwner,
+        markBeeperMessageLikeMeHelperCleanupUnsafe,
+      } from ${JSON.stringify(moduleUrl)};
+      const environment = Object.freeze({
+        WRENCH_STATE_HOME: ${JSON.stringify(fixture.environment.WRENCH_STATE_HOME)},
+      });
+      const admission = acquireBeeperMessageLikeMeExportAdmission({ environment });
+      beginBeeperMessageLikeMeHelperLaunch(admission);
+      bindBeeperMessageLikeMeHelperOwner(admission, process.pid);
+      markBeeperMessageLikeMeHelperCleanupUnsafe(admission);
+    `;
+    const child = Bun.spawn([process.execPath, "--no-env-file", "-e", source], {
+      env: { ...process.env, NODE_ENV: "test" },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toBe("");
+
+    const admissionPath = join(
+      fixture.root,
+      "state",
+      "recovery",
+      "beeper-message-like-me-export-admission",
+      "active.json",
+    );
+    const retained = readFileSync(admissionPath, "utf8");
+    const claim = JSON.parse(retained) as Readonly<{
+      readonly id: string;
+      readonly owner: Readonly<{ readonly bootId: string }>;
+    }>;
+    expect(() => acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+    })).toThrow("prior export owner cannot be inspected safely");
+    expect(readFileSync(admissionPath, "utf8")).toBe(retained);
+
+    const rebootBootId = claim.owner.bootId === "a".repeat(64)
+      ? "b".repeat(64)
+      : "a".repeat(64);
+    const afterReboot = acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: rebootBootId,
+    });
+    expect(afterReboot.claimId).not.toBe(claim.id);
+    releaseBeeperMessageLikeMeExportAdmission(afterReboot);
+  });
+  test("lifecycle updates are compare-and-swap guarded against a stale controller", () => {
+    const fixture = recoveryFixture("export-admission-lifecycle-cas");
+    const admission = acquireBeeperMessageLikeMeExportAdmission({ environment: fixture.environment });
+    writeFileSync(admission.claimPath, `${readFileSync(admission.claimPath, "utf8")} `, { mode: 0o600 });
+    expect(() => beginBeeperMessageLikeMeHelperLaunch(admission))
+      .toThrow("export admission changed before lifecycle update");
+  });
+
+  test("rotates lifecycle revisions so an ABA-stale controller cannot write", () => {
+    const fixture = recoveryFixture("export-admission-lifecycle-aba");
+    const admission = acquireBeeperMessageLikeMeExportAdmission({ environment: fixture.environment });
+    const stale = { ...admission };
+    const initialRevision = admission.claim.revision;
+
+    beginBeeperMessageLikeMeHelperLaunch(admission);
+    bindBeeperMessageLikeMeHelperOwner(admission, process.pid);
+    settleBeeperMessageLikeMeHelper(admission);
+    expect(admission.claim.phase).toBe("parent-owned");
+    expect(admission.claim.revision).not.toBe(initialRevision);
+    expect(() => beginBeeperMessageLikeMeHelperLaunch(stale))
+      .toThrow("export admission changed before lifecycle update");
+
+    releaseBeeperMessageLikeMeExportAdmission(admission);
+  });
+
+  test("preserves same-boot launch uncertainty as cleanup-unsafe admission", () => {
+    const fixture = recoveryFixture("export-admission-cleanup-unsafe");
+    const admission = acquireBeeperMessageLikeMeExportAdmission({ environment: fixture.environment });
+    beginBeeperMessageLikeMeHelperLaunch(admission);
+    const launchingRevision = admission.claim.revision;
+    markBeeperMessageLikeMeHelperCleanupUnsafe(admission);
+    expect(admission.claim).toMatchObject({ phase: "cleanup-unsafe", helperOwner: null });
+    expect(admission.claim.revision).not.toBe(launchingRevision);
+    expect(() => releaseBeeperMessageLikeMeExportAdmission(admission))
+      .toThrow("cannot release an unsettled helper lifecycle");
+    expect(() => acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: admission.claim.owner.bootId,
+    })).toThrow("prior export owner cannot be inspected safely");
+  });
+
+  test("preserves same-boot active-helper cleanup uncertainty after the recorded child dies", () => {
+    const fixture = recoveryFixture("export-admission-cleanup-unsafe-dead-helper");
+    const admission = acquireBeeperMessageLikeMeExportAdmission({ environment: fixture.environment });
+    beginBeeperMessageLikeMeHelperLaunch(admission);
+    bindBeeperMessageLikeMeHelperOwner(admission, process.pid);
+    markBeeperMessageLikeMeHelperCleanupUnsafe(admission);
+    expect(admission.claim).toMatchObject({ phase: "cleanup-unsafe" });
+    expect(admission.claim.helperOwner).not.toBeNull();
+
+    expect(() => acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: admission.claim.owner.bootId,
+    })).toThrow("prior export owner cannot be inspected safely");
+
+    const rebootBootId = admission.claim.owner.bootId === "f".repeat(64)
+      ? "e".repeat(64)
+      : "f".repeat(64);
+    const recovered = acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: () => "different-or-dead",
+      currentBootIdForTest: rebootBootId,
+    });
+    expect(recovered.claim.id).not.toBe(admission.claim.id);
+    releaseBeeperMessageLikeMeExportAdmission(recovered);
+  });
+
+  test("retains cleanup-unsafe ownership when parent and helper boot identities disagree", () => {
+    const fixture = recoveryFixture("export-admission-cleanup-unsafe-cross-boot-helper");
+    const admission = acquireBeeperMessageLikeMeExportAdmission({ environment: fixture.environment });
+    beginBeeperMessageLikeMeHelperLaunch(admission);
+    bindBeeperMessageLikeMeHelperOwner(admission, process.pid);
+    markBeeperMessageLikeMeHelperCleanupUnsafe(admission);
+    const helperOwner = admission.claim.helperOwner;
+    if (helperOwner === null) throw new Error("test fixture omitted the helper owner");
+    const parentBootId = helperOwner.bootId === "a".repeat(64)
+      ? "b".repeat(64)
+      : "a".repeat(64);
+    const incoherentClaim = Object.freeze({
+      ...admission.claim,
+      owner: Object.freeze({ ...admission.claim.owner, bootId: parentBootId }),
+    });
+    const retained = `${canonicalJson(incoherentClaim)}\n`;
+    writeFileSync(admission.claimPath, retained, { mode: 0o600 });
+
+    expect(() => acquireBeeperMessageLikeMeExportAdmission({
+      environment: fixture.environment,
+      inspectOwnerForTest: (candidate) => candidate.bootId === helperOwner.bootId
+        ? "exact-live-owner"
+        : "different-or-dead",
+      currentBootIdForTest: helperOwner.bootId,
+    })).toThrow("prior export owner cannot be inspected safely");
+    expect(readFileSync(admission.claimPath, "utf8")).toBe(retained);
   });
 
   test("admits exactly one of two synchronized processes", async () => {

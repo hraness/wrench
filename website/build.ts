@@ -34,12 +34,15 @@ import {
 } from "./provider-capability-attestation";
 import {
   BEEPER_PAGE_METADATA,
+  WHATSAPP_PAGE_METADATA,
   createBeeperPresentationFacts,
   createProviderDirectory,
+  createWhatsAppPresentationFacts,
   renderProviderAttestationGroups,
   renderProviderOverviewCards,
   type BeeperPresentationFacts,
   type ProviderDirectory,
+  type WhatsAppPresentationFacts,
 } from "./provider-presentation";
 
 export const SITE_ORIGIN = "https://wrench.rip" as const;
@@ -51,7 +54,7 @@ export const NPM_PACKAGE_URL = "https://www.npmjs.com/package/@hraness/wrench" a
 export const SKILLS_URL = "https://skills.sh/hraness/wrench" as const;
 export const PUBLISHER_URL = "https://github.com/hraness" as const;
 export const SKILL_REPOSITORY = "hraness/wrench" as const;
-export const CONTENT_REVIEWED_RELEASE = "v0.16.3" as const;
+export const CONTENT_REVIEWED_RELEASE = "v0.16.4" as const;
 export const DEFAULT_POSTHOG_HOST = "https://us.i.posthog.com" as const;
 export const WRENCH_MAILING_TURNSTILE_SITEKEY_ENV =
   "NEXT_PUBLIC_HRANESS_MAILING_TURNSTILE_SITEKEY" as const;
@@ -101,6 +104,13 @@ export const PUBLIC_PAGES = [
     outputFile: "providers/beeper/index.html",
     sourceFile: "provider-beeper.html",
     title: BEEPER_PAGE_METADATA.title,
+  },
+  {
+    canonicalPath: "/providers/whatsapp/",
+    description: WHATSAPP_PAGE_METADATA.description,
+    outputFile: "providers/whatsapp/index.html",
+    sourceFile: "provider-whatsapp.html",
+    title: WHATSAPP_PAGE_METADATA.title,
   },
   {
     canonicalPath: "/security/",
@@ -259,6 +269,7 @@ type RenderOptions = Readonly<{
   providerDirectory: ProviderDirectory;
   providerOverviewCards: string;
   skillInstallAsset: string;
+  whatsappFacts: WhatsAppPresentationFacts;
 }>;
 
 function unknownRecord(value: unknown, label: string): Readonly<Record<string, unknown>> {
@@ -435,6 +446,21 @@ function jsonLd(identity: PackageIdentity, page: PublicPage): Readonly<Record<st
   const url = `${SITE_ORIGIN}${page.canonicalPath}`;
   const pageId = `${url}#webpage`;
   const isHome = page.canonicalPath === "/";
+  const breadcrumbItems = isHome
+    ? undefined
+    : page.canonicalPath === "/providers/beeper/"
+      ? [
+        { item: `${SITE_ORIGIN}/`, name: "Wrench" },
+        { item: `${SITE_ORIGIN}/provider-capabilities/`, name: "Providers" },
+        { item: url, name: "Beeper" },
+      ]
+      : page.canonicalPath === "/providers/whatsapp/"
+        ? [
+          { item: `${SITE_ORIGIN}/`, name: "Wrench" },
+          { item: `${SITE_ORIGIN}/provider-capabilities/`, name: "Providers" },
+          { item: url, name: "WhatsApp" },
+        ]
+        : [{ item: `${SITE_ORIGIN}/`, name: "Wrench" }, { item: url, name: page.title }];
   const pageGraph: Array<Readonly<Record<string, unknown>>> = [
     {
       "@id": pageId,
@@ -468,20 +494,11 @@ function jsonLd(identity: PackageIdentity, page: PublicPage): Readonly<Record<st
       {
         "@id": `${url}#breadcrumb`,
         "@type": "BreadcrumbList",
-        itemListElement: [
-          {
-            "@type": "ListItem",
-            item: `${SITE_ORIGIN}/`,
-            name: "Wrench",
-            position: 1,
-          },
-          {
-            "@type": "ListItem",
-            item: url,
-            name: page.title,
-            position: 2,
-          },
-        ],
+        itemListElement: breadcrumbItems?.map((item, index) => ({
+          "@type": "ListItem",
+          ...item,
+          position: index + 1,
+        })),
       },
     );
   }
@@ -606,17 +623,36 @@ function renderTemplate(
     ["{{WRENCH_SKILL_INSTALL_COMMAND_BUNX}}", skillInstallCommands.bunx],
     ["{{WRENCH_VERSION}}", identity.version],
     ["{{BEEPER_ADAPTER_VERSION}}", options.beeperFacts.adapterVersion],
+    [
+      "{{BEEPER_CLI_BACKED_OPERATION_COUNT}}",
+      String(options.beeperFacts.cliBackedOperationCount),
+    ],
     ["{{BEEPER_CLI_COMMAND_COUNT}}", String(options.beeperFacts.cliCommandCount)],
     ["{{BEEPER_CLI_COMMIT}}", options.beeperFacts.cliCommit],
     ["{{BEEPER_CLI_RELEASE_MANIFEST_SHA256}}", options.beeperFacts.cliReleaseManifestSha256],
     ["{{BEEPER_CLI_RELEASE_URL}}", options.beeperFacts.cliReleaseUrl],
+    ["{{BEEPER_CLI_SOURCE_DECLARED_VERSION}}", options.beeperFacts.cliSourceDeclaredVersion],
+    ["{{BEEPER_CLI_SOURCE_PACKAGE_PATH}}", options.beeperFacts.cliSourcePackagePath],
+    ["{{BEEPER_CLI_SOURCE_VERSION_DISCREPANCY}}", options.beeperFacts.cliSourceVersionDiscrepancy],
     ["{{BEEPER_CLI_VERSION}}", options.beeperFacts.cliVersion],
     ["{{BEEPER_DESKTOP_API_COMMIT}}", options.beeperFacts.desktopApiCommit],
     ["{{BEEPER_DESKTOP_API_VERSION}}", options.beeperFacts.desktopApiVersion],
+    [
+      "{{BEEPER_DESKTOP_LOOPBACK_OPERATION_COUNT}}",
+      String(options.beeperFacts.desktopLoopbackOperationCount),
+    ],
     ["{{BEEPER_OBSERVED_OPERATION_COUNT}}", String(options.beeperFacts.observedOperationCount)],
     ["{{BEEPER_PAGE_DESCRIPTION}}", options.beeperFacts.pageDescription],
     ["{{BEEPER_PAGE_TITLE}}", options.beeperFacts.pageTitle],
     ["{{BEEPER_SEMANTIC_CONTRACT_VERSION_LABEL}}", options.beeperFacts.semanticContractVersionLabel],
+    ["{{WHATSAPP_ADAPTER_VERSION}}", options.whatsappFacts.adapterVersion],
+    ["{{WHATSAPP_ARCHIVE_SHA256}}", options.whatsappFacts.archiveSha256],
+    ["{{WHATSAPP_BINARY_SHA256}}", options.whatsappFacts.binarySha256],
+    ["{{WHATSAPP_OBSERVED_OPERATION_COUNT}}", String(options.whatsappFacts.observedOperationCount)],
+    ["{{WHATSAPP_PAGE_DESCRIPTION}}", options.whatsappFacts.pageDescription],
+    ["{{WHATSAPP_PAGE_TITLE}}", options.whatsappFacts.pageTitle],
+    ["{{WHATSAPP_WACLI_COMMIT}}", options.whatsappFacts.wacliCommit],
+    ["{{WHATSAPP_WACLI_VERSION}}", options.whatsappFacts.wacliVersion],
   ]);
   for (const [placeholder, value] of optionalValues) {
     if (rendered.includes(placeholder)) {
@@ -775,6 +811,7 @@ export async function buildWebsite(
   const skillInstallAsset = `/assets/skill-install-${contentHash(skillInstall)}.js`;
   const providerDirectory = createProviderDirectory(attestation);
   const beeperFacts = createBeeperPresentationFacts(providerDirectory);
+  const whatsappFacts = createWhatsAppPresentationFacts(providerDirectory, attestation);
   const renderOptions = {
     analyticsAsset,
     attestation,
@@ -790,6 +827,7 @@ export async function buildWebsite(
     providerDirectory,
     providerOverviewCards: renderProviderOverviewCards(providerDirectory),
     skillInstallAsset,
+    whatsappFacts,
   } as const;
 
   await rm(outputRoot, { force: true, recursive: true });

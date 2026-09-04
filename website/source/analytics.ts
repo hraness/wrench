@@ -23,6 +23,18 @@ const CANONICAL_ROUTES = new Map<string, Readonly<{ canonicalPath: string; pageK
     canonicalPath: "/providers/beeper/",
     pageKind: "provider_beeper",
   }],
+  ["/providers/whatsapp", {
+    canonicalPath: "/providers/whatsapp/",
+    pageKind: "provider_whatsapp",
+  }],
+  ["/compare/personal-agents-browser-use", {
+    canonicalPath: "/compare/personal-agents-browser-use/",
+    pageKind: "compare_personal_agents_browser_use",
+  }],
+  ["/agentic-web-spoofing", {
+    canonicalPath: "/agentic-web-spoofing/",
+    pageKind: "agentic_web_spoofing",
+  }],
   ["/security", { canonicalPath: "/security/", pageKind: "security" }],
   ["/vms-cannot-contain-agents", {
     canonicalPath: "/vms-cannot-contain-agents/",

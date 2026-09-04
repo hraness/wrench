@@ -44,22 +44,23 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-This v0.16.3 source tree defines actions for 20 services: Beeper, Bluesky,
-ClasificadosOnline, Facebook, Facebook Groups, Facebook Marketplace, GitHub,
-Gmail, Hacker News, Instagram, iMessage, LinkedIn, Reddit, Substack, Threads,
-TikTok, Twitch, WhatsApp, X, and YouTube.
+This v0.16.4 source tree supports executable actions for 20 services: Beeper,
+Bluesky, ClasificadosOnline, Facebook, Facebook Groups, Facebook Marketplace,
+GitHub, Gmail, Hacker News, Instagram, iMessage, LinkedIn, Reddit, Substack,
+Threads, TikTok, Twitch, WhatsApp, X, and YouTube.
 LinkedIn and X each have separate official and authenticated-web adapters. The
 [release-bound provider directory](https://wrench.rip/provider-capabilities/)
 lists only executable actions, grouped by the tasks each service supports and
 the access method each action uses. Inspect `wrench capabilities --json` for
 the exact installed contract state.
 
-Beeper is Wrench's first pinned local-CLI provider. Its 32 supported actions
-read accounts, contacts, conversations, and messages; manage reactions, drafts,
-reminders, and conversation state; and preview and confirm sends, edits, group
-changes, and presence. Wrench accepts only the reviewed official Beeper CLI
-0.6.2 executable and one bound Desktop target. It does not expose a generic
-command runner, and submission is not a claim of network delivery.
+Beeper is Wrench's first provider adapter with a pinned local-CLI transport. Its
+32 supported actions read accounts, contacts, conversations, and messages;
+manage reactions, drafts, reminders, and conversation state; and preview and
+confirm sends, edits, group changes, and presence. Twenty-seven operations use
+the authoritative `@beeper/cli` 0.6.2 executable; five reads use fixed Beeper
+Desktop loopback endpoints. Wrench binds one Desktop target and does not expose
+a generic command runner. Submission is not a claim of network delivery.
 
 ```sh
 wrench messaging routes --input @/absolute/private/beeper-routes-request.json \
@@ -94,7 +95,8 @@ version identities, action boundaries, export workflows, and exclusions.
 - **Local custody.** Archives remain inspectable and exact provider snapshots
   remain encrypted. Verified cached reads can work without a provider roundtrip.
 - **Honest mutations.** Consequential writes require an exact preview and durable
-  dispatch evidence. An indeterminate write is reconciled and never blindly retried.
+  dispatch evidence. An indeterminate write is never blindly retried and remains
+  unsettled until separate exact evidence can reconcile it.
 - **Content-bound trust.** Portable plugin approval applies to one verified
   content-addressed bundle, so changed code requires a new trust decision.
 
@@ -114,9 +116,9 @@ the latest release that completed every gate.
 Install the single Wrench Agent Skill with either runner:
 
 ```sh
-npx skills add hraness/wrench#v0.16.3
+npx skills add hraness/wrench#v0.16.4
 # or
-bunx skills add hraness/wrench#v0.16.3
+bunx skills add hraness/wrench#v0.16.4
 ```
 
 The skill teaches Codex, Claude Code, Cursor, and other compatible coding
@@ -127,7 +129,7 @@ After the matching immutable Release exists, install this exact version from
 npm:
 
 ```sh
-bun add --global @hraness/wrench@0.16.3
+bun add --global @hraness/wrench@0.16.4
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -151,7 +153,7 @@ For that same released coordinate, install Wrench in an agent or application
 that owns its own model, planning, tool loop, approvals, and interface:
 
 ```sh
-bun add @hraness/wrench@0.16.3
+bun add @hraness/wrench@0.16.4
 ```
 
 ```ts
@@ -169,11 +171,15 @@ const plugin = candidate satisfies ProviderPluginDefinitionV1
 void plugin
 ```
 
-The package root exposes programmatic plugin types and bounded validators.
+The package exposes seven public TypeScript entrypoints. Its root exposes
+programmatic plugin types and bounded validators.
 `@hraness/wrench/client` exposes persistent-read and strict live-invocation
 helpers, `@hraness/wrench/beeper` exposes the body-free Beeper contact
-interaction export, and `@hraness/wrench/omni` exposes normalized
-cross-provider reads. Importing any SDK entrypoint does not start the CLI.
+interaction export, `@hraness/wrench/apple-photos` exposes exact local Photos
+contact evidence, `@hraness/wrench/whatsapp` exposes the bounded private
+Message Like Me export, `@hraness/wrench/omni` exposes normalized
+cross-provider reads, and `@hraness/wrench/messaging` exposes agentic messaging
+route discovery and resolution. Importing any SDK entrypoint does not start the CLI.
 Importing the package root also does not inspect local state or load provider
 runtimes.
 
@@ -451,18 +457,108 @@ Wrench will not install or expose this surface until it can bind the TDLib
 authorization lifecycle, account identity, local database, paging behavior,
 and message-history completeness without weakening the linked-device boundary.
 
-### Beeper through an exact local CLI contract
+### Native WhatsApp Message Like Me export
+
+The [WhatsApp provider guide](https://wrench.rip/providers/whatsapp/) documents
+the pinned macOS arm64 Wacli runtime, bounded local reads, and private export.
+Export one existing account-bound local projection without pairing, syncing,
+or sending:
+
+```sh
+wrench whatsapp export-message-like-me --auth whatsapp-main \
+  --output /absolute/private/path/new-whatsapp-bundle --json
+```
+
+Wrench writes six NDJSON artifacts plus `manifest.json` using Message Like Me
+local-message bundle schema 2, source `wacli-local@1.0.0`, provider
+`whatsapp@0.15.0`, and the immutable Message Like Me 0.7.0 consumer. The
+receipt reports bounded local coverage and `remote-history-incomplete` because
+an admitted `wacli.db` cannot prove complete remote WhatsApp history.
+
+The fixed projection excludes message-yourself chats for both proven PN and
+LID self aliases. It also excludes reaction rows and reports
+`reaction-state-unproven`, because Wacli 0.15.0 cannot prove whether a stored
+reaction remains active or was removed. Keep the seven-file bundle private.
+
+### Apple Photos contact evidence
+
+Apple Photos is a local source export, not an authenticated provider action.
+It performs no authentication, network request, Photos change request, media
+download, or provider synchronization. The default library is the current
+account's `Pictures/Photos Library.photoslibrary`; one alternate library may be
+selected only as a normalized absolute `.photoslibrary` directory:
+
+```sh
+umask 077
+wrench apple-photos export-contact-evidence --json \
+  > /absolute/private/path/apple-photos-contact-evidence.json
+```
+
+Wrench opens each owned source database read-only and uses SQLite `VACUUM INTO`
+to create one self-contained database in a new private temporary directory. It
+binds each source's physical identity before and after capture while allowing
+ordinary live size and modification-time changes. It applies the same capture
+boundary to every current Apple Contacts database discovered under the
+account's fixed AddressBook root, validates and queries only the captured
+databases, and removes them after ordinary success or handled failure.
+Symlinks, hardlinks, owner or identity changes, size overruns, missing tables,
+and relevant Core Data column drift fail closed.
+
+Before database bytes enter the temporary directory, the CLI wins the shared
+private-export admission and records a process-owned,
+filesystem-identity-bound recovery lease. A later export reclaims only the
+exact leased directory left by forced termination or a crash after proving its
+owner is dead; live or uninspectable owners remain untouched and stop the run.
+
+The only identity join is an exact equality between
+`ZPERSON.ZPERSONURI` and Apple Contacts `ZABCDRECORD.ZUNIQUEID`. Wrench never
+parses `ZCONTACTMATCHINGDICTIONARY`. The schema-1 artifact contains only the
+matched Photos person identifier, Apple contact identifier, linked face and
+distinct `ZASSET`-row counts, first and last linked asset dates, capture scope,
+privacy exclusions, path-free library realm, generation and schema digests,
+component capture intervals, and an integrity-bound receipt. Cluster
+identifiers and counts are private biometric-derived metadata. Wrench does not
+open, copy, or ask Photos to materialize referenced photo or video asset files.
+Its transient captures are full private Photos and Contacts SQLite database
+copies and can include unselected columns and raw blobs. The privacy exclusions
+apply only to the returned JSON: names, paths, images, media, raw database
+fields, locations, faceprint templates, face crops, and unmatched clusters are
+excluded.
+
+```ts
+import {
+  exportApplePhotosContactEvidenceSync,
+} from "@hraness/wrench/apple-photos"
+
+const { receipt, output } = exportApplePhotosContactEvidenceSync()
+```
+
+Each component is consistent within its recorded capture interval. The result
+does not claim one atomic instant across Photos and Contacts or complete iCloud
+and Contacts synchronization. Absence is not deletion evidence. Keep the
+artifact private because its exact identifiers and cluster counts reveal
+personal relationship and biometric-derived metadata. See the focused
+[Apple Photos guide](skills/wrench/references/apple-photos.md).
+
+### Beeper through exact pinned and direct Desktop contracts
 
 The bundled `beeper-linked-device` source plugin operates an existing Beeper
-Desktop authorization through the official Beeper CLI 0.6.2. This is Wrench's
-first `local-cli` transport: the adapter selects semantic operations while its
-source plugin owns exact executable identity, fixed command templates, strict
-input and output projections, account and Desktop-target proof, process bounds,
-and mutation recovery. It is not a generic Beeper command runner.
+Desktop authorization through one pinned CLI contract and five fixed Desktop
+loopback read contracts. This is Wrench's first `local-cli` transport: the
+adapter selects semantic operations while its source plugin owns exact
+executable identity, fixed command templates and endpoints, strict input and
+output projections, account and Desktop-target proof, process bounds, and
+mutation recovery. It is not a generic Beeper command runner.
 
-The adapter covers ordinary Beeper work through 32 operations. R1 reads include
-accounts, bridges, contacts, conversations, message pages, exact messages,
-message context, and bounded searches. R2 desired-state actions include
+The adapter covers ordinary Beeper work through 32 operations: 25 at contract
+version 1, six at contract version 2, and `messaging.read` at contract version 3.
+The 27 CLI-backed operations include bridges, contacts, writes, exact message
+reads, and the other named actions. Five fixed Desktop loopback reads are
+`accounts.list`, `messaging.search`, `conversations.read`, `messaging.read`, and
+`messaging.content.search`; the current `messaging.read` contract adds opaque
+before/after cursors and a sender filter. R1 reads include accounts, bridges,
+contacts, conversations, message pages, exact messages, message context, and
+bounded searches. R2 desired-state actions include
 reactions, archive, pin, mute, priority, private drafts, reminders, and local
 Desktop focus. R3 actions send text, files, stickers, or voice messages; edit
 an exact message; start a conversation; change the network-visible read state;
@@ -519,6 +615,10 @@ reviewed against `@beeper/desktop-api` 5.0.0 at
 the executable digest does not by itself attest independently updated Desktop
 API behavior.
 
+The authoritative runtime identity is `@beeper/cli` 0.6.2 from the pinned
+release artifacts. The tagged source `packages/cli/package.json` declares 0.6.1;
+that value is provenance only and is not execution authority.
+
 The live Desktop `/v1/info` bundle ID and exact advertised version are also
 part of the bound account realm. An in-place Desktop upgrade therefore
 requires an explicit auth rebind and produces new previews instead of silently
@@ -546,7 +646,10 @@ wrench beeper-local messaging.read --auth beeper-main \
 The generic Beeper mutation command remains available for checked manual
 workflows. Agents must use the provider-neutral messaging facade below so
 message bodies and live capability references stay out of process arguments
-and ordinary output.
+and ordinary output. The facade's agentic text-send path performs one fixed
+Desktop loopback POST after route and context preflight; it does not call the
+CLI or SDK and never retries. A returned `pendingMessageID` proves submission
+to Desktop only, not network delivery.
 
 ## Agentic messaging through one exact provider route
 
@@ -637,12 +740,16 @@ of guessing from body, recipient, time, or nearby messages. See the packaged
 the complete route, freshness, authorization, private-artifact, terminal-state,
 and reconciliation rules.
 
-The checked Beeper coverage ledger accounts for all 101 canonical 0.6.2
-commands. Account setup and removal, authentication and verification, target
-and server lifecycle, configuration and update, plugin lifecycle, raw API/RPC,
-watch/webhook, arbitrary exports, media download, and message deletion remain
-unavailable or R4. Wrench does not turn administrative, destructive,
-caller-selected network, or arbitrary-filesystem commands into agent authority.
+The checked Beeper coverage ledger fully accounts for all 101 public manual
+command paths; this is provenance coverage, not supported-command parity.
+Forty-one paths collapse to the 32 semantic operations. `accounts use` is
+absorbed into explicit account IDs; `targets status`, `version`, and top-level
+`export` are internal; `accounts add`, `accounts remove`, and `messages delete`
+are R4 and unavailable to provider dispatch; and plain `status` is among the
+53 unsupported paths. None of those three R4 paths appears in the selected
+32-operation provider adapter. Wrench does not turn administrative,
+destructive, caller-selected network, or arbitrary-filesystem commands into
+agent authority.
 
 Create a private, agent-ready Message Like Me bundle from every connected
 account materialized by Beeper Desktop:
@@ -773,14 +880,15 @@ gives supported MCP clients a first-party path to Beeper Desktop. This export
 path uses the official CLI because Wrench needs a pinned, bounded, read-only
 file snapshot that it can validate and publish atomically.
 
-Contact and chat lists are bounded to 200 records because CLI 0.6.2 exposes no
-continuation cursor for those commands. Message pages derive the next
-before/after cursor only from the terminal returned message ID and reject
-duplicates or a non-advancing cursor at normalization. Output marks remote
-history coverage unknown, preserves account/network/reply/edit/delete and
-reaction provenance, and includes attachment metadata without media IDs,
-paths, URLs, or downloads. This is a local materialized view, not a claim that
-every connected network has finished backfilling its remote history.
+Contact and chat lists are bounded to 200 records because the reviewed Desktop
+reads expose no continuation for those commands. Message pages use opaque
+before/after cursors returned by Desktop, plus the optional sender filter; Wrench
+rejects duplicate or non-advancing cursors at normalization and never derives a
+cursor from a terminal message ID. Output marks remote history coverage
+unknown, preserves account/network/reply/edit/delete and reaction provenance,
+and includes attachment metadata without media IDs, paths, URLs, or downloads.
+This is a local materialized view, not a claim that every connected network has
+finished backfilling its remote history.
 
 ### Direct iMessage through a reviewed private transport
 

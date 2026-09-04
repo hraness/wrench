@@ -127,6 +127,6 @@ export const whatsappMessagingDefinition = Object.freeze({
     state: "unavailable",
     reply: "unsupported",
     reason:
-      "capture-required: the checked private no-retry transport still needs a controlled live fixture, fresh context proof, and exact accepted-message reconciliation",
+      "capture-required: the official read runtime has no Wrench-qualified mutation transport",
   }),
 } satisfies ProviderPluginMessagingDefinitionV1);

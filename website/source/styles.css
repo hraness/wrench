@@ -2487,6 +2487,7 @@ body {
 /* Wrench maps the shared Hraness product-marketing grammar to its editorial identity. */
 .wrench-product-hero {
   --hraness-marketing-action-radius: var(--radius-sm);
+  grid-column: 1 / -1;
   max-width: 80rem;
 }
 

@@ -9,6 +9,7 @@ import type {
   ProviderMaterializedPageV1,
   ProviderMessageV1,
 } from "../omni-model";
+import { isCanonicalBeeperConversationId } from "./beeper-local";
 
 type JsonRecord = Readonly<Record<string, unknown>>;
 
@@ -120,7 +121,7 @@ function hasWellFormedUnicode(value: string): boolean {
     const code = value.charCodeAt(index);
     if (code >= 0xd800 && code <= 0xdbff) {
       const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) return false;
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
       index += 1;
     } else if (code >= 0xdc00 && code <= 0xdfff) {
       return false;
@@ -142,6 +143,14 @@ function beeperRawIdentifier(
     || /[\u0000-\u001f\u007f-\u009f]/u.test(value)
   ) throw new Error(`${label} must be one bounded Beeper identifier`);
   return value;
+}
+
+function beeperConversationId(value: unknown, label: string): string {
+  const id = beeperRawIdentifier(value, label, 2_048);
+  if (!isCanonicalBeeperConversationId(id)) {
+    return drift(label, "must be one exact full Beeper/Matrix chat ID");
+  }
+  return id;
 }
 
 function beeperProviderId(
@@ -191,14 +200,21 @@ export function normalizeBeeperConversationProviderId(
   accountId: unknown,
   conversationId: unknown,
 ): string {
-  return beeperProviderId(accountId, "chat", conversationId);
+  return beeperProviderId(
+    accountId,
+    "chat",
+    beeperConversationId(conversationId, "Beeper conversation ID"),
+  );
 }
 
 export function rawBeeperConversationId(
   accountId: unknown,
   providerId: unknown,
 ): string {
-  return rawBeeperProviderId(accountId, providerId, "chat");
+  return beeperConversationId(
+    rawBeeperProviderId(accountId, providerId, "chat"),
+    "Beeper conversation ID",
+  );
 }
 
 export function normalizeBeeperMessageProviderId(
@@ -240,7 +256,7 @@ function listInput(input: OperationInput): Readonly<{ accountId: string | null; 
   });
 }
 
-function readInput(input: OperationInput): Readonly<{
+function readInputV2(input: OperationInput): Readonly<{
   accountId: string;
   conversationId: string;
   beforeCursor: string | null;
@@ -265,13 +281,68 @@ function readInput(input: OperationInput): Readonly<{
   }
   return Object.freeze({
     accountId: string(source.account_id, "messaging.read input.account_id", 512),
-    conversationId: string(
+    conversationId: beeperConversationId(
       source.conversation_id,
       "messaging.read input.conversation_id",
-      2_048,
     ),
     beforeCursor,
     afterCursor,
+    limit: source.limit === undefined
+      ? 200
+      : integer(source.limit, "messaging.read input.limit", 1, 200),
+  });
+}
+
+function readInput(input: OperationInput): Readonly<{
+  accountId: string;
+  conversationId: string;
+  beforeCursor: string | null;
+  afterCursor: string | null;
+  sender: string | null;
+  limit: number;
+}> {
+  const source = record(input, "messaging.read input");
+  exactKeys(
+    source,
+    ["account_id", "conversation_id"],
+    ["before_cursor", "after_cursor", "sender", "limit"],
+    "messaging.read input",
+  );
+  const beforeCursor = source.before_cursor === undefined
+    ? null
+    : beeperRawIdentifier(
+        source.before_cursor,
+        "messaging.read input.before_cursor",
+        2_048,
+      );
+  const afterCursor = source.after_cursor === undefined
+    ? null
+    : beeperRawIdentifier(
+        source.after_cursor,
+        "messaging.read input.after_cursor",
+        2_048,
+      );
+  if (beforeCursor !== null && afterCursor !== null) {
+    drift("messaging.read input", "accepts only one cursor direction");
+  }
+  const sender = source.sender === undefined
+    ? null
+    : beeperRawIdentifier(source.sender, "messaging.read input.sender", 2_048);
+  if (
+    sender !== null
+    && sender !== "me"
+    && sender !== "others"
+    && sender.startsWith("-")
+  ) drift("messaging.read input.sender", "must be me, others, or one bounded opaque non-flag user ID");
+  return Object.freeze({
+    accountId: string(source.account_id, "messaging.read input.account_id", 512),
+    conversationId: beeperConversationId(
+      source.conversation_id,
+      "messaging.read input.conversation_id",
+    ),
+    beforeCursor,
+    afterCursor,
+    sender,
     limit: source.limit === undefined
       ? 200
       : integer(source.limit, "messaging.read input.limit", 1, 200),
@@ -303,10 +374,9 @@ function exactConversationInput(input: OperationInput): Readonly<{
       "conversations.read input.account_id",
       512,
     ),
-    conversationId: string(
+    conversationId: beeperConversationId(
       source.conversation_id,
       "conversations.read input.conversation_id",
-      2_048,
     ),
   });
 }
@@ -578,13 +648,15 @@ function message(
 function validateEnvelope(
   output: unknown,
   operation: "messaging.list" | "messaging.read",
+  projection: "bounded-local-desktop-api" | "bounded-local-desktop-direct-iterator" =
+    "bounded-local-desktop-api",
 ): { readonly source: JsonRecord; readonly subject: string } {
   const source = record(output, `${operation} output`);
   if (source.provider !== "beeper" || source.operation !== operation) {
     drift(`${operation} output`, "must identify the exact Beeper operation");
   }
-  if (source.projection !== "bounded-local-desktop-api") {
-    drift(`${operation} output.projection`, "must be bounded-local-desktop-api");
+  if (source.projection !== projection) {
+    drift(`${operation} output.projection`, `must be ${projection}`);
   }
   return Object.freeze({
     source,
@@ -674,11 +746,12 @@ export function materializeBeeperExactConversation(
   );
 }
 
-export function materializeBeeperMessagingRead(
+function materializeBeeperMessagingReadLegacy(
   input: OperationInput,
   output: unknown,
+  cursorKind: "cli-message-id" | "provider-opaque",
 ): ProviderMaterializedPageV1 {
-  const parsed = readInput(input);
+  const parsed = readInputV2(input);
   const { source, subject: accountSubject } = validateEnvelope(output, "messaging.read");
   exactKeys(source, [
     "provider",
@@ -705,8 +778,12 @@ export function materializeBeeperMessagingRead(
   if (source.requestDirection !== requestDirection) {
     drift("messaging.read output.requestDirection", "must bind the requested direction");
   }
-  const entities = array(source.messages, "messaging.read output.messages", parsed.limit)
-    .map((item, index) => message(
+  const rawMessages = array(
+    source.messages,
+    "messaging.read output.messages",
+    parsed.limit,
+  );
+  const entities = rawMessages.map((item, index) => message(
       item,
       `messaging.read output.messages[${index}]`,
       parsed.accountId,
@@ -717,7 +794,97 @@ export function materializeBeeperMessagingRead(
     drift("messaging.read output.messages", "contains duplicate stable message IDs");
   }
   array(source.tombstones, "messaging.read output.tombstones", parsed.limit);
-  record(source.completeness, "messaging.read output.completeness");
+  const completeness = record(source.completeness, "messaging.read output.completeness");
+  if (cursorKind === "cli-message-id") {
+    exactKeys(completeness, [
+      "localPageComplete",
+      "remoteConversationHistoryComplete",
+      "limitReached",
+      "warnings",
+    ], [], "messaging.read output.completeness");
+    const limitReached = boolean(
+      completeness.limitReached,
+      "messaging.read output.completeness.limitReached",
+    );
+    if (limitReached !== (entities.length === parsed.limit)) {
+      drift(
+        "messaging.read output.completeness.limitReached",
+        "must match the returned page bound",
+      );
+    }
+    if (
+      boolean(
+        completeness.localPageComplete,
+        "messaging.read output.completeness.localPageComplete",
+      ) !== !limitReached
+    ) drift(
+      "messaging.read output.completeness.localPageComplete",
+      "must be coherent with limitReached",
+    );
+    if (boolean(
+      completeness.remoteConversationHistoryComplete,
+      "messaging.read output.completeness.remoteConversationHistoryComplete",
+    )) drift(
+      "messaging.read output.completeness.remoteConversationHistoryComplete",
+      "must not claim remote-history completeness",
+    );
+    const warnings = array(
+      completeness.warnings,
+      "messaging.read output.completeness.warnings",
+      32,
+    ).map((item, index) => string(
+      item,
+      `messaging.read output.completeness.warnings[${index}]`,
+      256,
+    ));
+    const continuationExpected = limitReached && requestDirection === "before";
+    if ((source.continuation !== null) !== continuationExpected) {
+      drift(
+        "messaging.read output.continuation",
+        "must exist only for a full newest-first before page",
+      );
+    }
+    if (
+      limitReached
+      && requestDirection === "after"
+      && !warnings.includes("beeper-cli-v0.6.2-after-window-has-no-replayable-continuation")
+    ) drift(
+      "messaging.read output.completeness.warnings",
+      "must disclose that after pages have no replayable continuation",
+    );
+    const normalizedRequestCursor = requestCursor === null
+      ? null
+      : normalizeBeeperMessageProviderId(parsed.accountId, requestCursor);
+    if (normalizedRequestCursor !== null && ids.includes(normalizedRequestCursor)) {
+      drift("messaging.read output.messages", "must exclude the prior request cursor");
+    }
+    if (continuationExpected) {
+      for (let index = 1; index < entities.length; index += 1) {
+        const previous = record(
+          rawMessages[index - 1],
+          `messaging.read output.messages[${index - 1}]`,
+        );
+        const current = record(
+          rawMessages[index],
+          `messaging.read output.messages[${index}]`,
+        );
+        if (
+          string(
+            previous.sortKey,
+            `messaging.read output.messages[${index - 1}].sortKey`,
+            1_024,
+          ) < string(
+            current.sortKey,
+            `messaging.read output.messages[${index}].sortKey`,
+            1_024,
+          )
+        ) drift(
+          "messaging.read output.messages",
+          "must preserve pinned newest-first order",
+        );
+      }
+    }
+  }
   let nextInput: Readonly<Record<string, string | number>> | null = null;
   if (source.continuation !== null) {
     const continuation = record(source.continuation, "messaging.read output.continuation");
@@ -738,10 +905,237 @@ export function materializeBeeperMessagingRead(
     if (cursor === requestCursor) {
       drift("messaging.read output.continuation.cursor", "must advance");
     }
+    if (
+      cursorKind === "cli-message-id"
+      && normalizeBeeperMessageProviderId(parsed.accountId, cursor)
+        !== ids[ids.length - 1]
+    ) drift(
+      "messaging.read output.continuation.cursor",
+      "must equal the terminal returned message ID",
+    );
     nextInput = Object.freeze({
       account_id: parsed.accountId,
       conversation_id: parsed.conversationId,
       limit: parsed.limit,
+      ...(requestDirection === "before"
+        ? { before_cursor: cursor }
+        : { after_cursor: cursor }),
+    });
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    partition: `${accountSubject}:messages:${encoded(parsed.accountId)}:${encoded(parsed.conversationId)}`,
+    completeness: Object.freeze({
+      kind: "bounded-local",
+      reason: "Beeper exposed one bounded local message page; connected-account backfill and older edit, reaction, and deletion coverage may be incomplete.",
+    }),
+    cursor: Object.freeze({
+      direction: requestDirection === "before" ? "backward" : "forward",
+      request: requestCursor,
+      nextInput,
+    }),
+    entities: Object.freeze(entities),
+    tombstones: Object.freeze([]),
+  });
+}
+
+export function materializeBeeperMessagingReadV1(
+  input: OperationInput,
+  output: unknown,
+): ProviderMaterializedPageV1 {
+  return materializeBeeperMessagingReadLegacy(input, output, "cli-message-id");
+}
+
+export function materializeBeeperMessagingReadV2(
+  input: OperationInput,
+  output: unknown,
+): ProviderMaterializedPageV1 {
+  return materializeBeeperMessagingReadLegacy(input, output, "provider-opaque");
+}
+
+export function materializeBeeperMessagingRead(
+  input: OperationInput,
+  output: unknown,
+): ProviderMaterializedPageV1 {
+  const parsed = readInput(input);
+  const { source, subject: accountSubject } = validateEnvelope(
+    output,
+    "messaging.read",
+    "bounded-local-desktop-direct-iterator",
+  );
+  exactKeys(source, [
+    "provider",
+    "operation",
+    "accountSubject",
+    "projection",
+    "accountId",
+    "conversationId",
+    "selfUserId",
+    "requestCursor",
+    "requestDirection",
+    "requestedSender",
+    "messages",
+    "tombstones",
+    "continuation",
+    "completeness",
+  ], [], "messaging.read output");
+  if (source.accountId !== parsed.accountId || source.conversationId !== parsed.conversationId) {
+    drift("messaging.read output", "must bind input account and conversation");
+  }
+  const selfUserId = beeperRawIdentifier(
+    source.selfUserId,
+    "messaging.read output.selfUserId",
+    2_048,
+  );
+  const requestCursor = parsed.beforeCursor ?? parsed.afterCursor;
+  if (source.requestCursor !== requestCursor) {
+    drift("messaging.read output.requestCursor", "must bind the requested cursor");
+  }
+  const requestDirection = parsed.afterCursor === null ? "before" : "after";
+  if (source.requestDirection !== requestDirection) {
+    drift("messaging.read output.requestDirection", "must bind the requested direction");
+  }
+  if (source.requestedSender !== parsed.sender) {
+    drift("messaging.read output.requestedSender", "must bind the requested sender");
+  }
+  if (source.projection !== "bounded-local-desktop-direct-iterator") {
+    drift("messaging.read output.projection", "must bind direct iterator contract v3");
+  }
+  const rawMessages = array(source.messages, "messaging.read output.messages", parsed.limit);
+  const entities = rawMessages.map((item, index) => message(
+      item,
+      `messaging.read output.messages[${index}]`,
+      parsed.accountId,
+      parsed.conversationId,
+    ));
+  const ids = entities.map((entity) => entity.providerId);
+  if (new Set(ids).size !== ids.length) {
+    drift("messaging.read output.messages", "contains duplicate stable message IDs");
+  }
+  rawMessages.forEach((item, index) => {
+    const rawMessage = record(item, `messaging.read output.messages[${index}]`);
+    const senderId = beeperRawIdentifier(
+      rawMessage.senderId,
+      `messaging.read output.messages[${index}].senderId`,
+      2_048,
+    );
+    const isSender = nullableBoolean(
+      rawMessage.isSender,
+      `messaging.read output.messages[${index}].isSender`,
+    );
+    if (
+      isSender !== null
+      && isSender !== (senderId === selfUserId)
+    ) drift(
+      "messaging.read output.messages",
+      "must bind direction to the exact self user ID",
+    );
+    if (parsed.sender !== null) {
+      if (
+        parsed.sender === "me"
+          ? isSender !== true
+          : parsed.sender === "others"
+            ? isSender !== false
+            : senderId !== parsed.sender
+      ) drift("messaging.read output.messages", "must satisfy the exact requested sender");
+    }
+  });
+  array(source.tombstones, "messaging.read output.tombstones", parsed.limit);
+  const completeness = record(source.completeness, "messaging.read output.completeness");
+  exactKeys(completeness, [
+    "localPageComplete",
+    "remoteConversationHistoryComplete",
+    "limitReached",
+    "warnings",
+  ], [], "messaging.read output.completeness");
+  const limitReached = boolean(
+    completeness.limitReached,
+    "messaging.read output.completeness.limitReached",
+  );
+  if (limitReached !== (entities.length === parsed.limit)) {
+    drift("messaging.read output.completeness.limitReached", "must match the returned page bound");
+  }
+  const localPageComplete = boolean(
+    completeness.localPageComplete,
+    "messaging.read output.completeness.localPageComplete",
+  );
+  if (boolean(
+    completeness.remoteConversationHistoryComplete,
+    "messaging.read output.completeness.remoteConversationHistoryComplete",
+  )) drift(
+    "messaging.read output.completeness.remoteConversationHistoryComplete",
+    "must not claim remote-history completeness",
+  );
+  const warnings = array(
+    completeness.warnings,
+    "messaging.read output.completeness.warnings",
+    32,
+  ).map((item, index) => string(
+    item,
+    `messaging.read output.completeness.warnings[${index}]`,
+    256,
+  ));
+  if (new Set(warnings).size !== warnings.length) {
+    drift("messaging.read output.completeness.warnings", "must not repeat evidence");
+  }
+  for (const required of [
+    "continuation-is-an-opaque-provider-page-boundary-cursor",
+    "sender-filtering-is-local-to-the-bounded-direct-iterator",
+  ]) {
+    if (!warnings.includes(required)) {
+      drift("messaging.read output.completeness.warnings", `must retain ${required}`);
+    }
+  }
+  if ((source.continuation !== null) === localPageComplete) {
+    drift(
+      "messaging.read output.continuation",
+      "must exist exactly when the bounded direct iterator has more local history",
+    );
+  }
+  for (let index = 1; index < rawMessages.length; index += 1) {
+    const previous = record(rawMessages[index - 1], `messaging.read output.messages[${index - 1}]`);
+    const current = record(rawMessages[index], `messaging.read output.messages[${index}]`);
+    const previousSortKey = string(
+      previous.sortKey,
+      `messaging.read output.messages[${index - 1}].sortKey`,
+      1_024,
+    );
+    const currentSortKey = string(
+      current.sortKey,
+      `messaging.read output.messages[${index}].sortKey`,
+      1_024,
+    );
+    if (
+      requestDirection === "before"
+        ? previousSortKey < currentSortKey
+        : previousSortKey > currentSortKey
+    ) drift("messaging.read output.messages", "must preserve the requested deterministic order");
+  }
+  let nextInput: Readonly<Record<string, string | number>> | null = null;
+  if (source.continuation !== null) {
+    const continuation = record(source.continuation, "messaging.read output.continuation");
+    exactKeys(
+      continuation,
+      ["direction", "cursor"],
+      [],
+      "messaging.read output.continuation",
+    );
+    if (continuation.direction !== requestDirection) {
+      drift("messaging.read output.continuation.direction", "must preserve direction");
+    }
+    const cursor = beeperRawIdentifier(
+      continuation.cursor,
+      "messaging.read output.continuation.cursor",
+      2_048,
+    );
+    if (cursor === requestCursor) {
+      drift("messaging.read output.continuation.cursor", "must advance");
+    }
+    nextInput = Object.freeze({
+      account_id: parsed.accountId,
+      conversation_id: parsed.conversationId,
+      limit: parsed.limit,
+      ...(parsed.sender === null ? {} : { sender: parsed.sender }),
       ...(requestDirection === "before"
         ? { before_cursor: cursor }
         : { after_cursor: cursor }),

@@ -95,10 +95,11 @@
         <section aria-labelledby="providers-title" class="section provider-section" id="providers">
           <div class="section-heading section-heading-wide">
             <p class="eyebrow">Provider support</p>
-            <h2 id="providers-title">Work with the services you already use.</h2>
+            <h2 id="providers-title">Reviewed operations across {{PROVIDER_SURFACE_COUNT}} supported services.</h2>
             <p>
-              Each card names the actions available in this release and how Wrench
-              connects. If an action is not listed, Wrench does not offer it.
+              These cards summarize capability families and access methods, then link
+              to the named actions supported in this release. If an action is not
+              listed there, Wrench does not offer it.
             </p>
           </div>
           <div class="provider-directory">
@@ -261,7 +262,7 @@ wrench capabilities --json</code></pre>
             <div><dt>Opaque credentials</dt><dd>Plugins receive declared handles. The caller does not receive cookies, tokens, ambient environment, unrestricted files, a shell, or caller-selected HTTP.</dd></div>
             <div><dt>Content-bound trust</dt><dd>Portable-plugin trust applies to one verified bundle. Process separation contains ordinary failures and is not described as a hostile-code sandbox.</dd></div>
             <div><dt>Last-good reads</dt><dd>Exact snapshots preserve provider paging and completeness. A failed refresh or drifted projection does not erase the last verified state.</dd></div>
-            <div><dt>At-most-once evidence</dt><dd>Consequential changes require a short-lived exact preview and confirmation. An indeterminate dispatch is reconciled from separate evidence and never blindly retried.</dd></div>
+            <div><dt>At-most-once evidence</dt><dd>Consequential changes require a short-lived exact preview and confirmation. An indeterminate write is never blindly retried and remains unsettled until separate exact evidence can reconcile it.</dd></div>
           </dl>
         </section>
 

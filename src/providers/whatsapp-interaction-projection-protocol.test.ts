@@ -40,9 +40,33 @@ function generation(identity: { readonly dev: string; readonly ino: string } = r
   } as const;
 }
 
+function terminal(interactions: unknown) {
+  const values = Array.isArray(interactions) ? interactions : [];
+  return {
+    schemaVersion: 1,
+    status: "succeeded",
+    projectionGeneration: generation(),
+    accountJidAliases: { pnJid: "15551234567@s.whatsapp.net", lidJid: null },
+    interactions,
+    nextCursor: null,
+    localInsertPageComplete: true,
+    checkpoint: values.length === 0
+      ? { cursor: request().cursor, anchor: request().cursorAnchor }
+      : { cursor: "42", anchor: "d".repeat(64) },
+  };
+}
+
 describe("WhatsApp interaction projection protocol", () => {
   test("parses only exact path-free bounded rowid requests", () => {
     expect(parseWhatsAppInteractionProjectionRequest(request())).toEqual(request());
+    expect(parseWhatsAppInteractionProjectionRequest({
+      ...request(),
+      accountSubject: "whatsapp:pn:01234567890123456789",
+    })).toMatchObject({ accountSubject: "whatsapp:pn:01234567890123456789" });
+    expect(parseWhatsAppInteractionProjectionRequest({
+      ...request(),
+      accountSubject: `whatsapp:lid:${"1".repeat(32)}`,
+    })).toMatchObject({ accountSubject: `whatsapp:lid:${"1".repeat(32)}` });
     for (const value of [
       { ...request(), cursor: "041" },
       { ...request(), cursor: "9223372036854775808" },
@@ -58,6 +82,7 @@ describe("WhatsApp interaction projection protocol", () => {
       schemaVersion: 1,
       status: "succeeded",
       projectionGeneration: generation(),
+      accountJidAliases: { pnJid: "15551234567@s.whatsapp.net", lidJid: null },
       interactions: [interaction("42"), interaction("43")],
       nextCursor: "43",
       localInsertPageComplete: false,
@@ -76,6 +101,8 @@ describe("WhatsApp interaction projection protocol", () => {
       { ...value, interactions: [{ ...interaction("42"), body: "private" }] },
       { ...value, interactions: [{ ...interaction("42"), timestamp: "2026-08-18T12:00:00Z" }] },
       { ...value, checkpoint: { cursor: "42", anchor: "d".repeat(64) } },
+      { ...value, accountJidAliases: { pnJid: "015551234567@s.whatsapp.net", lidJid: null } },
+      { ...value, accountJidAliases: { pnJid: "1".repeat(16) + "@s.whatsapp.net", lidJid: null } },
     ]) expect(() => parseWhatsAppInteractionProjectionResponse(invalid, request())).toThrow();
   });
 
@@ -84,6 +111,7 @@ describe("WhatsApp interaction projection protocol", () => {
       schemaVersion: 1,
       status: "succeeded",
       projectionGeneration: generation(),
+      accountJidAliases: { pnJid: "15551234567@s.whatsapp.net", lidJid: null },
       interactions: [interaction("42")],
       nextCursor: null,
       localInsertPageComplete: true,
@@ -93,6 +121,7 @@ describe("WhatsApp interaction projection protocol", () => {
       schemaVersion: 1,
       status: "succeeded",
       projectionGeneration: generation(),
+      accountJidAliases: { pnJid: "15551234567@s.whatsapp.net", lidJid: null },
       interactions: [{
         ...interaction("42"),
         chatJid: "0@s.whatsapp.net",
@@ -112,5 +141,70 @@ describe("WhatsApp interaction projection protocol", () => {
       ...createWhatsAppInteractionProjectionFailure("schema-mismatch"),
       detail: "/private/wacli.db",
     })).toThrow();
+  });
+
+  test("enforces direction against the exact PN or LID account realm", () => {
+    const self = "15551234567@s.whatsapp.net";
+    const peer = "15557654321@s.whatsapp.net";
+    const group = "120363123456789012@g.us";
+    const cases = [
+      { chatKind: "dm", chatJid: peer, fromMe: false, senderJid: null, valid: true },
+      { chatKind: "dm", chatJid: peer, fromMe: false, senderJid: "15557654321:2@s.whatsapp.net", valid: true },
+      { chatKind: "dm", chatJid: peer, fromMe: false, senderJid: self, valid: false },
+      { chatKind: "dm", chatJid: peer, fromMe: true, senderJid: null, valid: true },
+      { chatKind: "dm", chatJid: peer, fromMe: true, senderJid: self, valid: true },
+      { chatKind: "dm", chatJid: peer, fromMe: true, senderJid: peer, valid: false },
+      { chatKind: "group", chatJid: group, fromMe: true, senderJid: null, valid: true },
+      { chatKind: "group", chatJid: group, fromMe: true, senderJid: self, valid: true },
+      { chatKind: "group", chatJid: group, fromMe: true, senderJid: "15551234567@lid", valid: false },
+      { chatKind: "group", chatJid: group, fromMe: false, senderJid: null, valid: true },
+      { chatKind: "group", chatJid: group, fromMe: false, senderJid: "222222222222222:4@lid", valid: true },
+      { chatKind: "group", chatJid: group, fromMe: false, senderJid: self, valid: false },
+    ] as const;
+    for (const candidate of cases) {
+      const value = terminal([{
+        ...interaction("42"),
+        chatKind: candidate.chatKind,
+        chatJid: candidate.chatJid,
+        fromMe: candidate.fromMe,
+        senderJid: candidate.senderJid,
+      }]);
+      const parse = () => parseWhatsAppInteractionProjectionResponse(value, request());
+      if (candidate.valid) expect(parse()).toMatchObject({ status: "succeeded" });
+      else expect(parse).toThrow("sender direction");
+    }
+  });
+
+  test("rejects sparse, accessor, named, symbolic, derived, and proxy interaction arrays", () => {
+    const valid = interaction("42");
+    const sparse = new Array(1);
+    let accessorGetterCalled = false;
+    const accessor: unknown[] = [valid];
+    Object.defineProperty(accessor, "0", {
+      enumerable: true,
+      get: () => {
+        accessorGetterCalled = true;
+        return valid;
+      },
+    });
+    const named: unknown[] & { note?: string } = [valid];
+    named.note = "unreviewed";
+    const symbolled: unknown[] = [valid];
+    Object.defineProperty(symbolled, Symbol("unreviewed"), { value: true });
+    class DerivedArray extends Array<unknown> {}
+    for (const interactions of [
+      sparse,
+      accessor,
+      named,
+      symbolled,
+      new DerivedArray(valid),
+      new Proxy([valid], {}),
+    ]) {
+      expect(() => parseWhatsAppInteractionProjectionResponse(
+        terminal(interactions),
+        request(),
+      )).toThrow("response.interactions did not match");
+    }
+    expect(accessorGetterCalled).toBe(false);
   });
 });

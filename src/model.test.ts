@@ -1652,7 +1652,7 @@ describe("schemaVersion 4 authenticated web-session binding", () => {
     }
   });
 
-  test("keeps both Beeper upgrade baselines exact while current reads select v2", () => {
+  test("keeps every Beeper upgrade baseline exact while current routes select v2 and v3", () => {
     const archived = JSON.parse(readFileSync(join(
       import.meta.dir,
       "assets",
@@ -1674,11 +1674,20 @@ describe("schemaVersion 4 authenticated web-session binding", () => {
       "beeper",
       "wrench-web-adapter.v2.1.0.json",
     ), "utf8")) as Record<string, unknown>;
+    const predecessor = JSON.parse(readFileSync(join(
+      import.meta.dir,
+      "assets",
+      "adapters",
+      "beeper",
+      "wrench-web-adapter.v2.2.0.json",
+    ), "utf8")) as Record<string, unknown>;
 
     expect(parseDiagnosticManifest(archived).ok).toBeTrue();
     expect(parseDiagnosticManifest(intermediate).ok).toBeTrue();
+    expect(parseDiagnosticManifest(predecessor).ok).toBeTrue();
     expect(parseRuntimeManifest(archived).ok).toBeTrue();
     expect(parseRuntimeManifest(intermediate).ok).toBeTrue();
+    expect(parseRuntimeManifest(predecessor).ok).toBeTrue();
     expect(parseRuntimeManifest(current).ok).toBeTrue();
 
     const archivedOperations = archived.operations as Record<
@@ -1686,23 +1695,36 @@ describe("schemaVersion 4 authenticated web-session binding", () => {
       { readonly localCli: { readonly contractVersion: number } }
     >;
     const intermediateOperations = intermediate.operations as typeof archivedOperations;
+    const predecessorOperations = predecessor.operations as typeof archivedOperations;
     const currentOperations = current.operations as typeof archivedOperations;
-    const directReads = new Set([
+    const intermediateDirectReads = new Set([
       "accounts.list",
       "messaging.search",
       "conversations.read",
       "messaging.read",
+    ]);
+    const predecessorDirectReads = new Set([
+      ...intermediateDirectReads,
+      "messaging.content.search",
+    ]);
+    const currentVersionTwo = new Set([
+      "accounts.list",
+      "bridges.list",
+      "contacts.list",
+      "messaging.search",
+      "conversations.read",
       "messaging.content.search",
     ]);
     for (const [operation, value] of Object.entries(archivedOperations)) {
       expect(value.localCli.contractVersion).toBe(1);
       expect(intermediateOperations[operation]?.localCli.contractVersion).toBe(
-        directReads.has(operation) && operation !== "messaging.content.search"
-          ? 2
-          : 1,
+        intermediateDirectReads.has(operation) ? 2 : 1,
+      );
+      expect(predecessorOperations[operation]?.localCli.contractVersion).toBe(
+        predecessorDirectReads.has(operation) ? 2 : 1,
       );
       expect(currentOperations[operation]?.localCli.contractVersion).toBe(
-        directReads.has(operation) ? 2 : 1,
+        operation === "messaging.read" ? 3 : currentVersionTwo.has(operation) ? 2 : 1,
       );
     }
   });

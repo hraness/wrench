@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f5f3ed" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">
+    <title>{{WHATSAPP_PAGE_TITLE}}</title>
+    <meta name="description" content="{{WHATSAPP_PAGE_DESCRIPTION}}">
+    <meta name="robots" content="max-image-preview:large">
+    <link rel="canonical" href="https://wrench.rip/providers/whatsapp/">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="{{CSS_ASSET}}">
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+    {{MARKDOWN_ALTERNATE}}
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Wrench">
+    <meta property="og:title" content="{{WHATSAPP_PAGE_TITLE}}">
+    <meta property="og:description" content="{{WHATSAPP_PAGE_DESCRIPTION}}">
+    <meta property="og:url" content="https://wrench.rip/providers/whatsapp/">
+    <meta property="og:image" content="https://wrench.rip/og.png">
+    <meta property="og:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{{WHATSAPP_PAGE_TITLE}}">
+    <meta name="twitter:description" content="{{WHATSAPP_PAGE_DESCRIPTION}}">
+    <meta name="twitter:image" content="https://wrench.rip/og.png">
+    <meta name="twitter:image:alt" content="Wrench: precise web capabilities for AI agents">
+    <meta name="wrench-posthog-host" content="{{POSTHOG_HOST}}">
+    <meta name="wrench-posthog-key" content="{{POSTHOG_KEY}}">
+    <script type="application/ld+json">{{JSON_LD}}</script>
+    <script type="module" src="{{ANALYTICS_ASSET}}"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar guide-topbar">
+      <a aria-label="Wrench home" class="wordmark" href="/">Wrench</a>
+      <nav aria-label="Primary">
+        <a href="/getting-started/">Install</a>
+        <a aria-current="location" href="/provider-capabilities/">Providers</a>
+        <a href="https://github.com/hraness/wrench">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+    </header>
+    <main class="guide-main" id="main">
+      <nav aria-label="Breadcrumb" class="breadcrumbs"><ol><li><a href="/">Wrench</a></li><li><a href="/provider-capabilities/">Providers</a></li><li aria-current="page">WhatsApp</li></ol></nav>
+      <article class="guide-article">
+        <header class="guide-hero provider-guide-hero">
+          <p class="eyebrow">WhatsApp local export · {{WRENCH_RELEASE}}</p>
+          <h1>Export bounded WhatsApp history for Message Like Me.</h1>
+          <p class="answer-lede">Wrench reads an existing account-bound Wacli store and publishes one private Message Like Me schema-2 bundle. This export does not pair a device, synchronize WhatsApp, open a network connection, or send a message.</p>
+          <p class="review-note">The current native export is available on macOS arm64 with official Wacli {{WHATSAPP_WACLI_VERSION}}. The separate <code>whatsapp-web</code> adapter {{WHATSAPP_ADAPTER_VERSION}} also exposes {{WHATSAPP_OBSERVED_OPERATION_COUNT}} bounded R1 reads over the same local projection.</p>
+        </header>
+
+        <section aria-labelledby="export">
+          <h2 id="export">Write one seven-file private bundle</h2>
+          <div class="command-panel"><pre><code>wrench whatsapp export-message-like-me --auth whatsapp-main \
+  --output /absolute/private/path/new-whatsapp-bundle --json</code></pre></div>
+          <p>The destination must be a new absolute directory below an owner-controlled parent. Wrench writes six NDJSON files plus <code>manifest.json</code> into a private sibling directory, verifies the complete schema and hashes, then publishes all seven files with one atomic rename.</p>
+          <p>The immutable consumer is <a href="https://github.com/hraness/message-like-me/releases/tag/v0.7.0">Message Like Me v0.7.0</a>. The bundle identifies local-message schema <code>2</code>, source <code>wacli-local@1.0.0</code>, provider <code>whatsapp@0.15.0</code>, and network <code>whatsapp</code>.</p>
+        </section>
+
+        <section aria-labelledby="included">
+          <h2 id="included">What the bundle contains</h2>
+          <p>The export retains locally stored message bodies, bubble boundaries, replies, attachment metadata, and only edit or deletion state the fixed projection can prove. Attachment bytes, media keys, credentials, protocol keys, source database paths, and local media paths stay out of the bundle.</p>
+          <p>Message-yourself conversations are excluded for both proven phone-number (PN) and linked-identity (LID) self aliases. Status, broadcast, newsletter, and unsupported non-conversation rows are excluded too.</p>
+          <p>Reaction rows are excluded. Wacli {{WHATSAPP_WACLI_VERSION}} cannot prove whether a locally stored reaction remains active or was removed, so Wrench emits <code>reaction-state-unproven</code> instead of publishing retained reaction state.</p>
+        </section>
+
+        <section aria-labelledby="completeness">
+          <h2 id="completeness">Local history remains incomplete</h2>
+          <p>The receipt reports <code>bounded-local</code> completeness with reason <code>local-store-coverage-unknown</code> and warning <code>remote-history-incomplete</code>. A completed export proves the admitted local projection, not that WhatsApp has backfilled every remote message.</p>
+          <p>The helper binds one immutable database generation, validates the store once, reads row-ID pages through one bounded session, filters proven self chats before content crosses the helper boundary, and seals the final counts and rolling frame digest before publication.</p>
+        </section>
+
+        <section aria-labelledby="provenance">
+          <h2 id="provenance">Exact macOS arm64 runtime</h2>
+          <div class="table-scroll version-table" role="region" aria-labelledby="provenance" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">Boundary</th><th scope="col">Reviewed identity</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Wrench</th><td><code>{{WRENCH_RELEASE}}</code></td></tr>
+                <tr><th scope="row">Message Like Me</th><td><a href="https://github.com/hraness/message-like-me/releases/tag/v0.7.0">v0.7.0</a></td></tr>
+                <tr><th scope="row">Official Wacli</th><td><a href="https://github.com/openclaw/wacli/releases/tag/v{{WHATSAPP_WACLI_VERSION}}">v{{WHATSAPP_WACLI_VERSION}}</a> at <a href="https://github.com/openclaw/wacli/commit/{{WHATSAPP_WACLI_COMMIT}}"><code>{{WHATSAPP_WACLI_COMMIT}}</code></a></td></tr>
+                <tr><th scope="row">macOS arm64 archive SHA-256</th><td><code>{{WHATSAPP_ARCHIVE_SHA256}}</code></td></tr>
+                <tr><th scope="row">macOS arm64 executable SHA-256</th><td><code>{{WHATSAPP_BINARY_SHA256}}</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>The runtime checks the official release identity, exact executable SHA-256, and offline code signature before reading. The installer separately repeats the online Apple notarization check before it publishes the executable. Runtime reads do not claim to repeat online notarization.</p>
+        </section>
+
+        <aside class="guide-callout" aria-labelledby="whatsapp-next">
+          <h2 id="whatsapp-next">Inspect the installed boundary</h2>
+          <p>Run <code>wrench operator doctor --json</code>, inspect <a href="/provider-capabilities/#provider-whatsapp">the four local R1 contracts</a>, and keep the output outside Git or shared storage.</p>
+        </aside>
+      </article>
+    </main>
+    <aside aria-label="Wrench project information" class="site-disclosure">
+      <p>Wrench {{WRENCH_VERSION}} · MIT · <a href="{{WRENCH_REPOSITORY}}">Source on GitHub</a> · <a href="/about/">About</a> · <a href="/contact/">Contact</a> · <a href="/privacy/">Privacy</a> · <a href="/llms.txt">llms.txt</a></p>
+      <p class="privacy-note">Privacy: cookieless PostHog analytics measure page lifecycle and Core Web Vitals. No person profiles, replay, broad autocapture, or URL queries; Do Not Track is honored.</p>
+    </aside>
+    {{HRANESS_SITE_FOOTER}}
+  </body>
+</html>

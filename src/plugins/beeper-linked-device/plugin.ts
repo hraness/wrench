@@ -13,28 +13,40 @@ import {
   BEEPER_DESKTOP_API_PIN,
   BEEPER_LOCAL_OPERATION_NAMES,
   BEEPER_LOCAL_OPERATIONS,
-  parseBeeperOperationInput,
+  parseBeeperOperationInputForContract,
+  type BeeperLocalOperationContractVersion,
   type BeeperLocalOperationName,
 } from "../../providers/beeper-local";
 import {
   materializeBeeperMessagingList,
   materializeBeeperMessagingRead,
+  materializeBeeperMessagingReadV1,
+  materializeBeeperMessagingReadV2,
 } from "../../providers/beeper-omni";
 import { beeperMessagingDefinition } from "../../providers/beeper-messaging";
 import beeperManifest from "../../assets/adapters/beeper/wrench-web-adapter.json";
-import predecessorBeeperManifest from "../../assets/adapters/beeper/wrench-web-adapter.v2.1.0.json";
+import predecessorBeeperManifest from "../../assets/adapters/beeper/wrench-web-adapter.v2.2.0.json";
+import legacyBeeperManifest from "../../assets/adapters/beeper/wrench-web-adapter.v2.0.0.json";
 
 type ManifestOperationProjection = Readonly<{
   input: InputSchema;
   sideEffect: string;
   idempotency: "none" | "local-at-most-once";
   dedupeWindowMs: number;
+  localCli: Readonly<{
+    surface: string;
+    action: string;
+    contractVersion: number;
+  }>;
 }>;
 
 const manifestOperations = beeperManifest.operations as unknown as Readonly<
   Record<BeeperLocalOperationName, ManifestOperationProjection>
 >;
 const predecessorManifestOperations = predecessorBeeperManifest.operations as unknown as Readonly<
+  Record<BeeperLocalOperationName, ManifestOperationProjection>
+>;
+const legacyManifestOperations = legacyBeeperManifest.operations as unknown as Readonly<
   Record<BeeperLocalOperationName, ManifestOperationProjection>
 >;
 
@@ -47,13 +59,13 @@ const booleanDesiredKeys = Object.freeze({
 
 const exactDesiredReadbacks = new Set<BeeperLocalOperationName>([
   "messaging.edit",
+  "conversations.read-state.set",
   "conversations.priority.set",
   "conversations.title.set",
   "conversations.description.set",
   "conversations.avatar.set",
   "conversations.draft.set",
   "conversations.disappearing.set",
-  "conversations.read-state.set",
   "conversations.reminder.set",
 ]);
 
@@ -65,23 +77,26 @@ const BEEPER_DIRECT_READ_OPERATION_NAMES = Object.freeze([
   "messaging.content.search",
 ] as const satisfies readonly BeeperLocalOperationName[]);
 
+const BEEPER_CLI_CONTRACT_V2_OPERATION_NAMES = Object.freeze([
+  "bridges.list",
+  "contacts.list",
+] as const satisfies readonly BeeperLocalOperationName[]);
+
 function validateBeeperInput(
   action: BeeperLocalOperationName,
-  contractVersion: 1 | 2,
+  contractVersion: BeeperLocalOperationContractVersion,
   input: OperationInput,
 ): readonly string[] {
   try {
-    const parsed = parseBeeperOperationInput(action, input);
-    if (
-      contractVersion === 1
-      && action === "messaging.content.search"
-      && "beforeCursor" in parsed
-      && (parsed.beforeCursor !== null || parsed.afterCursor !== null)
-    ) throw new Error("Beeper CLI message search does not expose cursors");
+    parseBeeperOperationInputForContract(action, contractVersion, input);
     return Object.freeze([]);
   } catch {
     return Object.freeze([
-      `${action} input does not match the pinned Beeper ${contractVersion === 1 ? "CLI" : "Desktop direct-read"} contract`,
+      `${action} input does not match the pinned Beeper ${
+        contractVersion === 1 || BEEPER_CLI_CONTRACT_V2_OPERATION_NAMES.includes(
+          action as typeof BEEPER_CLI_CONTRACT_V2_OPERATION_NAMES[number],
+        ) ? "CLI" : "Desktop direct-read"
+      } contract`,
     ]);
   }
 }
@@ -116,6 +131,7 @@ function reconciliationFor(
 
 function omniFor(
   action: BeeperLocalOperationName,
+  contractVersion: BeeperLocalOperationContractVersion,
 ): LocalCliPluginOperationDefinitionV1["omni"] {
   if (action === "messaging.list") {
     return Object.freeze({
@@ -131,8 +147,12 @@ function omniFor(
       state: "supported" as const,
       schemaVersion: 1 as const,
       materializerId: "beeper-messaging-read",
-      materializerVersion: 2,
-      materialize: materializeBeeperMessagingRead,
+      materializerVersion: contractVersion === 3 ? 5 : 2,
+      materialize: contractVersion === 3
+        ? materializeBeeperMessagingRead
+        : contractVersion === 2
+          ? materializeBeeperMessagingReadV2
+          : materializeBeeperMessagingReadV1,
     });
   }
   return undefined;
@@ -140,14 +160,28 @@ function omniFor(
 
 function operationDefinition(
   action: BeeperLocalOperationName,
-  contractVersion: 1 | 2,
+  contractVersion: BeeperLocalOperationContractVersion,
 ): LocalCliPluginOperationDefinitionV1 {
   const manifestOperation = contractVersion === 1
-    ? predecessorManifestOperations[action]
-    : manifestOperations[action];
+    ? legacyManifestOperations[action]
+    : contractVersion === 2
+      && BEEPER_DIRECT_READ_OPERATION_NAMES.includes(
+        action as typeof BEEPER_DIRECT_READ_OPERATION_NAMES[number],
+      )
+      ? predecessorManifestOperations[action]
+      : manifestOperations[action];
+  if (
+    manifestOperation.localCli.surface !== "beeper"
+    || manifestOperation.localCli.action !== action
+    || manifestOperation.localCli.contractVersion !== contractVersion
+  ) {
+    throw new Error(
+      `Beeper manifest contract drifted for ${action}@${String(contractVersion)}`,
+    );
+  }
   const policy = BEEPER_LOCAL_OPERATIONS[action];
   const reconciliation = reconciliationFor(action);
-  const omni = omniFor(action);
+  const omni = omniFor(action, contractVersion);
   return Object.freeze({
     name: action,
     contractVersion,
@@ -161,10 +195,17 @@ function operationDefinition(
       ? "none" as const
       : action === "presence.set" ? "bounded-items" as const : "single" as const,
     implementation: contractVersion === 1
+      || BEEPER_CLI_CONTRACT_V2_OPERATION_NAMES.includes(
+        action as typeof BEEPER_CLI_CONTRACT_V2_OPERATION_NAMES[number],
+      )
       ? `official Beeper CLI ${BEEPER_CLI_PIN.version} over ${BEEPER_DESKTOP_API_PIN.package}@${BEEPER_DESKTOP_API_PIN.version}+${BEEPER_DESKTOP_API_PIN.commit} ${action} with exact input, target, realm, output, and dispatch binding`
       : `official ${BEEPER_DESKTOP_API_PIN.package}@${BEEPER_DESKTOP_API_PIN.version}+${BEEPER_DESKTOP_API_PIN.commit} fixed Beeper Desktop loopback read for ${action} with exact input, target, realm, bounded output, and no CLI or transport fallback`,
     planDispatches: (input: OperationInput) => {
-      const parsed = parseBeeperOperationInput(action, input);
+      const parsed = parseBeeperOperationInputForContract(
+        action,
+        contractVersion,
+        input,
+      );
       if (policy.effect === "read") return Object.freeze([]);
       const count = action === "presence.set"
         && "durationSeconds" in parsed
@@ -191,12 +232,15 @@ const operations = Object.freeze([
     operationDefinition(action, 1)),
   ...BEEPER_DIRECT_READ_OPERATION_NAMES.map((action) =>
     operationDefinition(action, 2)),
+  ...BEEPER_CLI_CONTRACT_V2_OPERATION_NAMES.map((action) =>
+    operationDefinition(action, 2)),
+  operationDefinition("messaging.read", 3),
 ]);
 
 export const beeperLinkedDevicePlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "beeper-linked-device",
-  version: "2.2.0",
+  version: "2.3.0",
   displayName: "Beeper Pinned Local CLI",
   sourceKind: "built-in",
   implementationSources: providerImplementationEntry(import.meta.url),
