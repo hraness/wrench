@@ -5,7 +5,10 @@
  * exposes a raw endpoint, header, cookie, or modhash as a user-facing input.
  */
 
+import { REDDIT_FLAIR_OPERATION_NAMES, redditFlairContracts } from "../plugins/reddit-web/flair";
+
 export const REDDIT_WEB_OPERATION_NAMES = Object.freeze([
+  ...REDDIT_FLAIR_OPERATION_NAMES,
   "comments.create",
   "comments.read",
   "communities.membership.set",
@@ -61,6 +64,11 @@ const captureRequired = (
 });
 
 export const REDDIT_WEB_OPERATIONS = Object.freeze({
+  ...Object.fromEntries(redditFlairContracts.map((contract) => [contract.operation, captureRequired(
+    contract.risk === "R1" ? "read" : "write",
+    contract.risk as RedditWebRisk,
+    contract.implementation,
+  )])) as Record<(typeof REDDIT_FLAIR_OPERATION_NAMES)[number], RedditWebOperationContract>,
   "profiles.read": observed(
     "read",
     "R1",

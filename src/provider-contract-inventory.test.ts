@@ -43,6 +43,18 @@ const registry = createProviderPluginRegistry(generatedProviderPlugins);
 const rows = [];
 const currentOnlyRows = [];
 const legacyRows = [];
+const predecessorRedditWriter = "646a29b320373f50ccdf9ae8b8b60d5147428f0f899a226480c2c5b009294d8a";
+const predecessorRedditReaders = [
+  "64a4c1e78ce8565a50613f63ff605f0f57f488617ef31386b5ddce5e3db885c9",
+  "058987e5eac61505ca53f80d8494fb5505e697e0313e6e197a198649be7c3a3c",
+  "05173089ec6d555845fa5fb7b08a70bd0bf810a18882c9ecdd784a437db791c5",
+  "dea85e9a5bc2a134ce48769655c2e4df89d68a876012b4af3e08f40526d02512",
+  "64a4c1e78ce8565a50613f63ff605f0f57f488617ef31386b5ddce5e3db885c9",
+  "058987e5eac61505ca53f80d8494fb5505e697e0313e6e197a198649be7c3a3c",
+  "05173089ec6d555845fa5fb7b08a70bd0bf810a18882c9ecdd784a437db791c5",
+  "16e4e48609c12d5ffdaf47e622764e06cc9b3381c6b8ceb2c9f773fa9d99bdd9",
+  "91cc3364ab1ccba66bd2e099f64fcccc187fde94145a8bf1eaa14f0f5533f6d7",
+];
 let acceptedLegacy = true;
 let rejectedUnknown = true;
 function stableJson(value) {
@@ -82,6 +94,7 @@ function isCurrentOnlyRow(row) {
     || (row[0] === "local-cli" && row[1] === "imessage")
     || (row[0] === "web-session-api" && row[1] === "clasificados")
     || (row[0] === "web-session-api" && row[1] === "github")
+    || (row[0] === "web-session-api" && row[1] === "reddit" && row[2].startsWith("flair."))
     || (row[0] === "web-session-api" && row[1] === "twitch");
 }
 function appendCurrentRow(row) {
@@ -98,11 +111,15 @@ for (const plugin of registry.list()) {
   for (const binding of plugin.bindings) {
     for (const operation of binding.operations) {
         for (const contractVersion of operation.contractVersions) {
-          const legacyImplementations = registry.legacyContractImplementationHashes(
+          const registeredLegacyImplementations = registry.legacyContractImplementationHashes(
             binding,
             operation.name,
             contractVersion,
           );
+          const isPredecessorReddit = binding.surfaceId === "reddit" && !operation.name.startsWith("flair.");
+          const legacyImplementations = isPredecessorReddit
+            ? predecessorRedditReaders.map((hash) => Buffer.from(hash, "hex"))
+            : registeredLegacyImplementations;
           if (binding.transport === "provider-api") {
           const contract = providerContracts.getProviderContract({
             provider: binding.surfaceId,
@@ -154,8 +171,12 @@ for (const plugin of registry.list()) {
             timeoutMs: 60_000,
             maxOutputBytes: 2 * 1024 * 1024,
           }, registry);
+          const currentHash = isPredecessorReddit
+            ? legacyHash(contract, Buffer.from(predecessorRedditWriter, "hex"), true)
+            : webContracts.webSessionContractHash(contract, registry);
+          acceptedLegacy &&= webContracts.isCompatibleWebSessionContractHash(contract, currentHash, registry);
           const includePredecessorInventory = appendCurrentRow([binding.transport, binding.surfaceId, operation.name, contractVersion,
-            webContracts.webSessionContractHash(contract, registry)]);
+            currentHash]);
           if (includePredecessorInventory) {
             legacyImplementations.forEach((implementationHash, index) => {
               const hash = legacyHash(contract, implementationHash, true);
@@ -264,8 +285,8 @@ describe("durable provider contract inventory", () => {
       expect(inventory).toEqual({
         rows: 322,
         sha256: predecessorDefaultInventorySha256,
-        currentOnlyRows: 53,
-        currentOnlySha256: "65c204bc77b831ea75cd8514d7d083b128feb5e1fa995075476b4b0d5e4c8656",
+        currentOnlyRows: 57,
+        currentOnlySha256: "03ed31e5bf7d7aaa27c1b1712987bbfe34ce9352d471ceddffb8adbb90931fe3",
         legacyRows: [
           322,
           322,
