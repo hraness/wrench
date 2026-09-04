@@ -27,7 +27,23 @@ bun run website:check
 
 The Vercel project uses the repository root and serves `website/dist`. Keep
 Vercel System Environment Variables enabled and configure its Production Branch
-as `website-production`. The checked-in build command injects exact non-secret
+as `website-production`. Project `prj_TZbDZ38ABPan158IqnczgsuTu6Ue` under team
+`team_UAd1iD2XogJlbFg4h14mRaPM` must remain linked to GitHub repository ID
+`1316443113` with `link.productionBranch=website-production`,
+`autoExposeSystemEnvs=true`, and persistent
+`autoAssignCustomDomains=true`; this is not a per-release switch. A false value
+can leave a candidate READY/STAGED with GitHub success while the apex and `www`
+stay on the old deployment, which the marker outcome rejects. The signed-in
+one-time correction requires exact before/after project, Production target,
+domain, deployment, and canonical-response readback around one setting-only
+false-to-true update. It must create no deployment or promotion, and later
+preflights require the value to remain true. Ambiguous updates are readback-only
+with no blind retry. A future staged candidate is recovered only after pinning
+its exact identity and excluding competitors, using one owner-authorized
+`vercel promote <exact-id-or-url>` followed by exact target/domain/marker
+readback—never a workflow rerun, ref rewrite, or individual alias assignment.
+Checked-in workflows remain token-free and never mutate Vercel project settings.
+The checked-in build command injects exact non-secret
 marker `WRENCH_VERCEL_BUILD=release-bound-v1`. Local admission is allowed only
 when that marker and every Vercel signal are absent; otherwise the exact marker,
 `VERCEL=1`, valid `VERCEL_ENV`, and exact nonempty `VERCEL_GIT_COMMIT_REF` are
@@ -47,9 +63,9 @@ immutable Latest GitHub Release must agree on the release identity. A missing br
 failure; neither workflow recreates it. One live no-bypass ruleset protects
 creation, deletion, and non-fast-forward movement on the production and canary
 refs. A second update rule denies every updater except exact App `4783991` as an
-`Integration` with `bypass_mode=always`. Production-only freeze ruleset
-`22182820` still blocks every production update until a fresh release-owner
-audit removes it by captured numeric ID. The retained privileged setup proof
+`Integration` with `bypass_mode=always`. Incident freeze ruleset `22182820` was
+removed by captured numeric ID during the audited v0.16.4 production promotion;
+it is historical, not a live control. The retained privileged setup proof
 establishes that private Hraness App `4783991`, through installation
 `158077029`, is installed only on exact repository `hraness/wrench`. The App
 registration and each separately repository-narrowed runtime token use exactly
@@ -73,13 +89,20 @@ only Wrench repository ID `1316443113`. It must also reconfirm the main-only
 `production-ref-writer-key` environment, sole reviewer `0thernet`,
 `prevent_self_review=false`, disabled administrator bypass, exactly four App
 identity variables and the one private-key secret. Any drift leaves production
-unchanged. Live production freeze `22182820` remains retained; this evidence
-correction does not authorize its removal.
+unchanged. The v0.16.4 incident-freeze removal does not authorize changing the
+two permanent rulesets or silently weakening a future incident freeze.
 The persistent canary remains at
 exact `C=0bf88a064233635e0c5485c61f9c533974a7dca4` and must never be reset,
 deleted, or repurposed. On a production deployment,
 `website:vercel-build` independently verifies checked-out HEAD, the matching
-GitHub tag commit, canonical npm, and the immutable Latest Release before building.
-Preview and local builds perform no external release verification.
+GitHub tag commit, canonical npm, and the immutable Latest Release before
+building. Only after the verified build passes does it emit the exact bounded
+seven-key `/.well-known/wrench-release.json`, binding that source identity to
+the strict Vercel deployment URL. The promotion outcome requires that URL to
+match the pinned successful deployment, observes stable apex marker and route
+health, and verifies one exact no-follow `www` 308 to the same apex marker path
+and query. Marker absence is allowed only for the v0.16.5 baseline that first
+introduces it. Preview and local builds perform no external release verification
+and emit no production marker.
 Root `middleware.ts` imports only `edge/negotiation.ts` for Accept q-values,
 `406`, and markdown 404 bodies.

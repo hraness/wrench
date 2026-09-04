@@ -283,6 +283,7 @@ describe("production website release verification", () => {
   test("accepts exact HEAD, npm, immutable release, and Latest evidence", async () => {
     expect(verifyProductionReleaseEvidence(packageValue, validEvidence())).toEqual({
       name: "@hraness/wrench",
+      sourceSha: headSha,
       tag: "v0.16.2",
       version: "0.16.2",
     });
@@ -292,7 +293,10 @@ describe("production website release verification", () => {
     await expect(verifyProductionRelease(packageValue, async (identity) => {
       requestedIdentity = identity;
       return validEvidence();
-    })).resolves.toEqual(parseProductionReleaseIdentity(packageValue));
+    })).resolves.toEqual({
+      ...parseProductionReleaseIdentity(packageValue),
+      sourceSha: headSha,
+    });
     expect(requestedIdentity).toEqual(parseProductionReleaseIdentity(packageValue));
   });
 

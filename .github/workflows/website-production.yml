@@ -211,6 +211,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+          VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
         run: node ./scripts/release-provider-outcome.mjs baseline
 
   advance_production_ref:
@@ -383,6 +384,11 @@ jobs:
   provider_outcome:
     name: Verify provider outcome
     needs: [verify, provider_baseline, select_promotion]
+    if: >-
+      ${{ !cancelled() &&
+          needs.verify.result == 'success' &&
+          needs.provider_baseline.result == 'success' &&
+          needs.select_promotion.result == 'success' }}
     permissions:
       contents: read
       deployments: read
