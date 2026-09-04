@@ -24,6 +24,9 @@ import {
 } from "./beeper-message-like-me-recovery";
 
 const temporaryRoots: string[] = [];
+const expectedRealWorkerValidationFailure = process.platform === "darwin"
+  ? "Photos library"
+  : "requires macOS";
 
 afterEach(() => {
   for (const root of temporaryRoots.splice(0)) {
@@ -129,6 +132,7 @@ describe("Apple Photos CLI recovery preflight", () => {
       await expect(exportApplePhotosContactEvidenceForCli({
         library: missingLibrary,
         environment,
+        dependencies: { platform: "darwin" },
       })).rejects.toThrow(
         "another private export is active or prior recovery is indeterminate",
       );
@@ -156,7 +160,8 @@ describe("Apple Photos CLI recovery preflight", () => {
     await expect(exportApplePhotosContactEvidenceForCli({
       library: join(home, "Missing.photoslibrary"),
       environment,
-    })).rejects.toThrow("Photos library");
+      dependencies: { platform: "darwin" },
+    })).rejects.toThrow(expectedRealWorkerValidationFailure);
 
     const admissionAfterFailure = acquireBeeperMessageLikeMeExportAdmission({
       environment,
@@ -244,7 +249,7 @@ describe("Apple Photos CLI recovery preflight", () => {
       library: join(home, "Missing.photoslibrary"),
       environment,
       dependencies: { platform: "darwin" },
-    })).rejects.toThrow("Photos library");
+    })).rejects.toThrow(expectedRealWorkerValidationFailure);
     expect(existsSync(join(
       state,
       "recovery",
@@ -301,7 +306,8 @@ describe("Apple Photos CLI recovery preflight", () => {
       "  });",
       "  process.exitCode = 2;",
       "} catch (error) {",
-      "  if (!(error instanceof Error) || !error.message.includes('Photos library')) process.exitCode = 3;",
+      "  const expected = process.platform === 'darwin' ? 'Photos library' : 'requires macOS';",
+      "  if (!(error instanceof Error) || !error.message.includes(expected)) process.exitCode = 3;",
       "}",
     ].join("\n");
     const result = spawnSync(process.execPath, [

@@ -569,12 +569,19 @@ describe("Apple Photos local source", () => {
     const value = fixture();
     const { temporaryDirectory: _explicitTemporary, ...defaultTemporary } =
       dependencies(value);
-    const result = await exportApplePhotosContactEvidence({
-      library: value.library,
-      dependencies: defaultTemporary,
-    });
-    expect(result.output.counts.matchedPeople).toBe(1);
-    close(value);
+    const previousTemporary = process.env.TMPDIR;
+    process.env.TMPDIR = value.temporary;
+    try {
+      const result = await exportApplePhotosContactEvidence({
+        library: value.library,
+        dependencies: defaultTemporary,
+      });
+      expect(result.output.counts.matchedPeople).toBe(1);
+    } finally {
+      if (previousTemporary === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previousTemporary;
+      close(value);
+    }
   });
 
   test("rejects a group-writable snapshot parent before creating a snapshot", async () => {
