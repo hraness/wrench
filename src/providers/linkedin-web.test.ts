@@ -91,9 +91,10 @@ describe("LinkedIn internal-web operation registry", () => {
     }
   });
 
-  test("graduates only private native Article saving and exact post publishing", () => {
+  test("graduates only private native Article saving, exact post publishing, and profile-activity reads", () => {
     const observed = new Set([
       "articles.draft.save",
+      "feeds.read",
       "organizations.read",
       "posts.publish",
       "profiles.read",
@@ -103,7 +104,9 @@ describe("LinkedIn internal-web operation registry", () => {
       expect(contract.state).toBe(observed.has(operation) ? "observed" : "capture-required");
       expect(contract.requests).toHaveLength(
         operation === "posts.publish" ? 5
-          : operation === "profiles.read" || operation === "organizations.read" ? 1
+          : operation === "profiles.read"
+            || operation === "organizations.read"
+            || operation === "feeds.read" ? 1
             : 0,
       );
     }
@@ -700,7 +703,11 @@ describe("LinkedIn R1 internal-request gate", () => {
     for (const operation of LINKEDIN_WEB_OPERATION_NAMES) {
       const contract = LINKEDIN_WEB_OPERATIONS[operation];
       if (contract.risk !== "R1" || contract.effect !== "read") continue;
-      if (operation === "profiles.read" || operation === "organizations.read") continue;
+      if (
+        operation === "profiles.read"
+        || operation === "organizations.read"
+        || operation === "feeds.read"
+      ) continue;
       expect(contract.requests).toHaveLength(0);
       expect(contract.state).toBe("capture-required");
       expect(() => assertLinkedInWebR1RequestAllowed(operation, {
@@ -739,6 +746,35 @@ describe("LinkedIn R1 internal-request gate", () => {
       method: "POST",
       url: "https://www.linkedin.com/company/hraness/",
     })).toThrow("LinkedIn profile reads require GET");
+  });
+
+  test("allows only the exact registered profile-activity GraphQL page", () => {
+    expect(LINKEDIN_WEB_OPERATIONS["feeds.read"]).toMatchObject({
+      state: "observed",
+      evidence: "live-response",
+    });
+    const url = new URL("https://www.linkedin.com/voyager/api/graphql");
+    url.searchParams.set("includeWebMetadata", "true");
+    url.searchParams.set(
+      "queryId",
+      "voyagerFeedDashProfileUpdates.7f16f6612fc18a3623688ca7a74d7696",
+    );
+    url.searchParams.set(
+      "variables",
+      "(count:10,profileUrn:urn:li:fsd_profile:ACoAAExactTargetProfile,start:0)",
+    );
+    expect(() => assertLinkedInWebR1RequestAllowed("feeds.read", {
+      method: "GET",
+      url,
+    })).not.toThrow();
+    expect(() => assertLinkedInWebR1RequestAllowed("feeds.read", {
+      method: "POST",
+      url,
+    })).toThrow("LinkedIn profile-activity reads require GET");
+    expect(() => assertLinkedInWebR1RequestAllowed("feeds.read", {
+      method: "GET",
+      url: "https://www.linkedin.com/voyager/api/graphql?queryId=voyagerFeedDashMainFeed.deadbeef",
+    })).toThrow("LinkedIn profile-activity request query shape is invalid");
   });
 
   test("rejects writes and unknown operations before inspecting caller-controlled request data", () => {

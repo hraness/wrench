@@ -274,11 +274,14 @@ const reviewedDynamicMapFieldNames: ReadonlySet<string> = new Set([
 /**
  * Structural capture hints only. They let the sanitizer retain known
  * registered-operation names and revisions from a private HAR; they are not
- * request rules and cannot authorize dispatch. Every LinkedIn web operation
- * remains capture-required in the executable contract registry.
+ * request rules and cannot authorize dispatch. Observed LinkedIn web reads
+ * still bind their executable request rules in the operation registry.
  */
 const reviewedLinkedInRegisteredQueries: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ["/voyager/api/graphql", new Set(["voyagerFeedDashMainFeed"])],
+  ["/voyager/api/graphql", new Set([
+    "voyagerFeedDashMainFeed",
+    "voyagerFeedDashProfileUpdates",
+  ])],
   ["/voyager/api/voyagerMessagingGraphQL/graphql", new Set([
     "messengerConversations",
     "messengerMailboxCounts",

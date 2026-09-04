@@ -36,6 +36,11 @@ import {
   LinkedInProfileBrowserResponseRejectedError,
   type LinkedInProfileBrowserTransport,
 } from "./linkedin-web-profile-browser";
+import {
+  LinkedInFeedBrowserFailure,
+  type LinkedInFeedBrowserTransport,
+} from "./linkedin-web-feed-browser";
+import { LINKEDIN_PROFILE_ACTIVITY_QUERY_PREFIX } from "./linkedin-web-feed";
 
 const MEMBER_ID = "123456789";
 const MEMBER_URN = `urn:li:fsd_profile:${MEMBER_ID}`;
@@ -330,6 +335,16 @@ function organizationRecipe(): WebSessionRecipe {
     contractVersion: 1,
     timeoutMs: 1_000,
     maxOutputBytes: 8 * 1024 * 1024,
+  };
+}
+
+function profileActivityRecipe(): WebSessionRecipe {
+  return {
+    site: "linkedin",
+    action: "feeds.read",
+    contractVersion: 2,
+    timeoutMs: 1_000,
+    maxOutputBytes: 4 * 1024 * 1024,
   };
 }
 
@@ -3011,5 +3026,156 @@ describe("LinkedIn authenticated internal-API runtime", () => {
     ));
     expect(message).toContain("LinkedIn authenticated web operations are capture-required");
     expect(calls).toEqual([]);
+  });
+
+  test("projects one contained-browser profile-activity page and always closes", async () => {
+    const activityUrn = "urn:li:activity:7123456789012345678";
+    const updateUrn = `urn:li:fsd_update:(${activityUrn},FEED_DETAIL,EMPTY,DEFAULT,false)`;
+    const profileUrn = "urn:li:fsd_profile:ACoAAExactTargetProfile";
+    const queryId = `${LINKEDIN_PROFILE_ACTIVITY_QUERY_PREFIX}.7f16f6612fc18a3623688ca7a74d7696`;
+    const browserCalls: string[] = [];
+    const transport: LinkedInFeedBrowserTransport = {
+      currentIdentityResponse: () => {
+        browserCalls.push("identity");
+        return Promise.resolve(currentIdentityResponse());
+      },
+      resolveProfileActivityBinding: (vanity) => {
+        browserCalls.push(`observe:${vanity}`);
+        return Promise.resolve({ queryId, profileUrn });
+      },
+      readProfileActivityPage: (input) => {
+        browserCalls.push(`page:${input.count}:${input.start}`);
+        expect(input).toEqual({
+          queryId,
+          profileUrn,
+          count: 10,
+          start: 0,
+        });
+        return Promise.resolve({
+          data: {
+            data: {
+              feedDashProfileUpdatesByMemberFeed: {
+                $type: "com.linkedin.restli.common.CollectionResponse",
+                "*elements": [updateUrn],
+                paging: { count: 1, start: 0, links: [] },
+              },
+            },
+          },
+          included: [{
+            $type: "com.linkedin.voyager.dash.feed.Update",
+            entityUrn: updateUrn,
+            commentary: { text: { text: "A public LinkedIn post about humor corpora." } },
+            actor: {
+              navigationContext: { actionTarget: "https://www.linkedin.com/in/j-hawkins" },
+              urn: profileUrn,
+              subDescription: { text: "2d" },
+            },
+            metadata: {
+              shareUrn: "urn:li:share:7123456789012345678",
+              createdAt: 1_725_000_000_000,
+            },
+            resharedUpdate: null,
+          }, {
+            $type: "com.linkedin.voyager.dash.feed.SocialActivityCounts",
+            urn: activityUrn,
+            numLikes: 42,
+            numComments: 5,
+            numShares: 1,
+          }],
+        });
+      },
+      close: () => {
+        browserCalls.push("close");
+        return Promise.resolve();
+      },
+    };
+    const result = await executeLinkedInWebOperation(profileActivityRecipe(), {
+      feed: "profile-activity",
+      vanity: "j-hawkins",
+      limit: 10,
+    }, linkedinBrowserProfileAuth, {
+      dependencies: {
+        acquireCookies: () => Promise.reject(new Error("profile-activity exported cookies")),
+        fetch: () => Promise.reject(new Error("profile-activity used direct fetch")),
+        now: () => Date.parse("2026-09-04T19:35:00.000Z"),
+        createFeedBrowserTransport: () => Promise.resolve(transport),
+      },
+    });
+    expect(result).toMatchObject({
+      status: "succeeded",
+      finalUrl: "https://www.linkedin.com/in/j-hawkins/recent-activity/all/",
+      output: {
+        schemaVersion: 1,
+        provider: "linkedin",
+        feed: "profile-activity",
+        complete: true,
+        posts: [{
+          activityUrn,
+          text: "A public LinkedIn post about humor corpora.",
+          reactionCount: 42,
+          commentCount: 5,
+          repostCount: 1,
+          kind: "original",
+        }],
+      },
+    });
+    expect(browserCalls).toEqual([
+      "identity",
+      "observe:j-hawkins",
+      "page:10:0",
+      "close",
+    ]);
+  });
+
+  test("refuses the capture-required home feed before starting a browser", async () => {
+    let created = 0;
+    await expect(executeLinkedInWebOperation(profileActivityRecipe(), {
+      feed: "home",
+    }, linkedinBrowserProfileAuth, {
+      dependencies: {
+        createFeedBrowserTransport: () => {
+          created += 1;
+          return Promise.reject(new Error("home feed started a browser"));
+        },
+      },
+    })).rejects.toThrow("home-feed read remains capture-required");
+    expect(created).toBe(0);
+  });
+
+  test("maps a signed-out profile-activity authwall to auth repair", async () => {
+    const browserCalls: string[] = [];
+    const transport: LinkedInFeedBrowserTransport = {
+      currentIdentityResponse: () => {
+        browserCalls.push("identity");
+        return Promise.reject(new LinkedInFeedBrowserFailure(
+          "authwall",
+          "LinkedIn profile-activity browser reached the signed-out authwall",
+        ));
+      },
+      resolveProfileActivityBinding: () => Promise.reject(new Error("authwall crossed observation")),
+      readProfileActivityPage: () => Promise.reject(new Error("authwall crossed page read")),
+      close: () => {
+        browserCalls.push("close");
+        return Promise.resolve();
+      },
+    };
+    const result = await executeLinkedInWebOperation(profileActivityRecipe(), {
+      feed: "profile-activity",
+      profile_url: "https://www.linkedin.com/in/j-hawkins/",
+    }, linkedinBrowserProfileAuth, {
+      dependencies: {
+        createFeedBrowserTransport: () => Promise.resolve(transport),
+      },
+    });
+    expect(result).toMatchObject({
+      status: "failed",
+      output: null,
+      readFailure: {
+        category: "auth-repair-required",
+        retryDisposition: "repair-auth",
+      },
+    });
+    expect(result.error).toContain("signed-out authwall");
+    expect(browserCalls).toEqual(["identity", "close"]);
   });
 });

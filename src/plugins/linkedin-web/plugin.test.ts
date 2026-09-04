@@ -10,7 +10,51 @@ if (binding?.transport !== "web-session-api") {
 
 describe("LinkedIn web provider plugin", () => {
   test("versions the profile-stat source closure independently", () => {
-    expect(linkedinWebPlugin.version).toBe("1.5.0");
+    expect(linkedinWebPlugin.version).toBe("1.6.0");
+  });
+
+  test("advertises observed profile-activity pagination", () => {
+    const feed = binding.operations.find((operation) =>
+      operation.name === "feeds.read" && operation.contractVersion === 2);
+    const archivedFeed = binding.operations.find((operation) =>
+      operation.name === "feeds.read" && operation.contractVersion === 1);
+    expect(feed).toMatchObject({
+      contractVersion: 2,
+      risk: "R1",
+      state: "observed",
+      dispatch: "none",
+      input: {
+        properties: {
+          feed: { type: "string", enum: ["home", "profile-activity"] },
+          profile_url: { type: "string", minLength: 25, maxLength: 2048 },
+          vanity: { type: "string", minLength: 2, maxLength: 100 },
+        },
+        required: ["feed"],
+      },
+    });
+    expect(feed?.historicalContractVersions).toBeUndefined();
+    expect(archivedFeed).toMatchObject({
+      contractVersion: 1,
+      state: "capture-required",
+      input: {
+        properties: {
+          feed: { type: "string", enum: ["home"] },
+        },
+        required: ["feed"],
+      },
+    });
+    expect(feed?.validateInput({
+      feed: "profile-activity",
+      vanity: "j-hawkins",
+    })).toEqual([]);
+    expect(feed?.validateInput({
+      feed: "home",
+      vanity: "j-hawkins",
+    })).toContain("input.vanity is not accepted for the capture-required home feed");
+    expect(linkedinWebPlugin.implementationSources.map((source) => source.label))
+      .toContain("providers/linkedin-web-feed.ts");
+    expect(linkedinWebPlugin.implementationSources.map((source) => source.label))
+      .toContain("providers/linkedin-web-feed-browser.ts");
   });
 
   test("advertises observed exact personal and organization profile reads", () => {

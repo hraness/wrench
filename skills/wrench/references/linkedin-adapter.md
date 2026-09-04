@@ -1,10 +1,16 @@
 # LinkedIn authenticated web API adapter
 
-The current `linkedin-web` schema-v4 adapter has four observed operations:
-`profiles.read@1`, `organizations.read@1`, `articles.draft.save@7`, and
-`posts.publish@3`. The two profile-stat operations bind the current member,
-then read one exact self profile or requested organization Page without DOM
-automation. The draft operation creates or replaces one private native Article
+The current `linkedin-web` schema-v4 adapter has five observed operations:
+`profiles.read@1`, `organizations.read@1`, `feeds.read@2`,
+`articles.draft.save@7`, and `posts.publish@3`. The two profile-stat operations
+bind the current member, then read one exact self profile or requested
+organization Page without DOM automation. `feeds.read@2` pages one member's
+recent-activity posts through the same contained Chrome session: it binds the
+signed-in viewer, resolves the live `voyagerFeedDashProfileUpdates` query on
+`/in/{vanity}/recent-activity/all/`, and projects authored text, engagement
+counts when present, original-versus-reshare kind, and an opaque next cursor.
+`feed=home` remains capture-required and is refused before any browser starts.
+The draft operation creates or replaces one private native Article
 draft for the bound current member, supports paragraphs, H1/H2 headings, native blockquotes,
 native HTTPS links, one distinct banner cover, and ordered inline images with
 required alt text and optional captions, and independently verifies the exact unpublished result
@@ -98,7 +104,7 @@ The standalone client can strictly review a short-lived `__cf_bm` edge-cookie
 rotation: it accepts only that name, validates origin, attributes, expiry, and
 deletion semantics, and binds the encrypted cache to the auth-locator hash.
 Removing the auth locator removes that cache. Profile-backed statistics do not
-export their session into that standalone client. Only the four observed
+export their session into that standalone client. Only the five observed
 operations may cross the execution boundary; every capture-required operation
 still refuses before its provider client is created.
 
@@ -144,6 +150,40 @@ conversation-list, and message endpoint families. Every family remains
 capture-required until its current variables, bounded target-bound projection,
 completeness, and incidental effects are proved. Reading a conversation must
 use only a reviewed message query and must not mark it read.
+
+## Profile activity posts
+
+`feeds.read@2` is an observed R1 read for one page of a member's
+`/in/{vanity}/recent-activity/all/` posts. It does not require official OAuth
+`posts.read` or `w_member_social`. Use a path-backed Chrome profile or a
+cookie-source overlay that is already signed into LinkedIn. The operation
+always uses contained headed Chrome; a standalone exported-cookie HTTP client
+is not a fallback.
+
+Pass `feed=profile-activity` plus one `profile_url` or `vanity`. The URL may
+be the public profile or the recent-activity path. An opaque `cursor` from the
+previous page continues the same vanity. `limit` is 1–100 and defaults to 20.
+`feed=home` stays reserved and refuses before the browser starts.
+
+The page binds the signed-in viewer to the auth subject, then observes exactly
+one live `voyagerFeedDashProfileUpdates.<32-hex>` query and one target profile
+URN. Zero or several hashes fail closed. Each item projects the activity URN,
+canonical feed URL, author vanity or URN when present, full commentary text,
+created or relative time when present, reaction/comment/repost counts when
+LinkedIn supplies them, media presence, and original-versus-reshare kind.
+Missing counts stay `null`; the runtime never invents zero. If LinkedIn omits
+paging or the page is full, `complete` stays false and `nextCursor` continues.
+A provider page larger than `limit` fails closed.
+
+```sh
+printf '%s' '{"feed":"profile-activity","profile_url":"https://www.linkedin.com/in/j-hawkins/","limit":20}' \
+  | wrench invoke linkedin-web feeds.read --input - --auth linkedin-main --json
+printf '%s' '{"feed":"profile-activity","vanity":"varunr96","cursor":"<opaque>","limit":20}' \
+  | wrench invoke linkedin-web feeds.read --input - --auth linkedin-main --json
+```
+
+Do not treat this page as a complete profile history, a home feed, or
+permission to like, comment, or message.
 
 ## Profiles, organization Pages, and connections
 
@@ -301,7 +341,7 @@ Keep query IDs, CSRF material, cookies, variables, feature sets, and private ide
 
 The current registry keeps these unavailable until their exact first-party exchanges are captured and reviewed:
 
-- `feeds.read`, `relationships.recommendations.read`, `messaging.list`, `messaging.read`, `posts.read`, `comments.read`, and `articles.read` (`R1`);
+- `feeds.read` `feed=home`, `relationships.recommendations.read`, `messaging.list`, `messaging.read`, `posts.read`, `comments.read`, and `articles.read` (`R1`);
 - `messaging.send` (`R3`);
 - `posts.repost` and `posts.quote` (`R3`);
 - `comments.create` and `replies.create` (`R3`);
