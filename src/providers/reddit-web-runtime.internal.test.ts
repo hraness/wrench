@@ -8,6 +8,7 @@ import type { CookieRecordReader } from "@hraness/kb/clip/acquire";
 import type { StrictCookie } from "@hraness/kb/clip/cookies";
 import type { WrenchAuth } from "../auth";
 import type { OperationInput, WebSessionRecipe } from "../model";
+import { REDDIT_FLAIR_OPERATION_NAMES } from "../plugins/reddit-web/flair";
 import {
   executeRedditWebOperation,
   prepareRedditWebDesiredState,
@@ -24,6 +25,24 @@ const POST_ID = "t3_abc123";
 const COMMENT_ID = "t1_def456";
 const MESSAGE_ID = "t4_msg123";
 const FIRST_MODHASH = "first-synthetic-modhash";
+
+test("unobserved flair operations fail before cookies, network, or dispatch", async () => {
+  for (const action of REDDIT_FLAIR_OPERATION_NAMES) {
+    let acquired = false;
+    let dispatched = false;
+    const calls: CapturedRequest[] = [];
+    await expect(executeRedditWebOperation({
+      site: "reddit", action, contractVersion: 1,
+      timeoutMs: 60_000, maxOutputBytes: 524_288,
+    }, { community: "example" }, redditAuth, {
+      beforeDispatch: async () => { dispatched = true; },
+      dependencies: dependencies(calls, () => jsonResponse({}), () => { acquired = true; }),
+    })).rejects.toThrow("capture-required");
+    expect(acquired).toBe(false);
+    expect(dispatched).toBe(false);
+    expect(calls).toEqual([]);
+  }
+});
 
 const redditAuth = {
   schemaVersion: 1,
