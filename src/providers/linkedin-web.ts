@@ -99,9 +99,17 @@ export const LINKEDIN_WEB_OPERATIONS = {
   "feeds.read": {
     effect: "read",
     risk: "R1",
-    state: "capture-required",
-    evidence: "live-har",
-    requests: [],
+    state: "observed",
+    evidence: "live-response",
+    requests: [{
+      kind: "registered-query",
+      method: "GET",
+      path: "/voyager/api/graphql",
+      queryPrefix: "voyagerFeedDashProfileUpdates",
+      allowedQueryParameters: ["includeWebMetadata", "queryId", "variables"],
+      requiredQueryParameters: ["includeWebMetadata", "queryId", "variables"],
+      fixedQueryParameters: [["includeWebMetadata", "true"]],
+    }],
   },
   "profiles.read": {
     effect: "read",
@@ -3188,6 +3196,44 @@ export function assertLinkedInWebR1RequestAllowed(
     ) return;
     if (operationValue === "profiles.read") linkedInPersonalProfileTarget(url.href);
     else linkedInOrganizationTarget(url.href);
+    return;
+  }
+  if (operationValue === "feeds.read") {
+    if (!isRecord(requestValue)) {
+      throw new Error("LinkedIn profile-activity request must be an object");
+    }
+    const method = boundedText(requestValue.method, "LinkedIn profile-activity request method", 16)
+      .toUpperCase();
+    if (method !== "GET") throw new Error("LinkedIn profile-activity reads require GET");
+    const rawUrl = requestValue.url;
+    if (!(rawUrl instanceof URL) && typeof rawUrl !== "string") {
+      throw new Error("LinkedIn profile-activity request URL is invalid");
+    }
+    const url = rawUrl instanceof URL ? new URL(rawUrl.href) : new URL(rawUrl);
+    if (
+      url.origin !== "https://www.linkedin.com"
+      || url.pathname !== LINKEDIN_GRAPHQL_PATH
+      || url.username !== ""
+      || url.password !== ""
+      || url.hash !== ""
+    ) throw new Error("LinkedIn profile-activity request escaped its exact reviewed route");
+    const queryNames = [...url.searchParams.keys()];
+    if (
+      queryNames.length !== 3
+      || queryNames[0] !== "includeWebMetadata"
+      || queryNames[1] !== "queryId"
+      || queryNames[2] !== "variables"
+      || url.searchParams.get("includeWebMetadata") !== "true"
+    ) throw new Error("LinkedIn profile-activity request query shape is invalid");
+    resolveLinkedInRegisteredQueryId(
+      "voyagerFeedDashProfileUpdates",
+      [url.searchParams.get("queryId")],
+    );
+    const variables = url.searchParams.get("variables");
+    if (
+      typeof variables !== "string"
+      || !/\bprofileUrn:urn:li:fsd_profile:[A-Za-z0-9_-]{1,256}\b/u.test(variables)
+    ) throw new Error("LinkedIn profile-activity request omitted its profile URN");
     return;
   }
   throw new Error("LinkedIn R1 operation has no captured request contract");

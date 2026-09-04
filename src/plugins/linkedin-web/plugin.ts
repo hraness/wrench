@@ -13,6 +13,7 @@ import {
   articleDraftImageFileInputs,
 } from "../../article-draft-images";
 import archivedLinkedInWebManifest from "../../assets/adapters/linkedin/wrench-web-adapter.v1.8.0.json";
+import archivedLinkedInWebFeedManifest from "../../assets/adapters/linkedin/wrench-web-adapter.v1.19.0.json";
 import {
   browserSessionAuthKinds,
   webSessionContractOperations,
@@ -22,6 +23,7 @@ import {
   reviewedArchivedWebSessionContract,
   webSessionContractDefinitions,
 } from "../../web-session-contract-definitions";
+import { linkedInProfileActivityInputIssues } from "../../providers/linkedin-web-feed";
 
 const linkedinContracts = webSessionContractDefinitions.linkedin;
 if (linkedinContracts === undefined) {
@@ -187,7 +189,7 @@ function linkedinArticleDraftV2Dispatches(
 
 const currentOperations = webSessionContractOperations(
   Object.values(linkedinContracts),
-  "e46975d0843555649e9fd48aa46c31c9ab92bc269103105d804c5fcbfbb74363",
+    "f27fb4c97d91208e42f3a22ef680c1c3ade194f95876ea939abcd0bf93c6edbe",
   {
     "posts.publish": [2],
   },
@@ -218,12 +220,48 @@ const currentOperations = webSessionContractOperations(
       }),
     });
   }
+  if (operation.name === "feeds.read") {
+    return Object.freeze({
+      ...operation,
+      validateInput: linkedInProfileActivityInputIssues,
+    });
+  }
   return operation.name === "articles.draft.save"
     ? Object.freeze({
         ...operation,
         validateInput: linkedinArticleDraftV2Issues,
       })
     : operation;
+});
+
+const archivedFeedsReadContract = reviewedArchivedWebSessionContract(
+  archivedLinkedInWebFeedManifest,
+  {
+    adapterId: "linkedin-web",
+    adapterVersion: "1.19.0",
+    site: "linkedin",
+    operation: "feeds.read",
+    contractVersion: 1,
+    risk: "R1",
+    state: "capture-required",
+    implementation:
+      "capture-required LinkedIn home-feed reservation; profile-activity pagination lives on feeds.read@2",
+  },
+);
+
+const archivedFeedsReadOperation = Object.freeze({
+  name: archivedFeedsReadContract.operation,
+  contractVersion: archivedFeedsReadContract.contractVersion,
+  risk: archivedFeedsReadContract.risk,
+  input: archivedFeedsReadContract.input,
+  sideEffect: archivedFeedsReadContract.sideEffect,
+  idempotency: archivedFeedsReadContract.idempotency,
+  dedupeWindowMs: archivedFeedsReadContract.dedupeWindowMs,
+  state: archivedFeedsReadContract.state,
+  dispatch: archivedFeedsReadContract.dispatch,
+  implementation: archivedFeedsReadContract.implementation,
+  planDispatches: () => Object.freeze([]),
+  validateInput: () => Object.freeze([]),
 });
 
 const archivedArticleDraftContract = reviewedArchivedWebSessionContract(
@@ -284,13 +322,14 @@ const archivedArticleDraftOperation = Object.freeze({
 
 const operations = Object.freeze([
   ...currentOperations,
+  archivedFeedsReadOperation,
   archivedArticleDraftOperation,
 ]);
 
 export const linkedinWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "linkedin-web",
-  version: "1.5.0",
+  version: "1.6.0",
   displayName: "LinkedIn Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [
@@ -304,6 +343,8 @@ export const linkedinWebPlugin = defineProviderPlugin({
     ["providers/linkedin-web-article-browser.ts", "../../providers/linkedin-web-article-browser.ts"],
     ["providers/linkedin-web-post-browser.ts", "../../providers/linkedin-web-post-browser.ts"],
     ["providers/linkedin-web-profile-browser.ts", "../../providers/linkedin-web-profile-browser.ts"],
+    ["providers/linkedin-web-feed.ts", "../../providers/linkedin-web-feed.ts"],
+    ["providers/linkedin-web-feed-browser.ts", "../../providers/linkedin-web-feed-browser.ts"],
     ["providers/linkedin-web-runtime.ts", "../../providers/linkedin-web-runtime.ts"],
   ]),
   bindings: [{

@@ -374,11 +374,13 @@ const BLUESKY_WEB_OPERATIONS = operationPolicies("bluesky", [
 });
 const LINKEDIN_WEB_OPERATIONS = operationPolicies("linkedin", [
   "articles.draft.save",
+  "feeds.read",
   "organizations.read",
   "posts.publish",
   "profiles.read",
 ], {
   "articles.draft.save": 7,
+  "feeds.read": 2,
   "posts.publish": 3,
 });
 const GITHUB_WEB_OPERATIONS = operationPolicies("github", [
@@ -568,7 +570,14 @@ const bluesky = {
 
 const linkedin = {
   "contacts.list": contract("linkedin", "contacts.list", "R1", "capture-required", "consumer-web contact statistics require a fresh viewer-bound messaging-participant collection with real conversation and message pagination, group attribution, completeness, and acknowledgement-free behavior"),
-  "feeds.read": contract("linkedin", "feeds.read", "R1", "capture-required", "the registered feed query revision is known, but its exact current value-level variables need a fresh reviewed capture"),
+  "feeds.read": contract(
+    "linkedin",
+    "feeds.read",
+    LINKEDIN_WEB_OPERATIONS["feeds.read"].risk,
+    LINKEDIN_WEB_OPERATIONS["feeds.read"].state,
+    "reviewed contained-Chrome profile-activity page: resolve one live voyagerFeedDashProfileUpdates query, bind the signed-in viewer, and project one recent-activity page for the requested vanity. feed=home remains capture-required and is refused at runtime",
+    LINKEDIN_WEB_OPERATIONS["feeds.read"].contractVersion,
+  ),
   "profiles.read": contract("linkedin", "profiles.read", LINKEDIN_WEB_OPERATIONS["profiles.read"].risk, LINKEDIN_WEB_OPERATIONS["profiles.read"].state, LINKEDIN_WEB_OPERATIONS["profiles.read"].reason),
   "organizations.read": contract("linkedin", "organizations.read", LINKEDIN_WEB_OPERATIONS["organizations.read"].risk, LINKEDIN_WEB_OPERATIONS["organizations.read"].state, LINKEDIN_WEB_OPERATIONS["organizations.read"].reason),
   "relationships.recommendations.read": contract("linkedin", "relationships.recommendations.read", "R1", "capture-required", "recommended-connection collection variables, paging, and viewer binding require a reviewed capture"),

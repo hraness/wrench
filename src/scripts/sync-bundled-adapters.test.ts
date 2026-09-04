@@ -193,6 +193,7 @@ describe("single-process bundled adapter generation sync", () => {
       "linkedin-web@1.16.0",
       "linkedin-web@1.17.0",
       "linkedin-web@1.18.0",
+      "linkedin-web@1.19.0",
       "linkedin-web@1.2.0",
       "linkedin-web@1.3.0",
       "linkedin-web@1.4.0",

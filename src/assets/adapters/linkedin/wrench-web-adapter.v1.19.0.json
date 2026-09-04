@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "id": "linkedin-web",
-  "version": "1.20.0",
+  "version": "1.19.0",
   "displayName": "LinkedIn (Authenticated Web API)",
   "surfaceId": "linkedin",
   "origins": [
@@ -51,7 +51,7 @@
       }
     },
     "feeds.read": {
-      "description": "Observed contract: read one page of a member's recent-activity posts through a contained Chrome session. Resolves the live voyagerFeedDashProfileUpdates query, projects authored text and engagement counts when present, and returns an opaque next cursor. feed=home remains capture-required.",
+      "description": "Capture-required contract reservation: the LinkedIn home-feed query revision is known, but execution remains disabled until exact current variables and a bounded response projection are captured and reviewed.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -60,33 +60,20 @@
         "properties": {
           "feed": {
             "type": "string",
-            "description": "Feed surface. profile-activity pages a member recent-activity list. home remains capture-required.",
+            "description": "Captured feed surface",
             "enum": [
-              "home",
-              "profile-activity"
+              "home"
             ]
-          },
-          "profile_url": {
-            "type": "string",
-            "description": "Exact public LinkedIn profile or recent-activity URL",
-            "minLength": 25,
-            "maxLength": 2048
-          },
-          "vanity": {
-            "type": "string",
-            "description": "Public LinkedIn profile vanity, such as j-hawkins",
-            "minLength": 2,
-            "maxLength": 100
           },
           "cursor": {
             "type": "string",
-            "description": "Opaque cursor returned by the preceding profile-activity page",
+            "description": "Opaque cursor returned by the preceding page",
             "minLength": 1,
             "maxLength": 4096
           },
           "limit": {
             "type": "number",
-            "description": "Maximum recent-activity posts to project",
+            "description": "Maximum feed entries to project",
             "minimum": 1,
             "maximum": 100
           }
@@ -98,7 +85,7 @@
       "webSession": {
         "site": "linkedin",
         "action": "feeds.read",
-        "contractVersion": 2,
+        "contractVersion": 1,
         "timeoutMs": 60000,
         "maxOutputBytes": 4194304
       }
