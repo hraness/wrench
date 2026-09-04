@@ -513,8 +513,8 @@ describe("provider plugin definition and registry", () => {
         id: "meta-web",
         surface: "instagram",
         version: "1.5.0",
-        current: "1a1c67883a899a3a0b414656f0e4033579e9ea89dc29e80691b733b28402c979",
-        prior: "349991a62eb1b3e08c3917948554ba4e53016cf66f30d0d4513c2c0321548763",
+        current: "7fa464a81bdedf8926f36b6c6e75f6c1484b66bbb65672ce626d7e580d339a52",
+        prior: "1a1c67883a899a3a0b414656f0e4033579e9ea89dc29e80691b733b28402c979",
         operation: "profiles.read",
         contractVersion: 1,
       },
@@ -589,7 +589,7 @@ describe("provider plugin definition and registry", () => {
     expect(plugin?.version).toBe("1.5.0");
     if (binding === undefined) throw new Error("Meta provider binding is unavailable");
     expect(providerPluginRegistry.contractImplementationHash(binding).toString("hex"))
-      .toBe("1a1c67883a899a3a0b414656f0e4033579e9ea89dc29e80691b733b28402c979");
+      .toBe("7fa464a81bdedf8926f36b6c6e75f6c1484b66bbb65672ce626d7e580d339a52");
     expect(providerPluginRegistry.legacyContractImplementationHashes(binding, "contacts.list", 1)
       .map((hash) => hash.toString("hex")))
       .toContain("8b5f59a6aa223ea1493fb49c2f9959565fef931318af55880973c3dd2758c101");
