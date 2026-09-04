@@ -383,6 +383,11 @@ jobs:
   provider_outcome:
     name: Verify provider outcome
     needs: [verify, provider_baseline, select_promotion]
+    if: >-
+      ${{ !cancelled() &&
+          needs.verify.result == 'success' &&
+          needs.provider_baseline.result == 'success' &&
+          needs.select_promotion.result == 'success' }}
     permissions:
       contents: read
       deployments: read

@@ -2846,6 +2846,14 @@ fi
     expect(selectionJob).toContain("ADVANCE_RESULT");
     expect(selectionJob).toContain("EXISTING_RESULT");
     expect(providerJob).toContain("timeout-minutes: 30");
+    expect(providerJob).toContain(
+      "if: >-\n" +
+        "      ${{ !cancelled() &&\n" +
+        "          needs.verify.result == 'success' &&\n" +
+        "          needs.provider_baseline.result == 'success' &&\n" +
+        "          needs.select_promotion.result == 'success' }}",
+    );
+    expect(providerJob).not.toContain("always()");
     expect(permissions(providerJob)).toEqual(["contents: read", "deployments: read"]);
     expect(providerJob).not.toContain("contents: write");
     expect(providerJob).not.toContain("continue-on-error");
