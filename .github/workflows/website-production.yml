@@ -211,6 +211,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
+          VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
         run: node ./scripts/release-provider-outcome.mjs baseline
 
   advance_production_ref:

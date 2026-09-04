@@ -37,17 +37,25 @@ import {
   assertReleaseTagNewerThanPublished,
   collectDeploymentStatuses,
   collectProductionDeployments,
-  createProviderBaseline,
+  createProviderBaseline as createProviderBaselineRaw,
   decodeProviderReceipt,
   encodeProviderReceipt,
   parseIncludedGitHubResponse,
   promoteWebsiteProduction,
   revalidateReleaseAuthority,
   releaseGraphqlRequestBudget,
+  releasePublicHostRequestBudget,
   releaseRestRequestBudget,
   scrubReadOnlyGithubEnvironment,
   waitForProviderOutcome as waitForProviderOutcomeRaw,
+  WrenchPublicSite,
 } from "./release-provider-outcome.mjs";
+import {
+  createProductionReleaseMarker,
+  parseProductionReleaseMarker,
+  PRODUCTION_RELEASE_MARKER_PATH,
+  serializeProductionReleaseMarker,
+} from "../website/production-release-marker.mjs";
 import {
   advanceWebsiteProductionRef,
   verifiedReleaseFetchArguments,
@@ -281,15 +289,184 @@ const providerAuthority = Object.freeze({
   verifiedTag: providerTag,
 });
 
-const waitForProviderOutcome = (
-  options: Parameters<typeof waitForProviderOutcomeRaw>[0],
-): ReturnType<typeof waitForProviderOutcomeRaw> => waitForProviderOutcomeRaw({
-  defaultBranch: "main",
-  eventName: "push",
-  recoveryWorkflowSha: "",
-  ...providerAuthority,
+type ProviderMarker = ReturnType<typeof createProductionReleaseMarker>;
+
+function providerMarker(
+  sourceSha: string,
+  tag: string,
+  deploymentId: number,
+): ProviderMarker {
+  return createProductionReleaseMarker({
+    deploymentUrl: `https://wrench-${String(deploymentId)}-hraness.vercel.app`,
+    name: "@hraness/wrench",
+    sourceSha,
+    tag,
+    version: tag.slice(1),
+  });
+}
+
+function providerMarkerObservation(
+  marker: ProviderMarker | "missing",
+  requestIndex: number,
+): Readonly<Record<string, unknown>> {
+  const requestPath = `${PRODUCTION_RELEASE_MARKER_PATH}?release=${providerTag}&source=${providerVerifiedSha}&nonce=fixture-${String(requestIndex).padStart(4, "0")}`;
+  if (marker === "missing") {
+    return Object.freeze({
+      bodySha256: createHash("sha256").update("<!doctype html>\nmissing\n").digest("hex"),
+      kind: "missing",
+      requestPath,
+    });
+  }
+  const body = serializeProductionReleaseMarker(marker);
+  return Object.freeze({
+    bodySha256: createHash("sha256").update(body).digest("hex"),
+    kind: "release",
+    marker,
+    requestPath,
+  });
+}
+
+class ProviderPublicSiteFixture {
+  readonly calls: string[] = [];
+  readonly timeouts: number[] = [];
+  readonly markerSnapshots: readonly (ProviderMarker | "missing")[];
+  readonly healthDigests: ReadonlyMap<string, readonly string[]>;
+  readonly redirectDigests: readonly string[];
+  readonly readHook: ((timeoutMilliseconds: number) => void) | undefined;
+  #markerRead = 0;
+  #healthReads = new Map<string, number>();
+  #redirectRead = 0;
+
+  constructor({
+    healthDigests = new Map(),
+    markerSnapshots = [providerMarker(providerVerifiedSha, providerTag, 20)],
+    readHook,
+    redirectDigests = [createHash("sha256").update("Redirecting...\n").digest("hex")],
+  }: Readonly<{
+    healthDigests?: ReadonlyMap<string, readonly string[]>;
+    markerSnapshots?: readonly (ProviderMarker | "missing")[];
+    readHook?: (timeoutMilliseconds: number) => void;
+    redirectDigests?: readonly string[];
+  }> = {}) {
+    this.healthDigests = healthDigests;
+    this.markerSnapshots = markerSnapshots;
+    this.readHook = readHook;
+    this.redirectDigests = redirectDigests;
+  }
+
+  #record(call: string, timeoutMilliseconds: number): void {
+    this.calls.push(call);
+    this.timeouts.push(timeoutMilliseconds);
+    this.readHook?.(timeoutMilliseconds);
+  }
+
+  async readMarker(
+    _tag: string,
+    _sha: string,
+    { timeoutMilliseconds }: Readonly<{ timeoutMilliseconds: number }>,
+  ): Promise<Readonly<Record<string, unknown>>> {
+    this.#record("marker", timeoutMilliseconds);
+    const snapshot = this.markerSnapshots[
+      Math.min(this.#markerRead, this.markerSnapshots.length - 1)
+    ];
+    this.#markerRead += 1;
+    if (snapshot === undefined) throw new Error("public marker fixture is empty");
+    return providerMarkerObservation(snapshot, this.#markerRead);
+  }
+
+  async readHealthRoute(
+    route: string,
+    _tag: string,
+    _sha: string,
+    { timeoutMilliseconds }: Readonly<{ timeoutMilliseconds: number }>,
+  ): Promise<Readonly<Record<string, unknown>>> {
+    this.#record(`health ${route}`, timeoutMilliseconds);
+    const read = this.#healthReads.get(route) ?? 0;
+    this.#healthReads.set(route, read + 1);
+    const snapshots = this.healthDigests.get(route) ?? [
+      createHash("sha256").update(`stable ${route}`).digest("hex"),
+    ];
+    const bodySha256 = snapshots[Math.min(read, snapshots.length - 1)];
+    if (bodySha256 === undefined) throw new Error("public health fixture is empty");
+    return Object.freeze({
+      bodyBytes: 64,
+      bodySha256,
+      contentType: route === "/llms.txt"
+        ? "text/plain; charset=utf-8"
+        : "text/html; charset=utf-8",
+      path: route,
+      status: 200,
+    });
+  }
+
+  async readWwwRedirect(
+    requestPath: string,
+    { timeoutMilliseconds }: Readonly<{ timeoutMilliseconds: number }>,
+  ): Promise<Readonly<Record<string, unknown>>> {
+    this.#record("www", timeoutMilliseconds);
+    const bodySha256 = this.redirectDigests[
+      Math.min(this.#redirectRead, this.redirectDigests.length - 1)
+    ];
+    this.#redirectRead += 1;
+    if (bodySha256 === undefined) throw new Error("public redirect fixture is empty");
+    return Object.freeze({
+      bodySha256,
+      contentType: "text/plain",
+      location: `https://wrench.rip${requestPath}`,
+      status: 308,
+    });
+  }
+}
+
+function inferredBaselinePublicSite(
+  options: Parameters<typeof createProviderBaselineRaw>[0],
+): ProviderPublicSiteFixture {
+  const api = options.api as unknown as Readonly<{
+    deploymentSnapshots?: readonly (readonly ProviderJson[])[];
+    graphqlSnapshots?: readonly (readonly ProviderJson[])[];
+    refSha?: string;
+  }>;
+  const refSha = api.refSha ?? providerPreviousSha;
+  const rest = api.deploymentSnapshots?.[0] ?? [];
+  const matching = rest
+    .map((value) => value as Readonly<Record<string, ProviderJson>>)
+    .filter((value) => value.sha === refSha)
+    .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
+  const graph = api.graphqlSnapshots?.[0]
+    ?.map((value) => value as Readonly<Record<string, ProviderJson>>)
+    .filter((value) => value.commitOid === refSha)
+    .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+  const deploymentId = Number(matching[0]?.id ?? graph?.[0]?.databaseId ?? 10);
+  const tag = refSha === providerVerifiedSha ? providerTag : "v0.16.1";
+  return new ProviderPublicSiteFixture({
+    markerSnapshots: [providerMarker(refSha, tag, deploymentId)],
+  });
+}
+
+const createProviderBaseline = (
+  options: Parameters<typeof createProviderBaselineRaw>[0],
+): ReturnType<typeof createProviderBaselineRaw> => createProviderBaselineRaw({
+  publicSite: inferredBaselinePublicSite(options),
+  verifiedTag: providerTag,
   ...options,
 });
+
+const waitForProviderOutcome = (
+  options: Parameters<typeof waitForProviderOutcomeRaw>[0],
+): ReturnType<typeof waitForProviderOutcomeRaw> => {
+  const receipt = options.promotionReceipt as unknown as Readonly<{ mode?: unknown }>;
+  const deploymentId = receipt.mode === "already-exact" ? 10 : 20;
+  return waitForProviderOutcomeRaw({
+    defaultBranch: "main",
+    eventName: "push",
+    publicSite: new ProviderPublicSiteFixture({
+      markerSnapshots: [providerMarker(providerVerifiedSha, providerTag, deploymentId)],
+    }),
+    recoveryWorkflowSha: "",
+    ...providerAuthority,
+    ...options,
+  });
+};
 
 type ProviderJson = null | boolean | number | string | readonly ProviderJson[] | {
   readonly [key: string]: ProviderJson;
@@ -1971,7 +2148,8 @@ esac
 
     expect(releaseWorkflow).not.toContain("workflow_dispatch:");
     expect(releaseWorkflow).not.toContain("release-provider-outcome.mjs promote");
-    expect(releaseWorkflow).not.toContain("release-provider-outcome.mjs wait");
+    expect(releaseWorkflow).not.toMatch(/release-provider-outcome\.mjs wait(?:\s|$)/u);
+    expect(releaseWorkflow).not.toContain("/rulesets");
     expect(websiteWorkflow).toContain("workflow_run:");
     expect(websiteWorkflow).toContain("workflow_dispatch:");
     expect(websiteWorkflow).toContain("UPSTREAM_WORKFLOW_ID");
@@ -2376,12 +2554,29 @@ fi
     expect(publishScript).toContain('gh api --include "$release_endpoint"');
     expect(publishScript).toContain("inspect-release-response");
     expect(publishScript).toContain("validate-release");
+    expect(publishScript).toContain("validate-latest-predecessor");
+    expect(publishScript).toContain('wait-latest-release "$predecessor_release_file"');
+    expect(publishScript).toContain("require-latest-release");
+    expect(publishScript).toContain('validate-created-release "$created_release_file"');
+    expect(publishScript).toContain("revalidate-latest-release");
     expect(publishScript).toContain("--method POST");
     expect(publishScript).toContain("-F generate_release_notes=true");
     expect(publishScript).toContain("-f make_latest=legacy");
     expect(publishScript).not.toContain("-f make_latest=true");
     expect(publishScript).not.toContain("gh release view");
     expect(publishScript).not.toContain("gh release create");
+    const predecessorIndex = publishScript.indexOf("validate-latest-predecessor");
+    const postIndex = publishScript.indexOf("--method POST");
+    const convergenceIndex = publishScript.indexOf("wait-latest-release");
+    const postwriteIndex = publishScript.indexOf(
+      'verify_publication_authority postwrite "$terminal_main_sha"',
+    );
+    const terminalProjectionIndex = publishScript.indexOf("revalidate-latest-release");
+    expect(predecessorIndex).toBeGreaterThan(-1);
+    expect(predecessorIndex).toBeLessThan(postIndex);
+    expect(convergenceIndex).toBeGreaterThan(postIndex);
+    expect(postwriteIndex).toBeGreaterThan(convergenceIndex);
+    expect(terminalProjectionIndex).toBeGreaterThan(postwriteIndex);
     for (const checkedSurface of publicDistEntrypoints) {
       expect(ciWorkflow).toContain(checkedSurface);
       expect(workflow).toContain(checkedSurface);
@@ -2504,12 +2699,21 @@ if [[ -f "$RELEASE_CREATED_STATE" ]]; then
   if [[ -n "$POST_CREATE_MAIN_SHA" ]]; then
     current_authenticated_main="$POST_CREATE_MAIN_SHA"
   fi
-  if [[ -n "$POST_CREATE_LATEST_TAG" ]]; then
-    current_latest_tag="$POST_CREATE_LATEST_TAG"
-  fi
+  current_latest_tag="\${POST_CREATE_LATEST_TAG:-$VERIFIED_TAG}"
+elif [[ "$LOOKUP_MODE" == "missing" ]]; then
+  current_latest_tag="$PRE_CREATE_LATEST_TAG"
 fi
 release_json() {
-  printf '{"assets":[],"draft":false,"id":10,"immutable":%s,"prerelease":false,"published_at":"2026-08-29T14:00:00Z","tag_name":"%s","target_commitish":"main"}' "$RELEASE_IMMUTABLE" "$VERIFIED_TAG"
+  printf '{"assets":[],"draft":false,"id":%s,"immutable":%s,"prerelease":false,"published_at":"2026-08-29T14:00:00Z","tag_name":"%s","target_commitish":"main"}' "$1" "$RELEASE_IMMUTABLE" "$VERIFIED_TAG"
+}
+latest_json() {
+  local latest_id=9
+  local published_at="2026-08-28T14:00:00Z"
+  if [[ "$1" == "$VERIFIED_TAG" ]]; then
+    latest_id="$RELEASE_ID"
+    published_at="2026-08-29T14:00:00Z"
+  fi
+  printf '{"assets":[],"draft":false,"id":%s,"immutable":true,"prerelease":false,"published_at":"%s","tag_name":"%s","target_commitish":"main"}\n' "$latest_id" "$published_at" "$1"
 }
 if [[ "$args" == "api /repos/$GITHUB_REPOSITORY/commits/$VERIFIED_TAG --jq .sha" ||
      "$args" == "api /repos/$GITHUB_REPOSITORY/commits/tags/$VERIFIED_TAG --jq .sha" ||
@@ -2523,7 +2727,7 @@ elif [[ "$args" == "api --include /repos/$GITHUB_REPOSITORY/releases/tags/$VERIF
   case "$LOOKUP_MODE" in
     existing)
       printf 'HTTP/2.0 200 OK\r\ndate: Sat, 29 Aug 2026 14:01:00 GMT\r\ncontent-type: application/json\r\n\r\n'
-      release_json
+      release_json "$RELEASE_ID"
       ;;
     missing)
       printf 'HTTP/2.0 404 Not Found\r\ndate: Sat, 29 Aug 2026 14:01:00 GMT\r\ncontent-type: application/json\r\n\r\n{"message":"Not Found"}\n'
@@ -2539,7 +2743,12 @@ elif [[ "$args" == "api --include /repos/$GITHUB_REPOSITORY/releases/tags/$VERIF
       ;;
   esac
 elif [[ "$args" == "api /repos/$GITHUB_REPOSITORY/releases/tags/$VERIFIED_TAG" ]]; then
-  release_json
+  read_count=0
+  if [[ -f "$RELEASE_READ_COUNT" ]]; then read -r read_count < "$RELEASE_READ_COUNT"; fi
+  read_count=$((read_count + 1))
+  printf '%s\n' "$read_count" > "$RELEASE_READ_COUNT"
+  if [[ "$read_count" -ge 2 ]]; then : > "$TERMINAL_RELEASE_READ_STATE"; fi
+  release_json "$RELEASE_ID"
 elif [[ "$args" == *"/releases?per_page=100&page="* ]]; then
   page="\${args##*page=}"
   if [[ "$RELEASE_SCAN_MODE" == "max" && "$page" -le 5 ]]; then
@@ -2548,14 +2757,17 @@ elif [[ "$args" == *"/releases?per_page=100&page="* ]]; then
     printf '[]\n'
   fi
 elif [[ "$args" == *"/releases/latest"* ]]; then
-  printf '%s\n' "$current_latest_tag"
+  if [[ -f "$TERMINAL_RELEASE_READ_STATE" && -n "$TERMINAL_LATEST_TAG" ]]; then
+    current_latest_tag="$TERMINAL_LATEST_TAG"
+  fi
+  latest_json "$current_latest_tag"
 elif [[ "$args" == *"api --method POST /repos/$GITHUB_REPOSITORY/releases"* ]]; then
   if [[ "$ALLOW_CREATE" != "true" ]]; then
     echo "recovery attempted to recreate an existing release" >&2
     exit 91
   fi
   : > "$RELEASE_CREATED_STATE"
-  release_json
+  release_json "$CREATED_RELEASE_ID"
 else
   echo "unexpected gh command: $args" >&2
   exit 1
@@ -2576,6 +2788,7 @@ fi
         GIT_COMMAND_LOG: gitCommandLog,
         GITHUB_REPOSITORY: "hraness/wrench",
         LATEST_TAG: "v0.16.2",
+        PRE_CREATE_LATEST_TAG: "v0.16.1",
         LOOKUP_MODE: "existing",
         IMPORTED_MAIN_STATE: join(directory, "imported-main"),
         IMPORTED_TAG_STATE: join(directory, "imported-tag"),
@@ -2583,6 +2796,9 @@ fi
         PATH: `${binaryDirectory}:${process.env.PATH ?? ""}`,
         POST_CREATE_LATEST_TAG: "",
         POST_CREATE_MAIN_SHA: "",
+        CREATED_RELEASE_ID: "10",
+        RELEASE_ID: "10",
+        RELEASE_READ_COUNT: join(directory, "release-read-count"),
         RELEASE_IMMUTABLE: "true",
         RELEASE_CREATED_STATE: join(directory, "release-created"),
         RELEASE_SCAN_MODE: "empty",
@@ -2590,6 +2806,8 @@ fi
         REMOTE_MAIN_SHA: peeledCommitSha,
         REMOTE_TAG_OID: peeledCommitSha,
         TAG_OBJECT_SHA: tagObjectSha,
+        TERMINAL_LATEST_TAG: "",
+        TERMINAL_RELEASE_READ_STATE: join(directory, "terminal-release-read"),
         VERIFIED_SHA: peeledCommitSha,
         VERIFIED_TAG: "v0.16.2",
         WORKFLOW_DRIFT_MODE: "stable",
@@ -2603,6 +2821,8 @@ fi
         await rm(baseEnvironment.IMPORTED_MAIN_STATE, { force: true });
         await rm(baseEnvironment.IMPORTED_TAG_STATE, { force: true });
         await rm(baseEnvironment.RELEASE_CREATED_STATE, { force: true });
+        await rm(baseEnvironment.RELEASE_READ_COUNT, { force: true });
+        await rm(baseEnvironment.TERMINAL_RELEASE_READ_STATE, { force: true });
         return runWorkflowScript(script, { ...baseEnvironment, ...overrides });
       };
 
@@ -2613,6 +2833,7 @@ fi
         expect(existingCommands).not.toContain(`api ${ambiguousEndpoint} --jq .sha`);
       }
       expect(existingCommands).not.toContain("--method POST");
+      expect(existingCommands.match(/\/releases\/latest/gu) ?? []).toHaveLength(2);
       expect((await readFile(gitCommandLog, "utf8")).match(/ls-remote --sort=refname --refs/gu) ?? [])
         .toHaveLength(2);
 
@@ -2622,6 +2843,7 @@ fi
       expect(createCommands).toContain("--method POST");
       expect(createCommands).toContain("generate_release_notes=true");
       expect(createCommands).toContain("target_commitish=2222222222222222222222222222222222222222");
+      expect(createCommands.match(/\/releases\/latest/gu) ?? []).toHaveLength(3);
       expect((await readFile(gitCommandLog, "utf8")).match(/ls-remote --sort=refname --refs/gu) ?? [])
         .toHaveLength(4);
       const createdAtAuditCap = await runCase({
@@ -2631,7 +2853,7 @@ fi
       });
       expect(createdAtAuditCap.exitCode).toBe(0);
       const maxCreateCommands = (await readFile(commandLog, "utf8")).trim().split("\n");
-      expect(maxCreateCommands).toHaveLength(16);
+      expect(maxCreateCommands).toHaveLength(19);
       for (let page = 1; page <= 6; page += 1) {
         expect(maxCreateCommands.filter((command) =>
           command === `api /repos/${providerRepository}/releases?per_page=100&page=${String(page)}`
@@ -2708,13 +2930,34 @@ fi
       });
       expect(concurrentSupersession.exitCode).not.toBe(0);
       expect(`${concurrentSupersession.stdout}\n${concurrentSupersession.stderr}`)
-        .toContain(
-          "Release v0.16.2 is immutable but no longer Latest; recover from the current immutable Latest Release",
-        );
+        .toContain("changed from the pinned predecessor");
       const supersessionCommands = await readFile(commandLog, "utf8");
       expect(supersessionCommands).toContain("--method POST");
       expect(supersessionCommands).not.toContain("--method DELETE");
       expect(supersessionCommands).not.toContain("--method PATCH");
+
+      const arbitraryOlderLatest = await runCase({
+        ALLOW_CREATE: "true",
+        LOOKUP_MODE: "missing",
+        POST_CREATE_LATEST_TAG: "v0.16.0",
+      });
+      expect(arbitraryOlderLatest.exitCode).not.toBe(0);
+      expect(`${arbitraryOlderLatest.stdout}\n${arbitraryOlderLatest.stderr}`)
+        .toContain("changed from the pinned predecessor");
+
+      const createdReleaseDrift = await runCase({
+        ALLOW_CREATE: "true",
+        CREATED_RELEASE_ID: "11",
+        LOOKUP_MODE: "missing",
+      });
+      expect(createdReleaseDrift.exitCode).not.toBe(0);
+      expect(`${createdReleaseDrift.stdout}\n${createdReleaseDrift.stderr}`)
+        .toContain("does not bind the immutable target Release");
+
+      const terminalLatestDrift = await runCase({ TERMINAL_LATEST_TAG: "v0.16.3" });
+      expect(terminalLatestDrift.exitCode).not.toBe(0);
+      expect(`${terminalLatestDrift.stdout}\n${terminalLatestDrift.stderr}`)
+        .toContain("is no longer Latest");
 
       const divergentMain = await runCase({
         ALLOW_CREATE: "true",
@@ -2777,7 +3020,7 @@ fi
 
       for (const [overrides, message] of [
         [{ RELEASE_IMMUTABLE: "false" }, "is not exact, published, immutable, and asset-free"],
-        [{ LATEST_TAG: "v0.16.1" }, "is immutable but no longer Latest"],
+        [{ LATEST_TAG: "v0.16.1" }, "is no longer Latest"],
         [{ VERIFIED_TAG: "v0.16.2\npoison" }, "no verified stable release tag"],
       ] as const) {
         const rejected = await runCase(overrides);
@@ -2906,6 +3149,10 @@ fi
     expect(workflow).not.toContain("VERCEL_TOKEN");
     expect(workflow).not.toContain("projectSettings");
     expect(workflow).not.toContain("redeploy");
+    expect(workflow).not.toContain("api.vercel.com");
+    expect(workflow).not.toContain("autoAssignCustomDomains");
+    expect(workflow).not.toContain("vercel alias");
+    expect(workflow).not.toContain("vercel promote");
     expect(helper).not.toContain("--jq");
     expect(helper).not.toContain("@tsv");
     expect(helper).toContain("MAX_ITEMS = 500");
@@ -2984,8 +3231,8 @@ fi
     ]);
     expect(releaseRestRequestBudget).toEqual({
       githubTokenLimit: 1_000,
-      headroom: 670,
-      immutableRelease: 16,
+      headroom: 656,
+      immutableRelease: 30,
       maxPolls: 20,
       observationDeadlineMilliseconds: 1_200_000,
       perCallTimeoutMilliseconds: 60_000,
@@ -2993,8 +3240,8 @@ fi
       providerBaseline: 2,
       providerOutcome: 209,
       providerPromotion: 21,
-      surroundingRelease: 98,
-      total: 330,
+      surroundingRelease: 112,
+      total: 344,
       websiteAuthority: 82,
     });
     expect(releaseGraphqlRequestBudget).toEqual({
@@ -5478,7 +5725,16 @@ fi
       repository: providerRepository,
       verifiedSha: providerVerifiedSha,
     }) as Readonly<Record<string, unknown>>;
-    expect(baseline.schema).toBe("wrench-provider-baseline-v2");
+    expect(baseline.schema).toBe("wrench-provider-baseline-v3");
+    expect(baseline.verifiedTag).toBe(providerTag);
+    expect(baseline.publicMarker).toMatchObject({
+      kind: "release",
+      marker: {
+        deploymentUrl: "https://wrench-10-hraness.vercel.app",
+        sourceSha: providerPreviousSha,
+        tag: "v0.16.1",
+      },
+    });
     expect(baseline.refSha).toBe(providerPreviousSha);
     expect(baseline.deploymentIds).toEqual([10]);
     expect(baseline.deploymentFingerprint).toMatch(/^[0-9a-f]{64}$/u);
@@ -5736,6 +5992,9 @@ fi
       promotionReceipt: budgetPromotion,
       defaultBranch: "main",
       eventName: "workflow_dispatch",
+      publicSite: new ProviderPublicSiteFixture({
+        markerSnapshots: [providerMarker(providerVerifiedSha, providerTag, 20_000)],
+      }),
       recoveryWorkflowSha: providerVerifiedSha,
       sleep: async () => {},
     })).resolves.toEqual({ deploymentId: 20_000, statusId: 200_001 });
@@ -5767,11 +6026,216 @@ fi
       maxPolls: releaseRestRequestBudget.maxPolls,
       pollIntervalMilliseconds: 0,
       promotionReceipt: budgetPromotion,
+      publicSite: new ProviderPublicSiteFixture({
+        markerSnapshots: [providerMarker(providerVerifiedSha, providerTag, 20_000)],
+      }),
       sleep: async () => {},
     })).resolves.toEqual({ deploymentId: 20_000, statusId: 200_001 });
     expect(lateCandidateApi.graphqlCalls).toHaveLength(
       releaseGraphqlRequestBudget.providerOutcome,
     );
+  });
+
+  test("fails public production identity closed across baseline and outcome transitions", async () => {
+    const baselineDeployment = providerDeployment(
+      10,
+      "2026-08-29T13:00:00Z",
+      { sha: providerPreviousSha },
+    );
+    const baselineApi = (): ProviderApiFixture => new ProviderApiFixture({
+      deployments: [[baselineDeployment]],
+      refSha: providerPreviousSha,
+      serverDates: [providerBaselineServerDate, providerBaselineServerDate],
+      statuses: terminalBaselineStatus(),
+    });
+    const missingSite = (): ProviderPublicSiteFixture => new ProviderPublicSiteFixture({
+      markerSnapshots: ["missing"],
+    });
+    await expect(createProviderBaselineRaw({
+      api: baselineApi(),
+      publicSite: missingSite(),
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: "v0.16.5",
+    })).resolves.toMatchObject({
+      publicMarker: { kind: "missing" },
+      schema: "wrench-provider-baseline-v3",
+      verifiedTag: "v0.16.5",
+    });
+    for (const verifiedTag of ["v0.16.4", "v0.16.6"] as const) {
+      await expect(createProviderBaselineRaw({
+        api: baselineApi(),
+        publicSite: missingSite(),
+        repository: providerRepository,
+        verifiedSha: providerVerifiedSha,
+        verifiedTag,
+      })).rejects.toThrow("may be absent only for first marker-bearing release v0.16.5");
+    }
+
+    await expect(createProviderBaselineRaw({
+      api: baselineApi(),
+      publicSite: new ProviderPublicSiteFixture({
+        markerSnapshots: [
+          "missing",
+          providerMarker(providerPreviousSha, "v0.16.1", 10),
+        ],
+      }),
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: "v0.16.5",
+    })).rejects.toThrow("changed during the baseline snapshot");
+    await expect(createProviderBaselineRaw({
+      api: baselineApi(),
+      publicSite: new ProviderPublicSiteFixture({
+        markerSnapshots: [providerMarker(providerVerifiedSha, providerTag, 20)],
+      }),
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("does not bind the baseline production ref");
+    await expect(createProviderBaselineRaw({
+      api: baselineApi(),
+      publicSite: new ProviderPublicSiteFixture({
+        markerSnapshots: [providerMarker(providerPreviousSha, "v0.16.1", 11)],
+      }),
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("does not bind the latest baseline deployment URL");
+
+    const newerBaseline = providerDeployment(
+      11,
+      "2026-08-29T13:01:00Z",
+      { sha: providerPreviousSha },
+    );
+    await expect(createProviderBaselineRaw({
+      api: new ProviderApiFixture({
+        deployments: [[newerBaseline, baselineDeployment]],
+        refSha: providerPreviousSha,
+        serverDates: [providerBaselineServerDate, providerBaselineServerDate],
+        statuses: new Map([
+          [10, [[providerStatus(100, "success", "2026-08-29T13:01:00Z")]]],
+          [11, [[providerStatus(110, "success", "2026-08-29T13:02:00Z", {}, 11)]]],
+        ]),
+      }),
+      publicSite: new ProviderPublicSiteFixture({
+        markerSnapshots: [providerMarker(providerPreviousSha, "v0.16.1", 10)],
+      }),
+      repository: providerRepository,
+      verifiedSha: providerVerifiedSha,
+      verifiedTag: providerTag,
+    })).rejects.toThrow("does not bind the latest baseline deployment URL");
+
+    const { baseline, promotion } = await providerReceipts("advanced");
+    const candidate = providerDeployment(20, "2026-08-29T15:02:00Z");
+    const pending = providerStatus(200, "pending", "2026-08-29T15:02:30Z", {}, 20);
+    const success = providerStatus(201, "success", "2026-08-29T15:03:00Z", {}, 20);
+    const outcomeApi = (
+      statusSnapshots: ProviderJson[][],
+      deployments: ProviderJson[][] = [[candidate, baselineDeployment]],
+    ): ProviderApiFixture => new ProviderApiFixture({
+      deployments,
+      refSha: providerVerifiedSha,
+      statuses: new Map([
+        [10, [[providerStatus(100, "success", "2026-08-29T13:01:00Z")]]],
+        [20, statusSnapshots],
+      ]),
+    });
+    const wait = (
+      api: ProviderApiFixture,
+      publicSite: ProviderPublicSiteFixture,
+      maxPolls = 2,
+    ): Promise<unknown> => waitForProviderOutcomeRaw({
+      api,
+      baselineReceipt: baseline,
+      defaultBranch: "main",
+      eventName: "push",
+      maxPolls,
+      pollIntervalMilliseconds: 0,
+      promotionReceipt: promotion,
+      publicSite,
+      recoveryWorkflowSha: "",
+      sleep: async () => {},
+      ...providerAuthority,
+    });
+
+    await expect(wait(
+      outcomeApi([[pending]], [[baselineDeployment]]),
+      new ProviderPublicSiteFixture({
+        markerSnapshots: [providerMarker("3".repeat(40), "v0.15.0", 30)],
+      }),
+      1,
+    )).rejects.toThrow("exposed a third release identity");
+
+    await expect(wait(
+      outcomeApi([[pending], [pending]]),
+      new ProviderPublicSiteFixture({
+        markerSnapshots: [
+          providerMarker(providerVerifiedSha, providerTag, 20),
+          providerMarker(providerPreviousSha, "v0.16.1", 10),
+        ],
+      }),
+    )).rejects.toThrow("regressed after exposing the target release");
+
+    await expect(wait(
+      outcomeApi([[pending], [pending]], [[baselineDeployment]]),
+      new ProviderPublicSiteFixture({
+        markerSnapshots: [
+          providerMarker(providerVerifiedSha, providerTag, 20),
+          providerMarker(providerVerifiedSha, providerTag, 21),
+        ],
+      }),
+    )).rejects.toThrow("changed within the target release identity");
+
+    await expect(wait(
+      outcomeApi([[success]]),
+      new ProviderPublicSiteFixture({
+        markerSnapshots: [providerMarker(providerVerifiedSha, providerTag, 21)],
+      }),
+      1,
+    )).rejects.toThrow("does not bind the pinned candidate deployment URL");
+
+    await expect(wait(
+      outcomeApi([[success]]),
+      new ProviderPublicSiteFixture({
+        markerSnapshots: [providerMarker(providerPreviousSha, "v0.16.1", 10)],
+      }),
+      1,
+    )).rejects.toThrow("provider observation poll budget exhausted before its monotonic deadline");
+
+    const stablePublic = new ProviderPublicSiteFixture({
+      markerSnapshots: [providerMarker(providerVerifiedSha, providerTag, 20)],
+    });
+    await expect(wait(outcomeApi([[success], [success], [success]]), stablePublic, 1))
+      .resolves.toEqual({ deploymentId: 20, statusId: 201 });
+    expect(stablePublic.calls).toEqual([
+      "marker",
+      "marker",
+      "health /",
+      "health /providers/beeper/",
+      "health /llms.txt",
+      "www",
+      "marker",
+      "health /",
+      "health /providers/beeper/",
+      "health /llms.txt",
+      "www",
+    ]);
+    expect(stablePublic.timeouts).toHaveLength(11);
+    expect(stablePublic.timeouts.every((value) => value > 0 && value <= 10_000)).toBe(true);
+
+    const changingHealth = new ProviderPublicSiteFixture({
+      healthDigests: new Map([["/", ["a".repeat(64), "b".repeat(64)]]]),
+      markerSnapshots: [providerMarker(providerVerifiedSha, providerTag, 20)],
+    });
+    await expect(wait(outcomeApi([[success], [success], [success]]), changingHealth, 1))
+      .rejects.toThrow("public production routes changed during terminal verification");
+    const changingRedirect = new ProviderPublicSiteFixture({
+      markerSnapshots: [providerMarker(providerVerifiedSha, providerTag, 20)],
+      redirectDigests: ["a".repeat(64), "b".repeat(64)],
+    });
+    await expect(wait(outcomeApi([[success], [success], [success]]), changingRedirect, 1))
+      .rejects.toThrow("public production routes changed during terminal verification");
   });
 
   test("fails promotion closed on comparison, ref, and leased-writer races", async () => {
@@ -6704,6 +7168,9 @@ fi
       maxPolls: 1,
       pollIntervalMilliseconds: 0,
       promotionReceipt: promotion,
+      publicSite: new ProviderPublicSiteFixture({
+        markerSnapshots: [providerMarker(providerVerifiedSha, providerTag, 20)],
+      }),
       recoveryWorkflowSha: providerVerifiedSha,
       sleep: async () => {},
       ...providerAuthority,
@@ -6868,11 +7335,15 @@ fi
       monotonicNow,
       pollIntervalMilliseconds,
       promotionReceipt: promotion,
+      publicSite: new ProviderPublicSiteFixture({
+        markerSnapshots: [providerMarker(providerVerifiedSha, providerTag, 20)],
+        readHook: (timeoutMilliseconds) => api.readHook?.(timeoutMilliseconds),
+      }),
       sleep,
     });
 
     let now = 0;
-    const expectedPartialSleepRequests = [59_998, 29_999, 15_000];
+    const expectedPartialSleepRequests = [59_997, 29_999, 15_000];
     expect(expectedPartialSleepRequests).toHaveLength(3);
     const sleepThroughThreePartialWakeups = (
       requests: number[],
@@ -6911,14 +7382,16 @@ fi
         now += milliseconds;
       },
     )).rejects.toThrow("timed out waiting for the exact Vercel Production deployment");
-    expect(tailSleeps).toEqual(Array.from({ length: 20 }, () => 38_000));
+    expect(tailSleeps).toEqual(Array.from({ length: 20 }, () => 27_000));
     expect(latencyApi.graphqlCalls).toHaveLength(20);
     expect(now).toBe(1_200_000);
 
     now = 0;
     let boundaryRead = 0;
     let boundarySamples = 0;
-    const successExternalReads = 36;
+    const successGithubReads = 36;
+    const successPublicReads = 11;
+    const successExternalReads = successGithubReads + successPublicReads;
     const exactBoundaryApi = successCase((timeoutMilliseconds) => {
       if (timeoutMilliseconds === undefined) return;
       boundaryRead += 1;
@@ -6935,7 +7408,7 @@ fi
     expect(now).toBe(1_200_000);
     expect(boundaryRead).toBe(successExternalReads);
     expect(boundarySamples).toBe(1);
-    expect(exactBoundaryApi.timeoutMilliseconds).toHaveLength(successExternalReads);
+    expect(exactBoundaryApi.timeoutMilliseconds).toHaveLength(successGithubReads);
     expect(exactBoundaryApi.timeoutMilliseconds.at(-1)).toBe(1);
 
     now = 0;
@@ -6962,7 +7435,7 @@ fi
     expect(lateSleeps).toEqual(
       Array.from({ length: 19 }, () => expectedPartialSleepRequests).flat(),
     );
-    expect(now).toBe(1_140_036);
+    expect(now).toBe(1_140_047);
     expect(lateCandidateApi.graphqlCalls).toHaveLength(22);
 
     now = 0;
@@ -7053,7 +7526,7 @@ fi
     expect(immediateSleeps).toHaveLength(0);
     expect(immediateApi.graphqlCalls).toHaveLength(20);
     expect(immediateApi.timeoutMilliseconds).toHaveLength(40);
-    expect(now).toBe(40);
+    expect(now).toBe(60);
   });
 
   test("fails recovery closed on stale success, latest ties, or newer deployments", async () => {
@@ -7147,23 +7620,10 @@ fi
       [10, [[providerStatus(100, "success", "2026-08-29T14:06:00Z")]]],
       [11, [[providerStatus(101, "success", "2026-08-29T14:06:00Z", {}, 11)]]],
     ]);
-    const tiedReceipts = await recoveryReceiptsFor(
+    await expect(recoveryReceiptsFor(
       [tiedOlderId, tiedNewerId],
       tiedStatuses,
-    );
-    const tiedApi = new ProviderApiFixture({
-      deployments: [[tiedOlderId, tiedNewerId]],
-      refSha: providerVerifiedSha,
-      statuses: tiedStatuses,
-    });
-    await expect(waitForProviderOutcome({
-      api: tiedApi,
-      baselineReceipt: tiedReceipts.baseline,
-      maxPolls: 1,
-      pollIntervalMilliseconds: 0,
-      promotionReceipt: tiedReceipts.promotion,
-      sleep: async () => {},
-    })).rejects.toThrow("ambiguous at second precision");
+    )).rejects.toThrow("ambiguous at second precision");
 
     const olderVerified = providerDeployment(10, "2026-08-29T14:05:00Z");
     const newerWrongSha = providerDeployment(11, "2026-08-29T14:07:00Z", {
@@ -7349,6 +7809,18 @@ fi
       "Do not grant a release workflow repository",
       "Production Branch as `website-production`",
       "Vercel System Environment Variables enabled",
+      "`prj_TZbDZ38ABPan158IqnczgsuTu6Ue` under team\n`team_UAd1iD2XogJlbFg4h14mRaPM`",
+      "linked to GitHub repository ID `1316443113`",
+      "`link.productionBranch=website-production`",
+      "`autoExposeSystemEnvs=true`, and `autoAssignCustomDomains=true`",
+      "persistent project invariant, not a per-release switch",
+      "READY/STAGED deployment and GitHub success without\nmoving `wrench.rip` or `www.wrench.rip`",
+      "Make one\nsetting-only update, then read the project back immediately",
+      "only allowed\nchange is `autoAssignCustomDomains: false` to `true`",
+      "An ambiguous setting update is readback-only, never a blind retry",
+      "`vercel promote <exact-id-or-url>`",
+      "do not rewrite the ref, rerun the workflow, or assign an individual\nalias",
+      "workflows never mutate this project setting, call the Vercel API, or perform an\nalias or promote operation",
       "`VERCEL_GIT_COMMIT_REF=website-production`",
       "`main` and pull requests are preview sources only",
       "For the one-time\nmigration only",
@@ -7359,11 +7831,11 @@ fi
       "exact creation, deletion, and\nnon-fast-forward rules",
       "Live ruleset `21887484` targets the same refs with one\nupdate restriction and exactly one `Integration` bypass for dedicated App",
       "`4783991` with `bypass_mode=always`",
-      "Production-only freeze ruleset `22182820` adds no-bypass creation,\nupdate, deletion, and non-fast-forward restrictions",
+      "Incident freeze ruleset `22182820` added no-bypass creation,\nupdate, deletion, and non-fast-forward restrictions during the v0.16.4 release",
       "Production-only freeze ruleset `22149969` remained\nno-bypass during that retained proof",
-      "current replacement ruleset `22182820` restores the live production freeze",
+      "Replacement incident freeze `22182820` protected the v0.16.4 release and was\nthen removed by captured numeric ID",
       "The App-only writer passed the positive and negative canary\nproofs retained below",
-      "production freeze blocks its use until a fresh\nrelease-owner audit",
+      "historical, not a live control",
       "The retained canary proof is evidence, never standing\nmutation authority",
       "Before every required fast-forward, fresh administrator readback must\nreconfirm",
       "exact permanent rulesets and target refs",
@@ -7412,13 +7884,25 @@ fi
       "terminal readback fail closed even though GitHub may already have created the\nimmutable Release",
       "The POST has no conditional-write lease",
       "never deletes, patches, or rolls back a Release\nin response",
-      "signed-in\nadministrator must read back immutable Releases as `enabled=true`",
+      "signed-in\nadministrator must read back both immutable Releases as `enabled=true` and one\nexact active repository tag ruleset",
+      "sole ref target is `refs/tags/v*`",
+      "bypass-actor set is empty",
+      "exact rule types are `deletion` and\n`update`",
+      "Creation remains intentionally allowed",
+      "Ruleset `19989752`, currently named `Immutable version tags`",
+      "numeric ID and name are not authority: the semantic readback\nis",
+      "/repos/hraness/wrench/rulesets/$wrench_tag_ruleset_id",
+      "value.target !== \"tag\"",
+      "value.enforcement !== \"active\"",
+      "value.bypass_actors.length !== 0",
+      "refName.include[0] !== \"refs/tags/v*\"",
+      "JSON.stringify(ruleTypes) !== '[\"deletion\",\"update\"]'",
       "X-GitHub-Api-Version: 2026-03-10",
       "/repos/hraness/wrench/immutable-releases",
       "{enabled: .enabled, enforced_by_owner: .enforced_by_owner}",
       "Object.keys(value).sort().join(\",\") !== \"enabled,enforced_by_owner\"",
       "typeof value.enforced_by_owner !== \"boolean\"",
-      "residual administrator-toggle window",
+      "residual\nadministrator-toggle window",
       "treats `target_commitish` as\nnon-authoritative",
       "stable Release ID and publication time across\nthe authority sandwich and every promotion/outcome receipt readback",
       "Release workflow ID `323493609`",
@@ -7466,7 +7950,7 @@ fi
       "`ca646017da1c8e57ef915b6b76e4e808a41a1e0492454ca0b0c3176f7a504b8a`",
       "`{converged:true, observationCount:2, propagationObserved:false,\nstableDenials:2}`",
       "production helper remains hard-bound to `website-production`",
-      "This checked cleanup removes the single-use workflow and helper",
+      "This checked cleanup removed the single-use workflow and helper",
       "`--force-with-lease=refs/heads/website-production:<expected-old>`",
       "first fetches only the verified tag through the fixed HTTPS",
       "peels that fetched object locally",
@@ -7496,10 +7980,10 @@ fi
       "final external read\nthat completes exactly at the deadline remains eligible",
       "no redundant clock sample or later API read follows it",
       "separate 30-minute timeout",
-      "worst missing-Release path uses 16 calls",
+      "worst missing-Release path uses 30 calls",
       "five bounded release\npages plus the empty sentinel page",
-      "use at most 330 REST calls",
-      "leaving 670 calls",
+      "use at most 344 REST calls",
+      "leaving 656 calls",
       "promotion helper itself uses at most 21 read-only REST calls",
       "at most fourteen App REST requests",
       "240-point ceiling and 760 points of headroom",
@@ -7514,6 +7998,24 @@ fi
       "initial success observation plus two complete consistent\nreadbacks",
       "repeats the complete deployment inventory after the final status\nread",
       "Latest Release or\nworkflow-source drift",
+      "exact seven-key `/.well-known/wrench-release.json`",
+      "A 404 is allowed\nonly when promoting exact v0.16.5",
+      "third identity, changed\nsame-release deployment URL, target-to-baseline regression",
+      "`https://wrench.rip/`, `/providers/beeper/`, and `/llms.txt`",
+      "one no-follow 308 whose `Location` preserves\nthe marker path and query exactly",
+      "project-domain aliases are not release\nauthorities",
+      "Vercel static caching is not assumed bypassable",
+      "at most 32 unauthenticated GETs",
+      "Every request\nhas at most ten seconds",
+      "marker and redirect bodies are capped at 1 KiB",
+      "Only when creating a missing immutable Release",
+      "pins one exact older immutable Latest Release by tag, ID, and publication time",
+      "may remain only that exact predecessor\nor advance to the exact created target",
+      "at most twelve\nobservations at absolute five-second slots inside one 60-second monotonic\ndeadline",
+      "third older\nidentity, regression, same-or-higher different stable tag",
+      "exact Release that already existed gets one immediate Latest check and never\nenters this convergence loop",
+      "final Latest read is the last external\nobservation",
+      "bounded authority sandwich, not an atomic provider snapshot",
       "dispatch **Promote website production** from current `main`",
       "keeps that\ncoordinate distinct from reviewed workflow source `W`",
       "already-exact recovery remains entirely outside the key environment",
@@ -7526,6 +8028,9 @@ fi
       "fixed local `git rev-parse HEAD` child output",
       "checkout keeps\na resolvable Git `HEAD`",
       "exact tarball with canonical npm",
+      "Vercel's system commit SHA to equal that verifier-proven local HEAD",
+      "`Cache-Control: no-store, max-age=0`",
+      "Preview, development, and true local builds never emit it",
     ] as const) {
       expect(guide).toContain(required);
     }
@@ -7586,6 +8091,11 @@ fi
     expect(agents).toContain("CI must stage automatically after verification");
     expect(agents).toContain("two-factor approval of the npm stage remain mandatory");
     expect(agents).toContain("Verify that exact public artifact before creating its tag");
+    expect(agents).toContain("Before every stable tag push, a signed-in administrator must freshly prove both immutable Releases enabled");
+    expect(agents).toContain("one exact active repository tag ruleset targeting only `refs/tags/v*`");
+    expect(agents).toContain("Current ruleset `19989752` / `Immutable version tags` is retained evidence");
+    expect(agents).toContain("semantics, not its ID or name, are authority");
+    expect(agents).toContain("Release workflow must not receive Administration permission or call ruleset endpoints");
     expect(guide).toContain("main-only `npm-stage` environment");
     expect(guide).toContain("no required deployment reviewers");
     expect(agents).toContain("sole `contents: write` job creates or verifies the immutable Latest GitHub Release");
@@ -7649,10 +8159,19 @@ fi
     expect(agents).not.toContain("every baseline deployment's REST status history");
     expect(agents).toContain("a missing production branch is a hard failure");
     expect(agents).toContain("Vercel's Production Branch on `website-production`");
+    expect(agents).toContain("persistent `autoAssignCustomDomains=true`");
+    expect(agents).toContain("False may stage without moving the canonical domains and is never a release-time toggle");
+    expect(agents).toContain("exact project `prj_TZbDZ38ABPan158IqnczgsuTu6Ue`, team `team_UAd1iD2XogJlbFg4h14mRaPM`");
+    expect(agents).toContain("False may stage without moving the canonical domains");
+    expect(agents).toContain("Ambiguity is readback-only");
+    expect(agents).toContain("recovery never blindly reruns, rewrites the ref, or individually aliases a candidate");
     expect(agents).toContain("documented one-time Vercel bootstrap");
     expect(agents).toContain("Live ruleset `21832074` supplies no-bypass creation, deletion, and non-fast-forward protection");
     expect(agents).toContain("Live ruleset `21887484` supplies the sole update restriction and exact App `4783991` `Integration` bypass with `bypass_mode=always`");
-    expect(agents).toContain("Production-only freeze ruleset `22182820` retains no-bypass creation, update, deletion, and non-fast-forward restrictions");
+    expect(agents).toContain("Incident freeze ruleset `22182820` was removed by captured numeric ID during the audited v0.16.4 production promotion");
+    expect(agents).toContain("exact seven-key `/.well-known/wrench-release.json`");
+    expect(agents).toContain("only exact v0.16.5 may begin from 404");
+    expect(agents).toContain("two stable apex marker/health snapshots plus one exact no-follow `www` 308");
     expect(agents).toContain("Checked-in `CODEOWNERS` supplies ownership and notification only");
     expect(agents).toContain("Protect-main has no bypass actors and retains pull-request admission plus the exact Required CI check");
     expect(agents).toContain("`require_code_owner_review=false` until a second eligible independent code owner exists");
@@ -7692,7 +8211,17 @@ fi
     expect(websiteAgents).toContain("Live lifecycle rules cover creation, deletion, and non-fast-forward movement on production and canary");
     expect(websiteAgents).toContain("A separate update rule denies every updater except exact App `4783991`");
     expect(websiteAgents).toContain("`Integration` with `bypass_mode=always`");
-    expect(websiteAgents).toContain("Production-only freeze ruleset `22182820` must continue to block every production update");
+    expect(websiteAgents).toContain("Incident freeze ruleset `22182820` was removed by captured numeric ID during the audited v0.16.4 production promotion");
+    expect(websiteAgents).toContain("Each verified Production build emits exact bounded `/.well-known/wrench-release.json` bytes");
+    expect(websiteAgents).toContain("marker may be absent only at the v0.16.5 baseline");
+    expect(websiteAgents).toContain("persistent `autoAssignCustomDomains=true`");
+    expect(websiteAgents).toContain("not a per-release switch");
+    expect(websiteAgents).toContain("READY/STAGED plus GitHub success without moving the canonical domains");
+    expect(websiteAgents).toContain("one setting-only update, immediately read it back");
+    expect(websiteAgents).toContain("`vercel promote <exact-id-or-url>`");
+    expect(websiteAgents).toContain("never a workflow rerun, ref rewrite, or individual alias assignment");
+    expect(websiteAgents).toContain("Checked-in workflows remain token-free");
+    expect(websiteAgents).toContain("preview builds must not depend on npm or GitHub release availability and must not emit the production marker");
     expect(websiteAgents).not.toContain("initial provisional permission configuration");
     expect(websiteAgents).not.toContain("provider window orchestration headroom");
     expect(websiteAgents).toContain("bind the GraphQL and REST current-status identities");
@@ -7716,7 +8245,17 @@ fi
     expect(websiteReadme).toContain("live no-bypass ruleset protects\ncreation, deletion, and non-fast-forward movement on the production and canary\nrefs");
     expect(websiteReadme).toContain("second update rule denies every updater except exact App `4783991`");
     expect(websiteReadme).toContain("`Integration` with `bypass_mode=always`");
-    expect(websiteReadme).toContain("Production-only freeze ruleset\n`22182820` still blocks every production update");
+    expect(websiteReadme).toContain("Incident freeze ruleset `22182820` was\nremoved by captured numeric ID during the audited v0.16.4 production promotion");
+    expect(websiteReadme).toContain("exact bounded\nseven-key `/.well-known/wrench-release.json`");
+    expect(websiteReadme).toContain("Marker absence is allowed only for the v0.16.5 baseline");
+    expect(websiteReadme).toContain("Project `prj_TZbDZ38ABPan158IqnczgsuTu6Ue` under team\n`team_UAd1iD2XogJlbFg4h14mRaPM`");
+    expect(websiteReadme).toContain("persistent\n`autoAssignCustomDomains=true`; this is not a per-release switch");
+    expect(websiteReadme).toContain("READY/STAGED with GitHub success while the apex and `www`\nstay on the old deployment");
+    expect(websiteReadme).toContain("one setting-only\nfalse-to-true update");
+    expect(websiteReadme).toContain("Ambiguous updates are readback-only\nwith no blind retry");
+    expect(websiteReadme).toContain("`vercel promote <exact-id-or-url>`");
+    expect(websiteReadme).toContain("never a workflow rerun, ref rewrite, or individual alias assignment");
+    expect(websiteReadme).toContain("Checked-in workflows remain token-free and never mutate Vercel project settings");
     expect(websiteReadme).toContain("retained privileged setup proof\nestablishes that private Hraness App `4783991`, through installation\n`158077029`, is installed only on exact repository `hraness/wrench`");
     expect(websiteReadme).toContain("App\nregistration and each separately repository-narrowed runtime token use exactly\n`metadata:read`, `contents:write`, and `workflows:write`");
     expect(websiteReadme).toContain("reviewer-gated\nwriter environment holds the key");

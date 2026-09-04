@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import {
@@ -49,6 +49,7 @@ import {
   renderProviderAttestationGroups,
   renderProviderOverviewCards,
 } from "./provider-presentation";
+import { PRODUCTION_RELEASE_MARKER_PATH } from "./production-release-marker.mjs";
 
 const repositoryRoot = resolve(import.meta.dir, "..");
 const websiteRoot = import.meta.dir;
@@ -157,6 +158,13 @@ describe("wrench.rip static site", () => {
     const beeperOperationCount =
       BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount
       + BEEPER_PRESENTATION_TRANSPORT_COUNTS.desktopLoopbackOperationCount;
+    const staleMarkerPath = join(
+      websiteRoot,
+      "dist",
+      PRODUCTION_RELEASE_MARKER_PATH.slice(1),
+    );
+    await mkdir(join(websiteRoot, "dist/.well-known"), { recursive: true });
+    await writeFile(staleMarkerPath, "stale marker must not survive preview/local output\n");
     await buildWebsite({
       [WRENCH_MAILING_TURNSTILE_SITEKEY_ENV]: "1x00000000000000000000AA",
       NEXT_PUBLIC_POSTHOG_HOST: DEFAULT_POSTHOG_HOST,
@@ -185,6 +193,7 @@ describe("wrench.rip static site", () => {
       readFile(join(repositoryRoot, "middleware.ts"), "utf8"),
     ]);
     const html = pages[0]!.html;
+    expect(await Bun.file(staleMarkerPath).exists()).toBe(false);
     const readme = await readFile(join(repositoryRoot, "README.md"), "utf8");
     const cssAsset = /<link rel="stylesheet" href="([^"?]+)">/u.exec(html)?.[1];
     expect(cssAsset).toMatch(/^\/assets\/styles-[a-f0-9]{12}\.css$/u);
@@ -520,6 +529,12 @@ describe("wrench.rip static site", () => {
       { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
       { key: "X-Content-Type-Options", value: "nosniff" },
       { key: "Vary", value: "Accept" },
+    ]);
+    const releaseMarkerHeaders = vercel.headers.find((rule: { source: string }) =>
+      rule.source === PRODUCTION_RELEASE_MARKER_PATH);
+    expect(releaseMarkerHeaders?.headers).toEqual([
+      { key: "Cache-Control", value: "no-store, max-age=0" },
+      { key: "Content-Type", value: "application/json; charset=utf-8" },
     ]);
 
     const frameDenyHeaders = vercel.headers.find((rule: { source: string }) =>

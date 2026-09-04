@@ -217,7 +217,9 @@ jobs:
           }
           release_endpoint="/repos/$GITHUB_REPOSITORY/releases/tags/$VERIFIED_TAG"
           release_lookup_stderr="$(mktemp)"
-          trap 'rm -f "$release_lookup_stderr"' EXIT
+          predecessor_release_file="$(mktemp)"
+          created_release_file="$(mktemp)"
+          trap 'rm -f "$release_lookup_stderr" "$predecessor_release_file" "$created_release_file"' EXIT
           set +e
           release_lookup="$(gh api --include "$release_endpoint" 2>"$release_lookup_stderr")"
           release_lookup_exit="$?"
@@ -244,6 +246,9 @@ jobs:
           esac
           if [[ "$release_lookup_state" == "missing" ]]; then
             node ./scripts/release-provider-outcome.mjs release-order
+            gh api "/repos/$GITHUB_REPOSITORY/releases/latest" > "$predecessor_release_file"
+            node ./scripts/release-provider-outcome.mjs \
+              validate-latest-predecessor < "$predecessor_release_file"
             current_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq '.object.sha')"
             remote_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$VERIFIED_TAG" --jq '.sha')"
             if [[ ! "$current_main_sha" =~ ^[0-9a-f]{40}$ || "$remote_tag_sha" != "$VERIFIED_SHA" ]]; then
@@ -261,13 +266,24 @@ jobs:
               -F prerelease=false \
               -f tag_name="$VERIFIED_TAG" \
               -f target_commitish="$VERIFIED_SHA")"
-            printf '%s' "$created_release" | \
-              node ./scripts/release-provider-outcome.mjs validate-release
+            printf '%s' "$created_release" > "$created_release_file"
+            node ./scripts/release-provider-outcome.mjs \
+              validate-release < "$created_release_file"
           fi
           release_readback="$(gh api "$release_endpoint")"
           printf '%s' "$release_readback" | \
             node ./scripts/release-provider-outcome.mjs validate-release
-          latest_tag="$(gh api "/repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')"
+          if [[ "$release_lookup_state" == "missing" ]]; then
+            printf '%s' "$release_readback" | \
+              node ./scripts/release-provider-outcome.mjs \
+                validate-created-release "$created_release_file"
+            printf '%s' "$release_readback" | \
+              node ./scripts/release-provider-outcome.mjs \
+                wait-latest-release "$predecessor_release_file"
+          else
+            printf '%s' "$release_readback" | \
+              node ./scripts/release-provider-outcome.mjs require-latest-release
+          fi
           terminal_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$VERIFIED_TAG" --jq '.sha')"
           terminal_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq '.object.sha')"
           verify_publication_authority postwrite "$terminal_main_sha"
@@ -275,7 +291,5 @@ jobs:
             echo "::error::Immutable release tag moved during publication"
             exit 1
           fi
-          if [[ "$latest_tag" != "$VERIFIED_TAG" ]]; then
-            echo "::error::Release $VERIFIED_TAG is immutable but no longer Latest; recover from the current immutable Latest Release"
-            exit 1
-          fi
+          printf '%s' "$release_readback" | \
+            node ./scripts/release-provider-outcome.mjs revalidate-latest-release

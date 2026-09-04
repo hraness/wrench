@@ -377,6 +377,50 @@ for a non-production deployment.
 candidate that has not completed npm staging, tagging, or immutable Release
 publication, so they must never replace the public production site.
 
+Keep Vercel project `prj_TZbDZ38ABPan158IqnczgsuTu6Ue` under team
+`team_UAd1iD2XogJlbFg4h14mRaPM` linked to GitHub repository ID `1316443113`
+with `link.productionBranch=website-production`,
+`autoExposeSystemEnvs=true`, and `autoAssignCustomDomains=true`. The last
+setting is a persistent project invariant, not a per-release switch. When it is
+false, Vercel can report a READY/STAGED deployment and GitHub success without
+moving `wrench.rip` or `www.wrench.rip`; the public marker gate must reject or
+time out on that state.
+
+Before the one-time false-to-true correction, require the marker patch on
+current `main` with merged-main CI green. Prove `website-production`, its tag,
+and immutable Latest Release still identify the intended current release;
+`targets.production`, the apex, `www`, and system aliases still identify the
+already-promoted exact deployment; no newer or in-flight Production deployment,
+promotion, rollback, or rolling release exists for `website-production`; and
+the exact project and link identities above have not drifted. Make one
+setting-only update, then read the project back immediately. The only allowed
+change is `autoAssignCustomDomains: false` to `true`: project, link, Production
+target, and domains stay byte-for-byte equivalent; canonical body hashes and
+the exact `www` 308 stay unchanged; and the update creates no deployment or
+promotion. Leave the setting true persistently.
+
+An ambiguous setting update is readback-only, never a blind retry. If it remains
+false with every invariant intact, stop and begin a fresh preflight. If it is
+true with every invariant intact, accept it. If it is true but the
+setting-transition postcondition is suspect while the target and domains remain
+exact, at most one compensating setting-only update back to false plus exact
+readback is permitted. Any target, domain, deployment, or ref drift freezes the
+release for review; never alias, promote, or guess. Setting false cannot undo an
+alias move.
+
+If a future candidate is READY/STAGED because this persistent invariant
+drifted, do not rewrite the ref, rerun the workflow, or assign an individual
+alias. Pin the exact deployment ID and unique URL, source SHA,
+`website-production` source, READY/STAGED state, and matching GitHub deployment
+and status, and prove that no competing deployment exists. Recovery is one
+owner-authorized `vercel promote <exact-id-or-url>`, followed by exact
+Production target, domain, marker, and route readback. An ambiguous promote is
+also readback-only with no blind retry. Reconcile
+`autoAssignCustomDomains=true` afterward as the durable state. Checked-in
+workflows never mutate this project setting, call the Vercel API, or perform an
+alias or promote operation; promotion outcome remains token-free public HTTPS
+plus read-only GitHub evidence.
+
 Vercel will not accept a Production Branch that does not exist. For the one-time
 migration only, first verify the current immutable Latest Release against its
 exact remote tag commit and canonical npm version, then create
@@ -392,11 +436,12 @@ non-fast-forward rules. Live ruleset `21887484` targets the same refs with one
 update restriction and exactly one `Integration` bypass for dedicated App
 `4783991` with `bypass_mode=always`. Together they deny ref creation, deletion,
 non-fast-forward movement, and every update except the dedicated App's admitted
-fast-forward. Production-only freeze ruleset `22182820` adds no-bypass creation,
-update, deletion, and non-fast-forward restrictions while production remains
-safely frozen. The App-only writer passed the positive and negative canary
-proofs retained below, but the production freeze blocks its use until a fresh
-release-owner audit. GitHub Actions App Integration 15368 is not the
+fast-forward. Incident freeze ruleset `22182820` added no-bypass creation,
+update, deletion, and non-fast-forward restrictions during the v0.16.4 release.
+It was removed by captured numeric ID only after the release-owner audit and
+successful exact production promotion; it is historical, not a live control.
+The App-only writer passed the positive and negative canary
+proofs retained below. GitHub Actions App Integration 15368 is not the
 production writer and must not be configured as the update-rule bypass.
 
 The retained canary proof is evidence, never standing
@@ -413,8 +458,9 @@ administrator bypass disabled, exactly the four variables
 `WRENCH_RELEASE_APP_ID`, `WRENCH_RELEASE_APP_CLIENT_ID`,
 `WRENCH_RELEASE_APP_SLUG`, and `WRENCH_RELEASE_APP_INSTALLATION_ID`, and
 exactly the `WRENCH_RELEASE_APP_PRIVATE_KEY` secret. Any drift leaves
-production unchanged. This evidence correction does not authorize removal of
-live production freeze `22182820`.
+production unchanged. The audited v0.16.4 removal of incident freeze
+`22182820` does not authorize changing either permanent rule or silently
+weakening a future incident freeze.
 
 Checked-in `CODEOWNERS` assigns source ownership and notification for the
 workflow, Release helper, and publishing policy paths. It does not claim live or
@@ -474,16 +520,26 @@ with explicit recovery guidance for the observed Latest coordinate. A
 supersession after that final read is not observable by the completed workflow.
 
 Immediately before the tag push that dispatches **Release**, a signed-in
-administrator must read back immutable Releases as `enabled=true`. The workflow
-token deliberately keeps only `contents:write` and cannot read that
-Administration endpoint. This fresh control-plane check is therefore a trusted
-operator boundary, with a residual administrator-toggle window that repeated
-workflow reads cannot remove. The created and terminal Release readbacks must
-still report `immutable=true`.
+administrator must read back both immutable Releases as `enabled=true` and one
+exact active repository tag ruleset whose sole ref target is `refs/tags/v*`,
+whose bypass-actor set is empty, and whose exact rule types are `deletion` and
+`update`. Creation remains intentionally allowed so the new version tag can be
+created once; update and deletion must be denied to every actor afterward.
+Ruleset `19989752`, currently named `Immutable version tags`, is retained live
+evidence, but its numeric ID and name are not authority: the semantic readback
+is. If that evidence coordinate changes, resolve and retain the unique new
+semantic match before proceeding. The workflow token deliberately keeps only
+`contents:write` and cannot read either Administration endpoint. These fresh
+control-plane checks are therefore a trusted operator boundary, with a residual
+administrator-toggle window that repeated workflow reads cannot remove. The
+created and terminal Release readbacks and tag reads must still report exact
+immutable authority.
 
 Run this with the signed-in administrator session immediately before creating
-the tag. It records both the required enabled state and GitHub's
-`enforced_by_owner` diagnostic without granting the workflow Administration:
+the tag. First resolve the unique candidate from the repository ruleset list,
+then set `wrench_tag_ruleset_id` to that captured numeric ID. The validation
+records the required semantics alongside GitHub's immutable-Release diagnostic
+without granting the workflow Administration:
 
 ```bash
 immutable_release_state="$(gh api \
@@ -502,6 +558,47 @@ if (
   typeof value.enforced_by_owner !== "boolean"
 ) process.exit(1);
 process.stdout.write(`${JSON.stringify(value)}\n`);
+NODE
+wrench_tag_ruleset_id=19989752
+tag_ruleset_state="$(gh api \
+  --header 'Accept: application/vnd.github+json' \
+  --header 'X-GitHub-Api-Version: 2026-03-10' \
+  "/repos/hraness/wrench/rulesets/$wrench_tag_ruleset_id")"
+TAG_RULESET_STATE="$tag_ruleset_state" node <<'NODE'
+const value = JSON.parse(process.env.TAG_RULESET_STATE ?? "null");
+const refName = value?.conditions?.ref_name;
+const ruleTypes = Array.isArray(value?.rules)
+  ? value.rules.map((rule) => rule?.type).sort()
+  : [];
+if (
+  value === null ||
+  typeof value !== "object" ||
+  Array.isArray(value) ||
+  value.target !== "tag" ||
+  value.source_type !== "Repository" ||
+  value.source !== "hraness/wrench" ||
+  value.enforcement !== "active" ||
+  !Array.isArray(value.bypass_actors) ||
+  value.bypass_actors.length !== 0 ||
+  refName === null ||
+  typeof refName !== "object" ||
+  !Array.isArray(refName.include) ||
+  refName.include.length !== 1 ||
+  refName.include[0] !== "refs/tags/v*" ||
+  !Array.isArray(refName.exclude) ||
+  refName.exclude.length !== 0 ||
+  JSON.stringify(ruleTypes) !== '["deletion","update"]'
+) process.exit(1);
+process.stdout.write(`${JSON.stringify({
+  id: value.id,
+  name: value.name,
+  semantics: {
+    bypassActors: 0,
+    enforcement: value.enforcement,
+    ref: refName.include[0],
+    rules: ruleTypes,
+  },
+})}\n`);
 NODE
 ```
 
@@ -634,12 +731,13 @@ cleanup-qualified revocation receipt
 stableDenials:2}`. Lifecycle ruleset `21832074` remained no-bypass. Update
 ruleset `21887484` admitted only App `4783991` as an `Integration` with
 `bypass_mode=always`. Production-only freeze ruleset `22149969` remained
-no-bypass during that retained proof. That historical ruleset was later absent;
-current replacement ruleset `22182820` restores the live production freeze.
+no-bypass during that retained proof. That historical ruleset was later absent.
+Replacement incident freeze `22182820` protected the v0.16.4 release and was
+then removed by captured numeric ID during its audited production promotion.
 The production helper remains hard-bound to `website-production` and was not
 reused for the canary.
 
-This checked cleanup removes the single-use workflow and helper after retaining
+This checked cleanup removed the single-use workflow and helper after retaining
 their run, job log, App and installation readbacks, environment admission,
 administrator ruleset projections, ordinary-denial and App-bypass Rule Suites,
 canonical evidence, and SHA-256 digests. After this cleanup is merged and its
@@ -654,9 +752,10 @@ ruleset fingerprint variables by exact name:
 require exactly the four reviewed App ID, client ID, slug, and installation ID
 variables plus the single private key secret, with its main-only branch policy,
 reviewer, `prevent_self_review` setting, and disabled admin bypass unchanged.
-Retain both permanent rulesets, the canary at `C`, and the production-only
-freeze. Remove the freeze later only by its captured numeric ID after a fresh
-release-owner audit; uncertainty leaves production safely frozen.
+Retain both permanent rulesets and the canary at `C`. The six temporary
+fingerprint variables were cleanup inputs, not durable environment state. A
+future incident freeze must be created, captured, audited, and removed by exact
+numeric ID; uncertainty leaves that incident safely frozen.
 
 The minted token must carry a bounded one-hour expiry and fit the streamed
 response parser. The helper masks it and passes it only through a private
@@ -713,7 +812,10 @@ mismatch fails closed. The workflow never creates, deletes, force-moves, or
 recreates the branch.
 
 A dependent job with only `contents: read` and `deployments: read` owns the
-bounded provider wait. After a new fast-forward, it accepts exactly one new
+bounded provider wait. Its explicit job condition accepts only successful
+verification, baseline, and promotion-selection results while tolerating the
+one intentionally skipped alternate promotion path; cancellation and every
+failed prerequisite still skip it. After a new fast-forward, it accepts exactly one new
 GitHub Production deployment whose SHA is the verified release commit, whose
 task is `deploy`, whose environment and original environment are `Production`,
 and whose creator is the pinned Vercel bot. Recovery from an already-exact
@@ -739,10 +841,30 @@ keep its exact GitHub
 deployment URL, Production environment, pinned Vercel creator, and one shared
 canonical `https://wrench-<id>-hraness.vercel.app` target, environment, and log
 URL. Same-second status rows are resolved only by that cross-API node identity.
+The build's exact seven-key `/.well-known/wrench-release.json` binds schema,
+package, repository, tag, version, verifier-proven local HEAD, and the strict
+unique Vercel deployment URL. Before any write, the baseline reads that marker
+twice around the GitHub ref and complete deployment inventory. A 404 is allowed
+only when promoting exact v0.16.5, the first release that contains the marker;
+every later baseline requires one stable valid marker for the latest successful
+deployment at the baseline ref. During outcome polling, the apex marker may
+show only the baseline identity or the exact target. A third identity, changed
+same-release deployment URL, target-to-baseline regression, or disagreement
+with the pinned status URL fails closed.
+
 The job requires the initial success observation plus two complete consistent
 readbacks, repeats the complete deployment inventory after the final status
-read, and sandwiches terminal state with exact tag, Release, Latest, ref, and
-workflow-source authority reads. The observation window starts immediately
+read, and sandwiches terminal state with exact tag, Release, Latest, ref,
+workflow-source, and canonical-host authority reads. Each public readback
+requires the target marker plus bounded canonical responses from
+`https://wrench.rip/`, `/providers/beeper/`, and `/llms.txt`; it also requires
+`https://www.wrench.rip` to return one no-follow 308 whose `Location` preserves
+the marker path and query exactly. The project-domain aliases are not release
+authorities. The two complete public readbacks must be byte-stable by digest.
+Release/source/nonce query values and `cache: no-store` are propagation and race
+observations only: Vercel static caching is not assumed bypassable, and
+correctness comes from release-varying marker bytes plus stable readback.
+The observation window starts immediately
 before the first provider read, after the initial authority checks. Production
 uses exactly 20 observation slots anchored to that start at offsets zero through
 19 minutes inside the half-open monotonic `[start, deadline)` window. API latency
@@ -766,9 +888,9 @@ runner teardown around the product deadline.
 
 The bounded request contract is separate for REST and GraphQL. The current
 control flow can make at most 209 REST calls in the provider outcome job. The
-worst missing-Release path uses 16 calls, including all five bounded release
+worst missing-Release path uses 30 calls, including all five bounded release
 pages plus the empty sentinel page. The immutable Release and downstream
-promotion workflows together use at most 330 REST calls, leaving 670 calls
+promotion workflows together use at most 344 REST calls, leaving 656 calls
 under the repository `GITHUB_TOKEN` limit of 1,000 REST requests per hour. The
 promotion helper itself uses at most 21 read-only REST calls; its leased Git
 push and at most fourteen App REST requests do not consume that `GITHUB_TOKEN`
@@ -783,8 +905,29 @@ timestamp ambiguity, competing deployments, identity drift, Latest Release or
 workflow-source drift, terminal failure, timeout, or final readback drift fail
 the promotion workflow. Read-only GitHub responses are capped at 8 MiB; App
 identity, installation, token, and revocation responses are streamed under a
-1 MiB cap; and each encoded cross-job receipt is capped at 64 KiB. This check
-needs no Vercel token, PAT, or redeploy.
+1 MiB cap; and each encoded cross-job receipt is capped at 64 KiB. Public-host
+verification uses at most 32 unauthenticated GETs: two baseline marker reads,
+20 polling marker reads, and two five-request terminal snapshots. Every request
+has at most ten seconds, marker and redirect bodies are capped at 1 KiB, health
+HTML at 256 KiB, and health text at 64 KiB. This check needs no Vercel token,
+PAT, cookie, authorization header, or redeploy.
+
+Only when creating a missing immutable Release, the Release workflow first
+pins one exact older immutable Latest Release by tag, ID, and publication time.
+After the POST, GitHub's Latest projection may remain only that exact predecessor
+or advance to the exact created target while the workflow makes at most twelve
+observations at absolute five-second slots inside one 60-second monotonic
+deadline. Each authenticated read has at most ten seconds. A third older
+identity, regression, same-or-higher different stable tag, target ID or
+publication-time drift, malformed or mutable Release, API failure, clock
+regression, stuck sleep, attempt exhaustion, or deadline expiry fails closed.
+An exact Release that already existed gets one immediate Latest check and never
+enters this convergence loop. After either path converges, the workflow repeats
+terminal tag, main, and release-control authority, then reads the exact by-tag
+Release and Latest once more. That final Latest read is the last external
+observation and must bind the same tag, ID, and publication time. This is a
+bounded authority sandwich, not an atomic provider snapshot, and it never
+changes the immutable Release or its tag.
 
 If promotion fails after the immutable Release exists, merge the reviewed fix to
 `main` first. Then dispatch **Promote website production** from current `main`
@@ -803,10 +946,17 @@ the site without external release checks. A production build first requires the
 checked-out HEAD and root package version to equal the exact `v<version>` commit
 returned by GitHub's bounded public commit API, requires canonical npm to
 contain that version with SHA-512 integrity, and requires the matching immutable
-GitHub Release to be non-draft, non-prerelease, and Latest. Public JSON response
-bodies and the fixed local `git rev-parse HEAD` child output are streamed under
-fixed byte bounds. Only then does the build derive the public release
-identity and provider capability attestation from that exact source tree.
+GitHub Release to be non-draft, non-prerelease, and Latest. It also requires
+Vercel's system commit SHA to equal that verifier-proven local HEAD and its
+deployment host to match the strict Wrench Production URL grammar. Public JSON
+response bodies and the fixed local `git rev-parse HEAD` child output are
+streamed under fixed byte bounds. Only then does the build derive the public
+release identity and provider capability attestation from that exact source
+tree. After the verified site build succeeds, it writes canonical JSON plus one
+line feed at `/.well-known/wrench-release.json`, with exact
+`Cache-Control: no-store, max-age=0`; a failed verifier or build cannot publish
+the marker. Preview, development, and true local builds never emit it, and the
+normal site build removes any stale marker from its output directory.
 
 This production admission assumes a Vercel Git deployment whose checkout keeps
 a resolvable Git `HEAD`; missing repository metadata is a hard failure, not a

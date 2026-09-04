@@ -29,6 +29,10 @@ export type ProductionReleaseIdentity = Readonly<{
   version: string;
 }>;
 
+export type VerifiedProductionReleaseIdentity = ProductionReleaseIdentity & Readonly<{
+  sourceSha: string;
+}>;
+
 export type ProductionReleaseEvidence = Readonly<{
   githubRelease: unknown;
   githubTagCommitSha: string;
@@ -289,7 +293,7 @@ function githubReleaseState(value: unknown, label: string): GithubReleaseState {
 export function verifyProductionReleaseEvidence(
   packageValue: unknown,
   evidenceValue: unknown,
-): ProductionReleaseIdentity {
+): VerifiedProductionReleaseIdentity {
   const identity = parseProductionReleaseIdentity(packageValue);
   const evidence = parseEvidence(evidenceValue);
   const tagCommit = evidence.githubTagCommitSha;
@@ -310,7 +314,7 @@ export function verifyProductionReleaseEvidence(
   if (latest.tagName !== identity.tag || latest.id !== release.id) {
     throw new Error(`GitHub Release ${identity.tag} is not Latest.`);
   }
-  return identity;
+  return Object.freeze({ ...identity, sourceSha: evidence.headSha });
 }
 
 export async function fetchPublicJson(
@@ -477,12 +481,12 @@ export async function loadProductionReleaseEvidence(
 export async function verifyProductionRelease(
   packageValue: unknown,
   loadEvidence: ProductionReleaseEvidenceLoader = loadProductionReleaseEvidence,
-): Promise<ProductionReleaseIdentity> {
+): Promise<VerifiedProductionReleaseIdentity> {
   const identity = parseProductionReleaseIdentity(packageValue);
   return verifyProductionReleaseEvidence(identity, await loadEvidence(identity));
 }
 
-export async function verifyCurrentProductionRelease(): Promise<ProductionReleaseIdentity> {
+export async function verifyCurrentProductionRelease(): Promise<VerifiedProductionReleaseIdentity> {
   const packageValue: unknown = JSON.parse(
     await readFile(join(repositoryRoot, "package.json"), "utf8"),
   );

@@ -1,8 +1,21 @@
-import { verifyCurrentProductionRelease } from "./production-release-verifier";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import {
+  createProductionReleaseMarker,
+  PRODUCTION_RELEASE_MARKER_PATH,
+  serializeProductionReleaseMarker,
+  type ProductionReleaseMarker,
+} from "./production-release-marker.mjs";
+import {
+  verifyCurrentProductionRelease,
+  type VerifiedProductionReleaseIdentity,
+} from "./production-release-verifier";
 
 type VercelBuildDependencies = Readonly<{
   build: (environment: Readonly<Record<string, string | undefined>>) => Promise<void>;
-  verifyProduction: () => Promise<unknown>;
+  publishProductionMarker: (marker: ProductionReleaseMarker) => Promise<void>;
+  verifyProduction: () => Promise<VerifiedProductionReleaseIdentity>;
 }>;
 
 export type VercelDeploymentEnvironment =
@@ -13,6 +26,8 @@ export type VercelDeploymentEnvironment =
 
 export const VERCEL_PRODUCTION_BRANCH = "website-production" as const;
 export const WRENCH_VERCEL_BUILD_MARKER = "release-bound-v1" as const;
+const productionCommitSha = /^[0-9a-f]{40}$/u;
+const productionDeploymentHost = /^wrench-[a-z0-9]+-hraness\.vercel\.app$/u;
 
 export function parseVercelDeploymentEnvironment(
   environment: Readonly<Record<string, string | undefined>>,
@@ -56,6 +71,16 @@ export function parseVercelDeploymentEnvironment(
       `${VERCEL_PRODUCTION_BRANCH} must be classified as a production deployment.`,
     );
   }
+  if (deployment === "production") {
+    if (!productionCommitSha.test(environment.VERCEL_GIT_COMMIT_SHA ?? "")) {
+      throw new Error(
+        "VERCEL_GIT_COMMIT_SHA must be one lowercase 40-hex commit during production.",
+      );
+    }
+    if (!productionDeploymentHost.test(environment.VERCEL_URL ?? "")) {
+      throw new Error("VERCEL_URL must be one exact Wrench production deployment host.");
+    }
+  }
   return deployment;
 }
 
@@ -66,16 +91,47 @@ async function buildCurrentWebsite(
   await buildWebsite(environment);
 }
 
+async function publishCurrentProductionMarker(
+  marker: ProductionReleaseMarker,
+): Promise<void> {
+  const markerPath = join(import.meta.dir, "dist", PRODUCTION_RELEASE_MARKER_PATH.slice(1));
+  await mkdir(join(import.meta.dir, "dist", ".well-known"), {
+    mode: 0o755,
+    recursive: true,
+  });
+  await writeFile(markerPath, serializeProductionReleaseMarker(marker), {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o644,
+  });
+}
+
 export async function runVercelWebsiteBuild(
   environment: Readonly<Record<string, string | undefined>> = process.env,
   dependencies: VercelBuildDependencies = {
     build: buildCurrentWebsite,
+    publishProductionMarker: publishCurrentProductionMarker,
     verifyProduction: verifyCurrentProductionRelease,
   },
 ): Promise<void> {
   const deployment = parseVercelDeploymentEnvironment(environment);
   if (deployment === "production") {
-    await dependencies.verifyProduction();
+    const identity = await dependencies.verifyProduction();
+    if (environment.VERCEL_GIT_COMMIT_SHA !== identity.sourceSha) {
+      throw new Error(
+        "VERCEL_GIT_COMMIT_SHA does not equal the verifier-proven production HEAD.",
+      );
+    }
+    const marker = createProductionReleaseMarker({
+      deploymentUrl: `https://${environment.VERCEL_URL ?? ""}`,
+      name: identity.name,
+      sourceSha: identity.sourceSha,
+      tag: identity.tag,
+      version: identity.version,
+    });
+    await dependencies.build(environment);
+    await dependencies.publishProductionMarker(marker);
+    return;
   }
   await dependencies.build(environment);
 }

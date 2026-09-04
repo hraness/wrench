@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
-import { appendFileSync, readFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, readFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
@@ -11,8 +11,15 @@ import {
   withReleaseAppTokenFromEnvironment,
 } from "./release-app-token.mjs";
 import { advanceWebsiteProductionRefFromEnvironment } from "./release-ref-writer.mjs";
+import {
+  parseProductionReleaseMarker,
+  PRODUCTION_RELEASE_MARKER_MAX_BYTES,
+  PRODUCTION_RELEASE_MARKER_PATH,
+  PRODUCTION_RELEASE_MARKER_SCHEMA,
+  serializeProductionReleaseMarker,
+} from "../website/production-release-marker.mjs";
 
-const BASELINE_SCHEMA = "wrench-provider-baseline-v2";
+const BASELINE_SCHEMA = "wrench-provider-baseline-v3";
 const PROMOTION_SCHEMA = "wrench-provider-promotion-v2";
 const PRODUCTION_REF = "refs/heads/website-production";
 const PAGE_SIZE = 100;
@@ -21,8 +28,16 @@ const MAX_PROVIDER_POLLS = 20;
 const PROVIDER_POLL_INTERVAL_MILLISECONDS = 60_000;
 const PROVIDER_OBSERVATION_DEADLINE_MILLISECONDS = 20 * 60_000;
 const PROVIDER_API_CALL_TIMEOUT_MILLISECONDS = 60_000;
+const PUBLIC_REQUEST_TIMEOUT_MILLISECONDS = 10_000;
+const LATEST_RELEASE_CONVERGENCE_DEADLINE_MILLISECONDS = 60_000;
+const LATEST_RELEASE_POLL_INTERVAL_MILLISECONDS = 5_000;
+const LATEST_RELEASE_MAX_ATTEMPTS = 12;
+const LATEST_RELEASE_REQUEST_TIMEOUT_MILLISECONDS = 10_000;
 const MAX_SLEEP_ATTEMPTS_PER_INTERVAL = 16;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_PUBLIC_HTML_BYTES = 256 * 1024;
+const MAX_PUBLIC_TEXT_BYTES = 64 * 1024;
+const MAX_PUBLIC_REDIRECT_BYTES = 1_024;
 const MAX_ENCODED_RECEIPT_BYTES = 64 * 1024;
 const PAGINATED_READ_REQUESTS = MAX_ITEMS / PAGE_SIZE + 1;
 const GITHUB_TOKEN_REST_REQUEST_LIMIT = 1_000;
@@ -34,6 +49,17 @@ const MAX_GRAPHQL_COST_PER_REQUEST = 2;
 const GITHUB_GRAPHQL_POINT_LIMIT = 1_000;
 const GRAPHQL_ID = /^[\x21-\x7e]{1,512}$/u;
 const VERCEL_PRODUCTION_URL = /^https:\/\/wrench-[a-z0-9]+-hraness\.vercel\.app$/u;
+const PUBLIC_PRIMARY_ORIGIN = "https://wrench.rip";
+const PUBLIC_WWW_ORIGIN = "https://www.wrench.rip";
+const PUBLIC_RELEASE_MARKER_FIRST_TAG = "v0.16.5";
+const PUBLIC_PROBE_NONCE = /^[A-Za-z0-9_-]{8,128}$/u;
+const PUBLIC_HTML_ROUTES = Object.freeze([
+  Object.freeze({ canonical: "https://wrench.rip/", path: "/" }),
+  Object.freeze({ canonical: "https://wrench.rip/providers/beeper/", path: "/providers/beeper/" }),
+]);
+const PUBLIC_TEXT_ROUTES = Object.freeze([
+  Object.freeze({ prefix: "# Wrench\n", path: "/llms.txt" }),
+]);
 const STABLE_TAG = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u;
 const SHA = /^[0-9a-f]{40}$/u;
 const SECOND_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/u;
@@ -154,7 +180,9 @@ const IMMUTABLE_RELEASE_REST_REQUESTS =
   PAGINATED_READ_REQUESTS + // five bounded Release pages plus the empty sentinel
   2 + // pre-create main and tag revalidation
   1 + // conditional Release creation
-  4; // Release, Latest, terminal tag, and terminal main readbacks
+  3 + // Release, terminal tag, and terminal main readbacks
+  LATEST_RELEASE_MAX_ATTEMPTS + // bounded Latest convergence
+  3; // pinned predecessor plus terminal exact-by-tag and Latest projection readbacks
 const WEBSITE_AUTHORITY_REST_REQUESTS = 2 + 4 * (2 * (7 + 1 + 1 + 1));
 const SURROUNDING_RELEASE_REST_REQUESTS =
   IMMUTABLE_RELEASE_REST_REQUESTS + WEBSITE_AUTHORITY_REST_REQUESTS;
@@ -200,8 +228,374 @@ export const releaseGraphqlRequestBudget = Object.freeze({
   totalRequests: BASELINE_GRAPHQL_REQUESTS + OUTCOME_GRAPHQL_REQUESTS,
 });
 
+export const releasePublicHostRequestBudget = Object.freeze({
+  firstMarkerTag: PUBLIC_RELEASE_MARKER_FIRST_TAG,
+  perRequestTimeoutMilliseconds: PUBLIC_REQUEST_TIMEOUT_MILLISECONDS,
+  providerBaseline: 2,
+  providerOutcome:
+    MAX_PROVIDER_POLLS
+    + 2 * (1 + PUBLIC_HTML_ROUTES.length + PUBLIC_TEXT_ROUTES.length + 1),
+  total:
+    2
+    + MAX_PROVIDER_POLLS
+    + 2 * (1 + PUBLIC_HTML_ROUTES.length + PUBLIC_TEXT_ROUTES.length + 1),
+});
+
+export const latestReleaseConvergenceBudget = Object.freeze({
+  deadlineMilliseconds: LATEST_RELEASE_CONVERGENCE_DEADLINE_MILLISECONDS,
+  maxAttempts: LATEST_RELEASE_MAX_ATTEMPTS,
+  perRequestTimeoutMilliseconds: LATEST_RELEASE_REQUEST_TIMEOUT_MILLISECONDS,
+  pollIntervalMilliseconds: LATEST_RELEASE_POLL_INTERVAL_MILLISECONDS,
+});
+
 function fail(message) {
   throw new Error(message);
+}
+
+function publicBodyDigest(text) {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function decodePublicUtf8(bytes, label) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    fail(`${label} is not valid UTF-8`);
+  }
+}
+
+function readBoundedJsonFile(path, label) {
+  if (typeof path !== "string" || path.length === 0) fail(`${label} path is missing`);
+  let metadata;
+  try {
+    metadata = statSync(path);
+  } catch (error) {
+    fail(`${label} could not be inspected: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!metadata.isFile() || metadata.size <= 0 || metadata.size > MAX_RESPONSE_BYTES) {
+    fail(`${label} is not one bounded nonempty file`);
+  }
+  return parseJson(readFileSync(path, "utf8"), label);
+}
+
+async function readBoundedPublicBody(response, maximumBytes, label) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0) {
+    fail(`${label} has an invalid response-size bound`);
+  }
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null) {
+    if (!/^(?:0|[1-9][0-9]*)$/u.test(contentLength)) {
+      await response.body?.cancel();
+      fail(`${label} returned an invalid Content-Length`);
+    }
+    if (BigInt(contentLength) > BigInt(maximumBytes)) {
+      await response.body?.cancel();
+      fail(`${label} exceeded ${String(maximumBytes)} bytes`);
+    }
+  }
+  if (response.body === null) fail(`${label} has no response body`);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let length = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (!(chunk.value instanceof Uint8Array)) {
+        await reader.cancel();
+        fail(`${label} returned a non-byte body chunk`);
+      }
+      if (chunk.value.byteLength > maximumBytes - length) {
+        await reader.cancel();
+        fail(`${label} exceeded ${String(maximumBytes)} bytes`);
+      }
+      chunks.push(chunk.value);
+      length += chunk.value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return decodePublicUtf8(bytes, label);
+}
+
+async function exactPublicContentType(response, expected, label) {
+  if (response.headers.get("content-type") !== expected) {
+    await response.body?.cancel();
+    fail(`${label} did not return exact ${expected}`);
+  }
+}
+
+async function exactPublicResponseUrl(response, expected, label) {
+  if (response.url !== expected) {
+    await response.body?.cancel();
+    fail(`${label} changed its exact request URL`);
+  }
+}
+
+async function rejectPublicResponse(response, message) {
+  await response.body?.cancel();
+  fail(message);
+}
+
+function markerObservationValue(observation) {
+  if (observation.kind === "missing") {
+    return Object.freeze({
+      bodySha256: observation.bodySha256,
+      kind: "missing",
+    });
+  }
+  return Object.freeze({
+    bodySha256: observation.bodySha256,
+    kind: "release",
+    marker: observation.marker,
+  });
+}
+
+function markerObservationFingerprint(observation) {
+  return canonicalJson(markerObservationValue(observation));
+}
+
+export class WrenchPublicSite {
+  #fetch;
+  #nonce;
+  #usedNonces = new Set();
+
+  constructor({
+    fetchImplementation = fetch,
+    nonce = () => randomUUID(),
+  } = {}) {
+    if (typeof fetchImplementation !== "function") fail("public fetch is not a function");
+    if (typeof nonce !== "function") fail("public nonce source is not a function");
+    this.#fetch = fetchImplementation;
+    this.#nonce = nonce;
+  }
+
+  #probePath(path, verifiedTag, verifiedSha) {
+    const tag = expectStableTag(verifiedTag, "public probe tag");
+    const sha = expectSha(verifiedSha, "public probe SHA");
+    const nonce = this.#nonce();
+    if (typeof nonce !== "string" || !PUBLIC_PROBE_NONCE.test(nonce)) {
+      fail("public probe nonce is not one bounded URL-safe value");
+    }
+    if (this.#usedNonces.has(nonce)) fail("public probe nonce was reused");
+    this.#usedNonces.add(nonce);
+    const url = new URL(path, PUBLIC_PRIMARY_ORIGIN);
+    url.searchParams.set("release", tag);
+    url.searchParams.set("source", sha);
+    url.searchParams.set("nonce", nonce);
+    return `${url.pathname}${url.search}`;
+  }
+
+  async #request(origin, requestPath, accept, redirect, timeoutMilliseconds, label) {
+    if (
+      !Number.isSafeInteger(timeoutMilliseconds)
+      || timeoutMilliseconds <= 0
+      || timeoutMilliseconds > PUBLIC_REQUEST_TIMEOUT_MILLISECONDS
+    ) {
+      fail(`${label} has an invalid request timeout`);
+    }
+    const url = `${origin}${requestPath}`;
+    const response = await this.#fetch(url, {
+      cache: "no-store",
+      credentials: "omit",
+      headers: {
+        Accept: accept,
+        "User-Agent": "wrench-production-outcome-verifier",
+      },
+      method: "GET",
+      redirect,
+      signal: AbortSignal.timeout(timeoutMilliseconds),
+    });
+    await exactPublicResponseUrl(response, url, label);
+    return response;
+  }
+
+  async readMarker(verifiedTag, verifiedSha, { timeoutMilliseconds }) {
+    const requestPath = this.#probePath(
+      PRODUCTION_RELEASE_MARKER_PATH,
+      verifiedTag,
+      verifiedSha,
+    );
+    const label = "wrench.rip production release marker";
+    const response = await this.#request(
+      PUBLIC_PRIMARY_ORIGIN,
+      requestPath,
+      "application/json",
+      "error",
+      timeoutMilliseconds,
+      label,
+    );
+    if (response.status === 404) {
+      await exactPublicContentType(response, "text/html; charset=utf-8", label);
+      const body = await readBoundedPublicBody(response, MAX_PUBLIC_HTML_BYTES, label);
+      if (body.length === 0) fail(`${label} returned an empty first-release 404`);
+      return Object.freeze({
+        bodySha256: publicBodyDigest(body),
+        kind: "missing",
+        requestPath,
+      });
+    }
+    if (response.status !== 200) {
+      await rejectPublicResponse(
+        response,
+        `${label} returned HTTP ${String(response.status)}`,
+      );
+    }
+    await exactPublicContentType(response, "application/json; charset=utf-8", label);
+    if (response.headers.get("cache-control") !== "no-store, max-age=0") {
+      await response.body?.cancel();
+      fail(`${label} did not return exact Cache-Control: no-store, max-age=0`);
+    }
+    const body = await readBoundedPublicBody(
+      response,
+      PRODUCTION_RELEASE_MARKER_MAX_BYTES,
+      label,
+    );
+    let marker;
+    try {
+      marker = parseProductionReleaseMarker(body);
+    } catch (error) {
+      fail(`${label} is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return Object.freeze({
+      bodySha256: publicBodyDigest(body),
+      kind: "release",
+      marker,
+      requestPath,
+    });
+  }
+
+  async readHealthRoute(route, verifiedTag, verifiedSha, { timeoutMilliseconds }) {
+    const html = PUBLIC_HTML_ROUTES.find((entry) => entry.path === route);
+    const text = PUBLIC_TEXT_ROUTES.find((entry) => entry.path === route);
+    if (html === undefined && text === undefined) fail("public health route is unsupported");
+    const requestPath = this.#probePath(route, verifiedTag, verifiedSha);
+    const label = `wrench.rip health route ${route}`;
+    const response = await this.#request(
+      PUBLIC_PRIMARY_ORIGIN,
+      requestPath,
+      html === undefined ? "text/plain" : "text/html",
+      "error",
+      timeoutMilliseconds,
+      label,
+    );
+    if (response.status !== 200) {
+      await rejectPublicResponse(
+        response,
+        `${label} returned HTTP ${String(response.status)}`,
+      );
+    }
+    await exactPublicContentType(
+      response,
+      html === undefined ? "text/plain; charset=utf-8" : "text/html; charset=utf-8",
+      label,
+    );
+    const body = await readBoundedPublicBody(
+      response,
+      html === undefined ? MAX_PUBLIC_TEXT_BYTES : MAX_PUBLIC_HTML_BYTES,
+      label,
+    );
+    if (html !== undefined) {
+      if (
+        !body.startsWith("<!doctype html>\n")
+        || !body.includes(`<link rel="canonical" href="${html.canonical}">`)
+      ) {
+        fail(`${label} is not the canonical Wrench document`);
+      }
+    } else if (!body.startsWith(text.prefix)) {
+      fail(`${label} is not the canonical Wrench text document`);
+    }
+    return Object.freeze({
+      bodyBytes: new TextEncoder().encode(body).byteLength,
+      bodySha256: publicBodyDigest(body),
+      contentType: response.headers.get("content-type"),
+      path: route,
+      status: response.status,
+    });
+  }
+
+  async readWwwRedirect(requestPath, { timeoutMilliseconds }) {
+    if (
+      typeof requestPath !== "string"
+      || !requestPath.startsWith(`${PRODUCTION_RELEASE_MARKER_PATH}?`)
+      || requestPath.includes("#")
+    ) {
+      fail("www redirect probe path is malformed");
+    }
+    const label = "www.wrench.rip production release marker redirect";
+    const response = await this.#request(
+      PUBLIC_WWW_ORIGIN,
+      requestPath,
+      "application/json",
+      "manual",
+      timeoutMilliseconds,
+      label,
+    );
+    if (response.status !== 308) {
+      await rejectPublicResponse(
+        response,
+        `${label} returned HTTP ${String(response.status)}`,
+      );
+    }
+    await exactPublicContentType(response, "text/plain", label);
+    if (response.headers.get("location") !== `${PUBLIC_PRIMARY_ORIGIN}${requestPath}`) {
+      await rejectPublicResponse(
+        response,
+        `${label} did not preserve the exact HTTPS path and query`,
+      );
+    }
+    const body = await readBoundedPublicBody(response, MAX_PUBLIC_REDIRECT_BYTES, label);
+    if (body !== "Redirecting...\n") fail(`${label} returned an unexpected bounded body`);
+    return Object.freeze({
+      bodySha256: publicBodyDigest(body),
+      contentType: "text/plain",
+      location: `${PUBLIC_PRIMARY_ORIGIN}${requestPath}`,
+      status: 308,
+    });
+  }
+}
+
+function deadlineBoundPublicSite(publicSite, deadline) {
+  const invoke = async (method, args, label) => {
+    const operation = publicSite?.[method];
+    if (typeof operation !== "function") fail(`public site has no ${method} method`);
+    const before = deadline.begin(`begin ${label}`);
+    const timeoutMilliseconds = Math.min(
+      PUBLIC_REQUEST_TIMEOUT_MILLISECONDS,
+      Math.floor(before.remainingMilliseconds),
+    );
+    const result = await operation.call(
+      publicSite,
+      ...args,
+      Object.freeze({ timeoutMilliseconds }),
+    );
+    const after = deadline.complete(`complete ${label}`);
+    if (after.now <= before.now) fail(`${label} did not advance the provider monotonic clock`);
+    return result;
+  };
+  return Object.freeze({
+    readHealthRoute: (route, tag, sha) => invoke(
+      "readHealthRoute",
+      [route, tag, sha],
+      `public health route ${String(route)}`,
+    ),
+    readMarker: (tag, sha) => invoke(
+      "readMarker",
+      [tag, sha],
+      "public release marker",
+    ),
+    readWwwRedirect: (requestPath) => invoke(
+      "readWwwRedirect",
+      [requestPath],
+      "public www redirect",
+    ),
+  });
 }
 
 function createProviderDeadline(monotonicNow) {
@@ -1026,6 +1420,43 @@ function exactProductionRef(value) {
   return exactCommitRef(value, PRODUCTION_REF, "website-production ref");
 }
 
+function parsePublicMarkerReceipt(value, label = "baseline public marker") {
+  const record = expectRecord(value, label);
+  const kind = expectString(record.kind, `${label}.kind`);
+  const bodySha256 = expectString(record.bodySha256, `${label}.bodySha256`);
+  if (!/^[0-9a-f]{64}$/u.test(bodySha256)) fail(`${label}.bodySha256 is invalid`);
+  if (kind === "missing") {
+    expectExactKeys(record, ["bodySha256", "kind"], label);
+    return Object.freeze({ bodySha256, kind: "missing" });
+  }
+  if (kind !== "release") fail(`${label}.kind is unsupported`);
+  expectExactKeys(record, ["bodySha256", "kind", "marker"], label);
+  let marker;
+  try {
+    marker = parseProductionReleaseMarker(
+      `${JSON.stringify(expectRecord(record.marker, `${label}.marker`))}\n`,
+    );
+  } catch (error) {
+    fail(`${label}.marker is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const canonicalBody = serializeProductionReleaseMarker(marker);
+  if (publicBodyDigest(canonicalBody) !== bodySha256) {
+    fail(`${label}.bodySha256 does not bind its canonical marker`);
+  }
+  return Object.freeze({ bodySha256, kind: "release", marker });
+}
+
+function publicMarkerReceiptValue(value) {
+  const marker = parsePublicMarkerReceipt(value);
+  return marker.kind === "missing"
+    ? Object.freeze({ bodySha256: marker.bodySha256, kind: marker.kind })
+    : Object.freeze({
+      bodySha256: marker.bodySha256,
+      kind: marker.kind,
+      marker: marker.marker,
+    });
+}
+
 async function readProductionRef(api, repository) {
   return exactProductionRef(
     await api.get(`/repos/${repository}/git/ref/heads/website-production`),
@@ -1343,6 +1774,222 @@ export function exactPublishedRelease(value, tag, label = "published Release") {
   return release;
 }
 
+function exactLatestRelease(value, label) {
+  const release = expectRecord(value, label);
+  const tag = expectStableTag(release.tag_name, `${label} tag`);
+  return Object.freeze({
+    release: exactPublishedRelease(release, tag, label),
+    tag,
+  });
+}
+
+export function exactLatestPredecessor(value, verifiedTag) {
+  const tag = expectStableTag(verifiedTag, "verified tag");
+  const predecessor = exactLatestRelease(value, "pre-publication Latest Release");
+  if (
+    compareStableVersions(
+      stableVersion(predecessor.tag, "pre-publication Latest Release tag"),
+      stableVersion(tag, "verified tag"),
+    ) >= 0
+  ) {
+    fail(`pre-publication Latest Release must be strictly older than ${tag}`);
+  }
+  return predecessor;
+}
+
+function assertSameReleaseIdentity(actual, expected, label) {
+  if (actual.id !== expected.id || actual.published_at !== expected.published_at) {
+    fail(`${label} does not bind the immutable target Release`);
+  }
+}
+
+export function validateMatchingPublishedReleases(actualValue, expectedValue, verifiedTag) {
+  const tag = expectStableTag(verifiedTag, "verified tag");
+  const actual = exactPublishedRelease(actualValue, tag, `Release ${tag} readback`);
+  const expected = exactPublishedRelease(expectedValue, tag, `created Release ${tag}`);
+  assertSameReleaseIdentity(actual, expected, `Release ${tag} readback`);
+  return Object.freeze({ releaseId: actual.id, tag });
+}
+
+function readLatestConvergenceClock(monotonicNow, prior, label) {
+  const value = monotonicNow();
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    fail(`${label} is not a finite nonnegative monotonic timestamp`);
+  }
+  if (prior !== undefined && value < prior) {
+    fail("Latest Release convergence monotonic clock regressed");
+  }
+  return value;
+}
+
+export async function waitForLatestRelease({
+  api,
+  maxAttempts = LATEST_RELEASE_MAX_ATTEMPTS,
+  monotonicNow = () => performance.now(),
+  pollIntervalMilliseconds = LATEST_RELEASE_POLL_INTERVAL_MILLISECONDS,
+  predecessorRelease,
+  repository,
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  targetRelease,
+  verifiedTag,
+}) {
+  const coordinate = expectRepository(repository);
+  const tag = expectStableTag(verifiedTag, "verified tag");
+  const target = exactPublishedRelease(targetRelease, tag, `Release ${tag}`);
+  const predecessor = exactLatestPredecessor(predecessorRelease, tag);
+  if (
+    !Number.isSafeInteger(maxAttempts)
+    || maxAttempts <= 0
+    || maxAttempts > LATEST_RELEASE_MAX_ATTEMPTS
+  ) {
+    fail(`Latest Release maxAttempts must be between 1 and ${String(LATEST_RELEASE_MAX_ATTEMPTS)}`);
+  }
+  if (
+    !Number.isSafeInteger(pollIntervalMilliseconds)
+    || pollIntervalMilliseconds < 0
+    || pollIntervalMilliseconds > LATEST_RELEASE_POLL_INTERVAL_MILLISECONDS
+  ) {
+    fail(
+      `Latest Release poll interval must be between 0 and ${String(LATEST_RELEASE_POLL_INTERVAL_MILLISECONDS)} milliseconds`,
+    );
+  }
+  if (typeof monotonicNow !== "function" || typeof sleep !== "function") {
+    fail("Latest Release convergence clock or sleep is unavailable");
+  }
+  let prior = readLatestConvergenceClock(monotonicNow, undefined, "Latest Release convergence start");
+  const startedAt = prior;
+  const deadline = startedAt + LATEST_RELEASE_CONVERGENCE_DEADLINE_MILLISECONDS;
+  if (!Number.isFinite(deadline) || deadline > Number.MAX_SAFE_INTEGER || deadline <= startedAt) {
+    fail("Latest Release convergence deadline overflows the monotonic clock");
+  }
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const before = readLatestConvergenceClock(
+      monotonicNow,
+      prior,
+      "Latest Release convergence request start",
+    );
+    prior = before;
+    const remaining = deadline - before;
+    if (remaining < 1) fail(`Release ${tag} did not converge as Latest within 60 seconds`);
+    const rawLatest = expectRecord(
+      await api.get(
+        `/repos/${coordinate}/releases/latest`,
+        Object.freeze({
+          timeoutMilliseconds: Math.min(
+            LATEST_RELEASE_REQUEST_TIMEOUT_MILLISECONDS,
+            Math.floor(remaining),
+          ),
+        }),
+      ),
+      "Latest Release convergence response",
+    );
+    const after = readLatestConvergenceClock(
+      monotonicNow,
+      prior,
+      "Latest Release convergence request completion",
+    );
+    prior = after;
+    if (after > deadline) fail(`Release ${tag} did not converge as Latest within 60 seconds`);
+    const latest = exactLatestRelease(rawLatest, "Latest Release convergence response");
+    if (latest.tag === tag) {
+      assertSameReleaseIdentity(latest.release, target, `Latest Release ${tag}`);
+      return Object.freeze({
+        attempts: attempt,
+        releaseId: latest.release.id,
+        tag,
+      });
+    }
+    if (
+      latest.tag !== predecessor.tag
+      || latest.release.id !== predecessor.release.id
+      || latest.release.published_at !== predecessor.release.published_at
+    ) {
+      fail(`Latest Release changed from the pinned predecessor before ${tag} converged`);
+    }
+    if (attempt === maxAttempts) {
+      fail(`Release ${tag} did not converge as Latest within the bounded attempt budget`);
+    }
+    if (pollIntervalMilliseconds === 0) continue;
+    const scheduleTarget = startedAt + attempt * pollIntervalMilliseconds;
+    for (let sleepAttempt = 1; sleepAttempt <= MAX_SLEEP_ATTEMPTS_PER_INTERVAL; sleepAttempt += 1) {
+      const now = readLatestConvergenceClock(
+        monotonicNow,
+        prior,
+        "Latest Release convergence sleep start",
+      );
+      prior = now;
+      if (now >= scheduleTarget) break;
+      await sleep(scheduleTarget - now);
+      const woke = readLatestConvergenceClock(
+        monotonicNow,
+        prior,
+        "Latest Release convergence sleep completion",
+      );
+      prior = woke;
+      if (woke >= scheduleTarget) break;
+      if (sleepAttempt === MAX_SLEEP_ATTEMPTS_PER_INTERVAL) {
+        fail("Latest Release convergence sleep did not reach its monotonic schedule");
+      }
+    }
+  }
+  fail(`Release ${tag} did not converge as Latest`);
+}
+
+export async function requireLatestRelease({
+  api,
+  repository,
+  targetRelease,
+  verifiedTag,
+}) {
+  const coordinate = expectRepository(repository);
+  const tag = expectStableTag(verifiedTag, "verified tag");
+  const target = exactPublishedRelease(targetRelease, tag, `Release ${tag}`);
+  const latest = exactLatestRelease(
+    await api.get(
+      `/repos/${coordinate}/releases/latest`,
+      Object.freeze({ timeoutMilliseconds: LATEST_RELEASE_REQUEST_TIMEOUT_MILLISECONDS }),
+    ),
+    "Latest Release",
+  );
+  if (latest.tag !== tag) {
+    fail(`Release ${tag} is no longer Latest; recover from the current immutable Latest Release`);
+  }
+  assertSameReleaseIdentity(latest.release, target, `Latest Release ${tag}`);
+  return Object.freeze({ releaseId: latest.release.id, tag });
+}
+
+export async function revalidateLatestReleaseProjection({
+  api,
+  repository,
+  targetRelease,
+  verifiedTag,
+}) {
+  const coordinate = expectRepository(repository);
+  const tag = expectStableTag(verifiedTag, "verified tag");
+  const target = exactPublishedRelease(targetRelease, tag, `Release ${tag}`);
+  const options = Object.freeze({
+    timeoutMilliseconds: LATEST_RELEASE_REQUEST_TIMEOUT_MILLISECONDS,
+  });
+  const exactRelease = exactPublishedRelease(
+    await api.get(`/repos/${coordinate}/releases/tags/${tag}`, options),
+    tag,
+    `terminal Release ${tag}`,
+  );
+  assertSameReleaseIdentity(exactRelease, target, `terminal Release ${tag}`);
+  const latest = exactLatestRelease(
+    await api.get(`/repos/${coordinate}/releases/latest`, options),
+    "terminal Latest Release",
+  );
+  if (latest.tag !== tag) {
+    fail(`Release ${tag} is no longer Latest; recover from the current immutable Latest Release`);
+  }
+  assertSameReleaseIdentity(latest.release, target, `terminal Latest Release ${tag}`);
+  return Object.freeze({
+    releaseId: latest.release.id,
+    tag,
+  });
+}
+
 async function readFastForwardComparison(api, repository, currentSha, verifiedSha) {
   const value = expectRecord(
     await api.get(`/repos/${repository}/compare/${currentSha}...${verifiedSha}`),
@@ -1374,18 +2021,22 @@ function parseBaselineReceipt(value) {
     "deploymentFingerprint",
     "deploymentIds",
     "lowerBound",
+    "publicMarker",
     "productionRef",
     "refSha",
     "repository",
     "schema",
     "verifiedSha",
+    "verifiedTag",
   ], "baseline receipt");
   if (receipt.schema !== BASELINE_SCHEMA || receipt.productionRef !== PRODUCTION_REF) {
     fail("baseline receipt has the wrong schema or production ref");
   }
   const repository = expectRepository(receipt.repository);
   const verifiedSha = expectSha(receipt.verifiedSha, "baseline receipt verifiedSha");
+  const verifiedTag = expectStableTag(receipt.verifiedTag, "baseline receipt verifiedTag");
   const refSha = expectSha(receipt.refSha, "baseline receipt refSha");
+  const publicMarker = parsePublicMarkerReceipt(receipt.publicMarker);
   const lowerBound = parseReceiptTimestamp(receipt.lowerBound, "baseline receipt lowerBound");
   const completedAt = parseReceiptTimestamp(receipt.completedAt, "baseline receipt completedAt");
   if (completedAt.milliseconds < lowerBound.milliseconds) {
@@ -1421,11 +2072,13 @@ function parseBaselineReceipt(value) {
     deploymentIds: Object.freeze(normalizedDeploymentIds),
     lowerBound: lowerBound.timestamp,
     lowerBoundMilliseconds: lowerBound.milliseconds,
+    publicMarker,
     productionRef: PRODUCTION_REF,
     refSha,
     repository,
     schema: BASELINE_SCHEMA,
     verifiedSha,
+    verifiedTag,
   });
 }
 
@@ -1435,11 +2088,13 @@ function baselineReceiptValue(receipt) {
     deploymentFingerprint: receipt.deploymentFingerprint,
     deploymentIds: receipt.deploymentIds,
     lowerBound: receipt.lowerBound,
+    publicMarker: publicMarkerReceiptValue(receipt.publicMarker),
     productionRef: receipt.productionRef,
     refSha: receipt.refSha,
     repository: receipt.repository,
     schema: receipt.schema,
     verifiedSha: receipt.verifiedSha,
+    verifiedTag: receipt.verifiedTag,
   });
 }
 
@@ -1540,9 +2195,78 @@ function promotionReceiptValue(receipt) {
   });
 }
 
-export async function createProviderBaseline({ api, repository, verifiedSha }) {
+function validateStableBaselineMarker(
+  firstObservation,
+  secondObservation,
+  deployments,
+  { refSha, verifiedSha, verifiedTag },
+) {
+  if (
+    markerObservationFingerprint(firstObservation)
+    !== markerObservationFingerprint(secondObservation)
+  ) {
+    fail("public production release marker changed during the baseline snapshot");
+  }
+  const markerState = publicMarkerReceiptValue(markerObservationValue(secondObservation));
+  if (markerState.kind === "missing") {
+    if (verifiedTag !== PUBLIC_RELEASE_MARKER_FIRST_TAG) {
+      fail(
+        `public production release marker may be absent only for first marker-bearing release ${PUBLIC_RELEASE_MARKER_FIRST_TAG}`,
+      );
+    }
+    return markerState;
+  }
+  const marker = markerState.marker;
+  if (marker.sourceSha !== refSha) {
+    fail("public production release marker does not bind the baseline production ref");
+  }
+  const markerVersion = stableVersion(marker.tag, "baseline public marker tag");
+  const targetVersion = stableVersion(verifiedTag, "verified tag");
+  const comparison = compareStableVersions(markerVersion, targetVersion);
+  if (
+    comparison > 0
+    || (marker.sourceSha === verifiedSha && marker.tag !== verifiedTag)
+    || (marker.sourceSha !== verifiedSha && comparison >= 0)
+  ) {
+    fail("public production release marker does not precede or equal the verified release");
+  }
+  const successful = deployments.filter((deployment) => (
+    deployment.sha === marker.sourceSha
+    && deployment.latestStatus?.state === "SUCCESS"
+    && ["ACTIVE", "SUCCESS"].includes(deployment.state)
+  ));
+  const latest = successful[0];
+  if (latest === undefined) {
+    fail("public production release marker has no successful baseline deployment");
+  }
+  if (successful[1]?.createdAt === latest.createdAt) {
+    fail("public production release marker deployment is ambiguous at second precision");
+  }
+  exactGraphqlCandidate(latest, marker.sourceSha, "public marker baseline deployment");
+  if (
+    latest.latestStatus?.environmentUrl !== marker.deploymentUrl
+    || latest.latestStatus.logUrl !== marker.deploymentUrl
+  ) {
+    fail("public production release marker does not bind the latest baseline deployment URL");
+  }
+  return markerState;
+}
+
+export async function createProviderBaseline({
+  api,
+  publicSite = new WrenchPublicSite(),
+  repository,
+  verifiedSha,
+  verifiedTag,
+}) {
   const coordinate = expectRepository(repository);
   const sha = expectSha(verifiedSha, "verified SHA");
+  const tag = expectStableTag(verifiedTag, "verified tag");
+  const initialMarker = await publicSite.readMarker(
+    tag,
+    sha,
+    Object.freeze({ timeoutMilliseconds: PUBLIC_REQUEST_TIMEOUT_MILLISECONDS }),
+  );
   const initialRef = await readProductionRefWithServerDate(api, coordinate);
   const lowerBound = initialRef.timestamp;
   const lowerBoundMilliseconds = initialRef.milliseconds;
@@ -1559,21 +2283,34 @@ export async function createProviderBaseline({ api, repository, verifiedSha }) {
   if (deploymentFingerprint(first) !== deploymentFingerprint(second)) {
     fail("Production deployment inventory changed during the baseline snapshot");
   }
+  const finalMarker = await publicSite.readMarker(
+    tag,
+    sha,
+    Object.freeze({ timeoutMilliseconds: PUBLIC_REQUEST_TIMEOUT_MILLISECONDS }),
+  );
   const finalRef = await readProductionRefWithServerDate(api, coordinate);
   if (finalRef.sha !== refSha) fail("website-production moved during the baseline snapshot");
   if (finalRef.milliseconds < lowerBoundMilliseconds) {
     fail("GitHub server Date regressed during the baseline snapshot");
   }
+  const publicMarker = validateStableBaselineMarker(
+    initialMarker,
+    finalMarker,
+    second,
+    { refSha, verifiedSha: sha, verifiedTag: tag },
+  );
   const receipt = Object.freeze({
     completedAt: finalRef.timestamp,
     deploymentFingerprint: deploymentFingerprint(second),
     deploymentIds: second.map((deployment) => deployment.id).sort((left, right) => right - left),
     lowerBound,
+    publicMarker,
     productionRef: PRODUCTION_REF,
     refSha,
     repository: coordinate,
     schema: BASELINE_SCHEMA,
     verifiedSha: sha,
+    verifiedTag: tag,
   });
   return baselineReceiptValue(parseBaselineReceipt(receipt));
 }
@@ -1594,7 +2331,11 @@ export async function promoteWebsiteProduction({
   const baseline = parseBaselineReceipt(baselineReceipt);
   const workflowSource = Object.freeze({ defaultBranch, eventName, recoveryWorkflowSha });
   const baselineValue = baselineReceiptValue(baseline);
-  if (baseline.repository !== coordinate || baseline.verifiedSha !== sha) {
+  if (
+    baseline.repository !== coordinate
+    || baseline.verifiedSha !== sha
+    || baseline.verifiedTag !== tag
+  ) {
     fail("baseline receipt does not bind the verified release coordinate");
   }
 
@@ -1661,6 +2402,7 @@ function validateReceiptPair(
   if (
     baseline.repository !== promotion.repository ||
     baseline.verifiedSha !== promotion.verifiedSha ||
+    baseline.verifiedTag !== promotion.verifiedTag ||
     promotion.previousSha !== baseline.refSha
   ) {
     fail("provider receipts do not bind one release transition");
@@ -1874,8 +2616,95 @@ function reconcileGraphqlRestStatus(graphCandidate, restCandidate, restStatus) {
   }
 }
 
+function isExactTargetMarker(marker, promotion) {
+  return marker.tag === promotion.verifiedTag
+    && marker.version === promotion.verifiedTag.slice(1)
+    && marker.sourceSha === promotion.verifiedSha;
+}
+
+function observePublicMarkerTransition(
+  observation,
+  baseline,
+  promotion,
+  transition,
+  candidateStatus,
+) {
+  const fingerprint = markerObservationFingerprint(observation);
+  const baselineFingerprint = markerObservationFingerprint(baseline.publicMarker);
+  if (observation.kind === "release" && isExactTargetMarker(observation.marker, promotion)) {
+    if (
+      candidateStatus !== undefined
+      && (
+        candidateStatus.raw.environment_url !== observation.marker.deploymentUrl
+        || candidateStatus.raw.target_url !== observation.marker.deploymentUrl
+        || candidateStatus.raw.log_url !== observation.marker.deploymentUrl
+      )
+    ) {
+      fail("public production release marker does not bind the pinned candidate deployment URL");
+    }
+    if (
+      transition.targetFingerprint !== undefined
+      && transition.targetFingerprint !== fingerprint
+    ) {
+      fail("public production release marker changed within the target release identity");
+    }
+    transition.targetFingerprint = fingerprint;
+    transition.targetObserved = true;
+    return "target";
+  }
+  if (fingerprint !== baselineFingerprint) {
+    fail("public production release marker exposed a third release identity");
+  }
+  if (transition.targetObserved) {
+    fail("public production release marker regressed after exposing the target release");
+  }
+  return "baseline";
+}
+
+async function readExactPublicReleaseSnapshot(
+  publicSite,
+  promotion,
+  candidateStatus,
+) {
+  const marker = await publicSite.readMarker(
+    promotion.verifiedTag,
+    promotion.verifiedSha,
+  );
+  if (
+    marker.kind !== "release"
+    || !isExactTargetMarker(marker.marker, promotion)
+    || marker.marker.deploymentUrl !== candidateStatus.raw.environment_url
+    || marker.marker.deploymentUrl !== candidateStatus.raw.target_url
+    || marker.marker.deploymentUrl !== candidateStatus.raw.log_url
+  ) {
+    fail("public production release marker does not bind the exact successful deployment");
+  }
+  const routes = [];
+  for (const route of [...PUBLIC_HTML_ROUTES, ...PUBLIC_TEXT_ROUTES]) {
+    routes.push(await publicSite.readHealthRoute(
+      route.path,
+      promotion.verifiedTag,
+      promotion.verifiedSha,
+    ));
+  }
+  const redirect = await publicSite.readWwwRedirect(marker.requestPath);
+  return Object.freeze({
+    fingerprint: canonicalJson({
+      marker: markerObservationValue(marker),
+      redirect: {
+        bodySha256: redirect.bodySha256,
+        contentType: redirect.contentType,
+        status: redirect.status,
+      },
+      routes,
+    }),
+    marker,
+  });
+}
+
 async function confirmSuccess(
   api,
+  publicSite,
   baseline,
   promotion,
   successSnapshot,
@@ -1935,6 +2764,11 @@ async function confirmSuccess(
   }
   reconcileGraphqlRestStatus(observed.graphCandidate, observed.candidate, latest);
   await revalidateTerminalAuthority(api, promotion, workflowSource);
+  const firstPublicSnapshot = await readExactPublicReleaseSnapshot(
+    publicSite,
+    promotion,
+    latest,
+  );
   const finalStatuses = await collectDeploymentStatuses(
     api,
     promotion.repository,
@@ -1973,6 +2807,14 @@ async function confirmSuccess(
     fail("candidate Production deployment success changed at the terminal inventory");
   }
   reconcileGraphqlRestStatus(terminalGraphCandidate, observed.candidate, finalLatest);
+  const secondPublicSnapshot = await readExactPublicReleaseSnapshot(
+    publicSite,
+    promotion,
+    finalLatest,
+  );
+  if (secondPublicSnapshot.fingerprint !== firstPublicSnapshot.fingerprint) {
+    fail("public production routes changed during terminal verification");
+  }
   await revalidateTerminalAuthority(api, promotion, workflowSource);
   return true;
 }
@@ -1985,6 +2827,7 @@ export async function waitForProviderOutcome({
   maxPolls = MAX_PROVIDER_POLLS,
   monotonicNow = () => performance.now(),
   promotionReceipt,
+  publicSite = new WrenchPublicSite(),
   repository,
   sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   pollIntervalMilliseconds = PROVIDER_POLL_INTERVAL_MILLISECONDS,
@@ -2030,11 +2873,16 @@ export async function waitForProviderOutcome({
 
   const deadline = createProviderDeadline(monotonicNow);
   const boundedApi = deadlineBoundReadApi(api, deadline);
+  const boundedPublicSite = deadlineBoundPublicSite(publicSite, deadline);
 
   let pinnedCandidateId;
   let pinnedCandidateFingerprint;
   const observedStatuses = new Map();
   let observedAnyStatus = false;
+  const publicTransition = {
+    targetFingerprint: undefined,
+    targetObserved: false,
+  };
 
   for (let poll = 1; poll <= maxPolls; poll += 1) {
     deadline.begin("begin provider observation");
@@ -2046,6 +2894,8 @@ export async function waitForProviderOutcome({
     );
     const candidate = observed.candidate;
     const graphCandidate = observed.graphCandidate;
+    let candidateCurrentStatus;
+    let successSnapshot;
     if (candidate !== undefined) {
       const fingerprint = candidateFingerprint(candidate);
       if (pinnedCandidateId === undefined) {
@@ -2093,6 +2943,7 @@ export async function waitForProviderOutcome({
         const currentObservation = observeRestCurrentStatus(statuses, graphCandidate);
         assertNoTerminalRestFailure(statuses, candidate.id);
         const latest = currentObservation.current;
+        candidateCurrentStatus = latest;
         const currentConverged =
           latest !== undefined &&
           graphStatus !== undefined &&
@@ -2108,27 +2959,50 @@ export async function waitForProviderOutcome({
         if (currentConverged) {
           reconcileGraphqlRestStatus(graphCandidate, candidate, latest);
         }
-        if (currentConverged && graphStatus.state === "SUCCESS" && latest.state === "success") {
+        if (
+          currentConverged
+          && graphStatus.state === "SUCCESS"
+          && latest.state === "success"
+        ) {
           if (latest.createdMilliseconds <= promotion.releasePublishedMilliseconds) {
             fail("candidate Production deployment success predates the immutable Release");
           }
-          const successSnapshot = Object.freeze({
+          successSnapshot = Object.freeze({
             candidate,
             status: latest,
             statusFingerprint: statusFingerprint(statuses),
           });
-          if (await confirmSuccess(
-            boundedApi,
-            baseline,
-            promotion,
-            successSnapshot,
-            workflowSource,
-            deadline,
-          )) {
-            return Object.freeze({ deploymentId: candidate.id, statusId: latest.id });
-          }
         }
       }
+    }
+    const publicMarker = await boundedPublicSite.readMarker(
+      promotion.verifiedTag,
+      promotion.verifiedSha,
+    );
+    const publicState = observePublicMarkerTransition(
+      publicMarker,
+      baseline,
+      promotion,
+      publicTransition,
+      candidateCurrentStatus,
+    );
+    if (
+      successSnapshot !== undefined
+      && publicState === "target"
+      && await confirmSuccess(
+        boundedApi,
+        boundedPublicSite,
+        baseline,
+        promotion,
+        successSnapshot,
+        workflowSource,
+        deadline,
+      )
+    ) {
+      return Object.freeze({
+        deploymentId: successSnapshot.candidate.id,
+        statusId: successSnapshot.status.id,
+      });
     }
 
     if (poll < maxPolls) {
@@ -2276,6 +3150,7 @@ async function main() {
       api,
       repository: process.env.GITHUB_REPOSITORY,
       verifiedSha: process.env.VERIFIED_SHA,
+      verifiedTag: process.env.VERIFIED_TAG,
     });
     writeReceiptOutput(receipt);
     const parsed = parseBaselineReceipt(receipt);
@@ -2309,6 +3184,61 @@ async function main() {
       process.env.VERIFIED_TAG,
       "Release response",
     );
+    return;
+  }
+  if (command === "validate-latest-predecessor") {
+    exactLatestPredecessor(
+      parseJson(readFileSync(0, "utf8"), "pre-publication Latest Release response"),
+      process.env.VERIFIED_TAG,
+    );
+    return;
+  }
+  if (command === "validate-created-release") {
+    const actualRelease = parseJson(readFileSync(0, "utf8"), "Release readback response");
+    validateMatchingPublishedReleases(
+      actualRelease,
+      readBoundedJsonFile(process.argv[3], "created Release response"),
+      process.env.VERIFIED_TAG,
+    );
+    return;
+  }
+  if (command === "wait-latest-release") {
+    const targetRelease = parseJson(readFileSync(0, "utf8"), "target Release response");
+    const result = await waitForLatestRelease({
+      api,
+      predecessorRelease: readBoundedJsonFile(
+        process.argv[3],
+        "pre-publication Latest Release response",
+      ),
+      repository: process.env.GITHUB_REPOSITORY,
+      targetRelease,
+      verifiedTag: process.env.VERIFIED_TAG,
+    });
+    process.stdout.write(
+      `Verified immutable Latest Release ${result.tag} after ${String(result.attempts)} observation(s)\n`,
+    );
+    return;
+  }
+  if (command === "require-latest-release") {
+    const targetRelease = parseJson(readFileSync(0, "utf8"), "target Release response");
+    const result = await requireLatestRelease({
+      api,
+      repository: process.env.GITHUB_REPOSITORY,
+      targetRelease,
+      verifiedTag: process.env.VERIFIED_TAG,
+    });
+    process.stdout.write(`Verified existing immutable Latest Release ${result.tag}\n`);
+    return;
+  }
+  if (command === "revalidate-latest-release") {
+    const targetRelease = parseJson(readFileSync(0, "utf8"), "target Release response");
+    const result = await revalidateLatestReleaseProjection({
+      api,
+      repository: process.env.GITHUB_REPOSITORY,
+      targetRelease,
+      verifiedTag: process.env.VERIFIED_TAG,
+    });
+    process.stdout.write(`Revalidated immutable Latest Release ${result.tag}\n`);
     return;
   }
   if (command === "revalidate-source") {
@@ -2379,7 +3309,7 @@ async function main() {
     );
     return;
   }
-  fail("expected baseline, release-order, release validation, authority, promote, or wait command");
+  fail("expected baseline, release-order, release validation, Latest convergence, authority, promote, or wait command");
 }
 
 const invokedPath = process.argv[1];
