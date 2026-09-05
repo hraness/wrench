@@ -26,7 +26,7 @@ import {
 var wrench_web_adapter_default = {
   schemaVersion: 6,
   id: "beeper-local",
-  version: "2.3.0",
+  version: "2.4.0",
   displayName: "Beeper (Pinned Local CLI)",
   surfaceId: "beeper",
   origins: [
@@ -150,7 +150,7 @@ var wrench_web_adapter_default = {
       }
     },
     "contacts.list": {
-      description: "List one bounded account-aware contact projection.",
+      description: "List one bounded account-aware contact projection through Desktop contact pages.",
       risk: "R1",
       sideEffect: "none",
       idempotency: "none",
@@ -165,9 +165,21 @@ var wrench_web_adapter_default = {
           },
           query: {
             type: "string",
-            description: "Optional normalized provider-blended candidate query of at most 256 UTF-8 bytes",
+            description: "Optional normalized provider contact-lookup query of at most 256 UTF-8 bytes",
             minLength: 1,
             maxLength: 256
+          },
+          before_cursor: {
+            type: "string",
+            description: "Exact opaque provider cursor returned by a prior older-results page",
+            minLength: 1,
+            maxLength: 2048
+          },
+          after_cursor: {
+            type: "string",
+            description: "Exact opaque provider cursor returned by a prior newer-results page",
+            minLength: 1,
+            maxLength: 2048
           },
           limit: {
             type: "number",
@@ -181,7 +193,7 @@ var wrench_web_adapter_default = {
       localCli: {
         surface: "beeper",
         action: "contacts.list",
-        contractVersion: 2,
+        contractVersion: 3,
         timeoutMs: 120000,
         maxOutputBytes: 10485760
       }
@@ -2687,7 +2699,7 @@ var BEEPER_LOCAL_OPERATION_CONTRACT_VERSIONS = Object.freeze({
   "accounts.read": 1,
   "bridges.list": 2,
   "bridges.read": 1,
-  "contacts.list": 2,
+  "contacts.list": 3,
   "contacts.search": 1,
   "contacts.read": 1,
   "messaging.list": 1,
@@ -2725,6 +2737,10 @@ var BEEPER_LOCAL_CONTRACT_V2_OPERATIONS = Object.freeze([
   "messaging.read",
   "messaging.content.search"
 ]);
+var BEEPER_LOCAL_CONTRACT_V3_OPERATIONS = Object.freeze([
+  "contacts.list",
+  "messaging.read"
+]);
 var BEEPER_DESKTOP_LOOPBACK_V2_OPERATIONS = Object.freeze([
   "accounts.list",
   "messaging.search",
@@ -2733,7 +2749,7 @@ var BEEPER_DESKTOP_LOOPBACK_V2_OPERATIONS = Object.freeze([
   "messaging.content.search"
 ]);
 function isBeeperDesktopLoopbackOperationContract(action, contractVersion) {
-  return contractVersion === 2 && BEEPER_DESKTOP_LOOPBACK_V2_OPERATIONS.includes(action) || contractVersion === 3 && action === "messaging.read";
+  return contractVersion === 2 && BEEPER_DESKTOP_LOOPBACK_V2_OPERATIONS.includes(action) || contractVersion === 3 && BEEPER_LOCAL_CONTRACT_V3_OPERATIONS.includes(action);
 }
 var BEEPER_LOCAL_OPERATION_RUNTIME_TRANSPORTS = Object.freeze(Object.fromEntries(BEEPER_LOCAL_OPERATION_NAMES.map((operation) => [
   operation,
@@ -3415,7 +3431,7 @@ function commandOutput(command, output, decision) {
     completeness: policy.effect === "write" ? "input-dependent" : search ? "candidate-window" : blendedContactQuery ? "input-dependent" : "bounded",
     maxBytes: 10 * 1024 * 1024,
     privateArtifact: false,
-    truncation: policy.effect === "read" ? blendedContactQuery ? "Without query this is a bounded list; with query it is a provider-blended candidate window with no continuation metadata." : "Provider limits and continuation availability are explicit in the normalized output." : "No upstream body, path, token, or unbounded diagnostic output is exposed."
+    truncation: policy.effect === "read" ? blendedContactQuery ? "Desktop loopback contact pages include continuation metadata. Official CLI v0.6.2 contracts remain a first-page window with no continuation." : "Provider limits and continuation availability are explicit in the normalized output." : "No upstream body, path, token, or unbounded diagnostic output is exposed."
   });
 }
 function commandInputRules(command) {
@@ -3757,9 +3773,9 @@ var BEEPER_CLI_V062_SURFACE_CONTRACT = defineLocalCliSurfaceContractV1({
   sdk: BEEPER_DESKTOP_API_PIN,
   runtime: {
     providerPluginId: "beeper-linked-device",
-    providerPluginVersion: "2.3.0",
+    providerPluginVersion: "2.4.0",
     adapterId: "beeper-local",
-    adapterVersion: "2.3.0",
+    adapterVersion: "2.4.0",
     operationContractVersions: BEEPER_LOCAL_OPERATION_CONTRACT_VERSIONS,
     operationInputTypes: BEEPER_LOCAL_OPERATION_INPUT_TYPES,
     target: BEEPER_DESKTOP_TARGET,
@@ -3771,9 +3787,9 @@ var BEEPER_CLI_V062_SURFACE_CONTRACT = defineLocalCliSurfaceContractV1({
   additionalEntries: BEEPER_CLI_V062_ADDITIONAL_ENTRIES
 });
 var BEEPER_CLI_V062_UPSTREAM_SURFACE_SHA256 = "74297df1af30fe89cf1596a0670983e79cf85c0768c2f68e9bc3d386be640836";
-var BEEPER_CLI_V062_CLASSIFICATION_SHA256 = "9318cfcff0bf578005c5f1e6590169ef843ca90bee0f25a9f2f53ea406f6acd0";
-var BEEPER_CLI_V062_SEMANTIC_PROFILES_SHA256 = "cfad9183e1dc2199284b203ec224589f70e97142cc5d3850b64f6f6c261e2a92";
-var BEEPER_CLI_V062_WHOLE_SURFACE_SHA256 = "c37e577e305235b3a577c8ea5ad4ed4e5a7bba80d7eae1644b649b756bfd1e42";
+var BEEPER_CLI_V062_CLASSIFICATION_SHA256 = "bcd411af1544e5cd618cd3c04f2852a797bd804d92b7fe4cd226374b61c57d08";
+var BEEPER_CLI_V062_SEMANTIC_PROFILES_SHA256 = "fb7ea5f70f004dd8090c3e6e0996bfa00b0bab8ea5639203e2d1027602450ffe";
+var BEEPER_CLI_V062_WHOLE_SURFACE_SHA256 = "72201ac5eb3532f7c159583f19009f547d7d313e86388466b57c135bd2dc4944";
 var BEEPER_CLI_V062_PUBLIC_MANUAL_SEMANTIC_PROFILE_SHA256 = Object.freeze({
   setup: "cd432e2649e5724d70398e739a2d1c0c21557a23820aaa14562575a5fe689406",
   "install desktop": "478f4cc022b1d51d4016a319efea17e4523c55e3168560c99fdf7779347ae78a",
@@ -3853,7 +3869,7 @@ var BEEPER_CLI_V062_PUBLIC_MANUAL_SEMANTIC_PROFILE_SHA256 = Object.freeze({
   "send unreact": "f2fe46e5854571eecbde82fc59663f99b44b4484bffda7c92b12614de709b2d3",
   "send voice": "966b39e192073fc581b8efece9fa744f169b51361e9a8223a84d3c9251e08c24",
   presence: "2d6e067b5d572f7d2524c3e4fdf41300ee82b9af03116f17b098a6afcb9fc9b7",
-  "contacts list": "7be94dccadd5b27226fe4252ca77922b08691ea1c6293a0c9b381bf66396a7a0",
+  "contacts list": "77b752f6e0a37b68cf31cd85c554a5bdec51c20b0239a8a13ef111f7d30b9c6c",
   "contacts search": "8b33f02bb3011f2dd304be5f9f5ccec2303833ae739dc4e96dc3691d6354032b",
   "contacts show": "724c25f80b5f58bbfb4b858187d5f785e946853e6a2f355bd14f8b8bc2052c92",
   "media download": "47f7e05839640b88c42e719b44f3d8f9632ddb7f5abbb1ae2f4eee32341d4f88",

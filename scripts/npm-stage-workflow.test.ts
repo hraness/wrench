@@ -1063,7 +1063,7 @@ describe("npm publication contract", () => {
         (MAX_UNPACKED_BYTES + MAX_PACKED_ENTRIES * 1_023 + 1_024) / 512,
       ) * 512,
     );
-    expect(MAX_PACKAGE_TAR_BYTES).toBe(12_656_128);
+    expect(MAX_PACKAGE_TAR_BYTES).toBe(12_713_472);
     expect(MAX_PACKAGE_TAR_BYTES % 512).toBe(0);
     expect(artifact).toContain("maxOutputLength: MAX_PACKAGE_TAR_BYTES");
     expect(artifact).not.toContain("const maximumTarBytes");
@@ -1122,11 +1122,11 @@ describe("npm publication contract", () => {
     expect(artifact).toContain('from "./package-budget.js"');
     expect(smoke).toContain('from "./package-budget.js"');
     expect(budget).toContain("two `bun pm pack` artifacts");
-    expect(budget).toContain("2,072,376 packed bytes");
-    expect(budget).toContain("12,230,695 unpacked bytes, and");
+    expect(budget).toContain("2,072,396 packed bytes");
+    expect(budget).toContain("12,231,301 unpacked bytes, and");
     expect(budget).toContain("466 files");
     expect(budget).toContain(
-      "6d9b427794aa2a74cd41badb9109f04c40f5be3fc20f4a9b7a4068c181b8d110",
+      "eb1f11ee0573220c0eb415132b076b5885f39fc6e75136990df47ee32e44f878",
     );
     expect(budget).toContain("measured a 3,543-byte Linux/macOS gzip spread");
     expect(budget).toContain("Keep the existing 2,178,192 packed-byte ceiling");
@@ -1134,7 +1134,7 @@ describe("npm publication contract", () => {
     expect(MAX_PACKED_BYTES).toBe(2_178_192);
     expect(MAX_PACKED_ENTRIES).toBe(466);
     expect(MAX_PACKED_FILES).toBe(466);
-    expect(MAX_UNPACKED_BYTES).toBe(12_234_939);
+    expect(MAX_UNPACKED_BYTES).toBe(12_235_545);
     expect(Object.isFrozen(packageArtifactBudget)).toBe(true);
     for (const range of Object.values(packageArtifactBudget)) {
       expect(Object.isFrozen(range)).toBe(true);
@@ -1143,7 +1143,7 @@ describe("npm publication contract", () => {
       entryCount: { min: 466, max: 466 },
       fileCount: { min: 466, max: 466 },
       packedBytes: { min: 1_600_000, max: 2_178_192 },
-      unpackedBytes: { min: 9_000_000, max: 12_234_939 },
+      unpackedBytes: { min: 9_000_000, max: 12_235_545 },
     });
   });
 
