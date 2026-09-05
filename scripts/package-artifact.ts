@@ -32,6 +32,7 @@ const requiredPaths = Object.freeze([
   "skills/wrench/references/install.md",
   "src/apple-photos-cli.ts",
   "src/assets/adapters/beeper/wrench-web-adapter.v2.2.0.json",
+  "src/assets/adapters/beeper/wrench-web-adapter.v2.3.0.json",
   "src/cli.ts",
   "src/index.ts",
   "src/local-cli-surface-contract.ts",
