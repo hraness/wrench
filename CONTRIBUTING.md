@@ -4,7 +4,9 @@ Issues and focused pull requests are welcome. Open an issue before changing a
 durable wire format, trust boundary, confirmation rule, or compatibility
 contract so the required migration and evidence can be agreed first.
 
-Use Bun 1.3.14 and run the complete standalone gate:
+Use Bun 1.3.14 and run the complete standalone gate. Pull-request CI
+runs the same steps as parallel Linux jobs plus a macOS-only subset;
+`Required` still waits for that full union.
 
 ```sh
 bun install --frozen-lockfile
