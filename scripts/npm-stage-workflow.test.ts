@@ -1153,17 +1153,19 @@ describe("npm publication contract", () => {
 
     expect(artifact).toContain('from "./package-budget.js"');
     expect(smoke).toContain('from "./package-budget.js"');
-    expect(budget).toContain("two `bun pm pack` artifacts");
-    expect(budget).toContain("2,072,396 packed bytes");
-    expect(budget).toContain("12,231,301 unpacked bytes, and");
+    expect(budget).toContain("two npm 10.9.7 packs");
+    expect(budget).toContain("2,214,175 packed bytes");
+    expect(budget).toContain("12,232,594 unpacked bytes, and 466");
     expect(budget).toContain("466 files");
     expect(budget).toContain(
-      "eb1f11ee0573220c0eb415132b076b5885f39fc6e75136990df47ee32e44f878",
+      "e49aa949b885960aa42a0ee5f99a70cfd1bc115934bdc8131a2823fe62f5ff03",
     );
+    expect(budget).toContain("Published 0.16.5 is 2,175,150 packed bytes");
+    expect(budget).toContain("required Beeper v2.3.0 upgrade baseline");
+    expect(budget).toContain("35,983 bytes short");
     expect(budget).toContain("measured a 3,543-byte Linux/macOS gzip spread");
-    expect(budget).toContain("Keep the existing 2,178,192 packed-byte ceiling");
-    expect(budget).toContain("4,244 unpacked bytes of bounded headroom");
-    expect(MAX_PACKED_BYTES).toBe(2_178_192);
+    expect(budget).toContain("Keep 6,734 packed bytes and 2,951 unpacked bytes");
+    expect(MAX_PACKED_BYTES).toBe(2_220_909);
     expect(MAX_PACKED_ENTRIES).toBe(466);
     expect(MAX_PACKED_FILES).toBe(466);
     expect(MAX_UNPACKED_BYTES).toBe(12_235_545);
@@ -1174,7 +1176,7 @@ describe("npm publication contract", () => {
     expect(packageArtifactBudget).toEqual({
       entryCount: { min: 466, max: 466 },
       fileCount: { min: 466, max: 466 },
-      packedBytes: { min: 1_600_000, max: 2_178_192 },
+      packedBytes: { min: 1_600_000, max: 2_220_909 },
       unpackedBytes: { min: 9_000_000, max: 12_235_545 },
     });
   });
