@@ -206,10 +206,12 @@ describe("wrench.rip static site", () => {
     });
 
     expect(sourceCss).toContain('--font-sans: "Nebula Sans", ui-sans-serif, system-ui');
-    expect(sourceCss).toContain('--font-serif: ui-serif, "Iowan Old Style", Baskerville');
+    expect(sourceCss).not.toContain("--font-serif");
     expect(sourceCss).toMatch(/body\s*\{[^}]*font-family:\s*var\(--font-sans\)/su);
-    expect(sourceCss).toMatch(/\.wordmark\s*\{[^}]*font-family:\s*var\(--font-serif\)/su);
-    expect(sourceCss).toMatch(/\.hero h1,[\s\S]*?\.preview-copy h1\s*\{[^}]*font-family:\s*var\(--font-serif\)/u);
+    expect(sourceCss).toMatch(/\.wordmark\s*\{[^}]*font-family:\s*var\(--font-sans\)/su);
+    expect(sourceCss).toMatch(/\.hero h1,[\s\S]*?\.preview-copy h1\s*\{[^}]*font-family:\s*var\(--font-sans\)/u);
+    expect(sourceCss).toMatch(/\.hero h1,[\s\S]*?\.preview-copy h1\s*\{[^}]*font-weight:\s*500/u);
+    expect(sourceCss).toContain("--hraness-site-accent: var(--accent);");
     expect(sourceCss).toMatch(/\.preview-copy > p:last-child\s*\{(?![^}]*font-family)[^}]*\}/su);
     expect(sourceCss).toMatch(/\.preview-eyebrow\s*\{[^}]*font-family:\s*var\(--font-mono\)/su);
     expect(sourceCss).toMatch(/\.preview-flow li\s*\{[^}]*font-family:\s*var\(--font-mono\)/su);
@@ -293,7 +295,7 @@ describe("wrench.rip static site", () => {
     expect(html).not.toContain("@jungle/");
     expect(html).not.toContain("hraness.com/wrench");
     expect(html.match(/<h1\b/gu)).toHaveLength(1);
-    expect(html.match(/<details\b/gu)).toHaveLength(5);
+    expect(html.match(/<details\b/gu)).toHaveLength(11);
     expect(html).toContain('class="table-scroll" role="region" tabindex="0"');
     expect(html).toContain('<a class="skip-link" href="#main">');
     expect(html.match(/data-analytics-event="project link opened"/gu)).toHaveLength(2);
@@ -329,14 +331,26 @@ describe("wrench.rip static site", () => {
     }
     expect(guidesSection).not.toContain('class="card editorial-card"');
     expect(html.indexOf(argumentsSection ?? "")).toBeLessThan(html.indexOf(guidesSection ?? ""));
-    expect(html).toContain("Give your coding agent bounded access to the web.");
+    expect(html).toContain(
+      '<h1 class="hraness-marketing-hero__heading" id="brand-name">Give your coding agent bounded access to the web</h1>',
+    );
+    expect(html).not.toContain("Give your coding agent bounded access to the web.");
     const indeterminateWriteBoundary =
       "An indeterminate write is never blindly retried and remains unsettled until separate exact evidence can reconcile it.";
     for (const surface of [html, readme]) {
       expect(surface.replaceAll(/\s+/gu, " ")).toContain(indeterminateWriteBoundary);
       expect(surface).not.toContain("An indeterminate write is reconciled");
     }
+    expect(html).toContain('data-hraness-marketing="header"');
     expect(html).toContain('data-hraness-marketing="hero"');
+    expect(html).toContain('data-hraness-marketing="proof-frame"');
+    expect(html).toContain('data-hraness-marketing="pillars"');
+    expect(html).toContain('data-hraness-marketing="maker"');
+    expect(html).toContain('clipped: "2026-09-05"');
+    expect(html).toContain(`Wrench ${packageIdentity.release}, run on September 5, 2026`);
+    expect(html).toContain('<a href="https://hraness.com">hraness.com</a>');
+    expect(html).toContain('<a href="https://x.com/hraness">@hraness</a>');
+    expect(html).not.toMatch(/\bstyle="/u);
     expect(html).toContain('data-hraness-marketing="install"');
     expect(html).toContain('data-hraness-marketing="interfaces"');
     expect(html).toContain('data-hraness-marketing="trust"');
