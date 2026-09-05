@@ -635,27 +635,125 @@ function collectionResponses(
   return collections;
 }
 
-function pagingHasNext(paging: LinkedInWebJsonRecord | null, start: number, count: number): boolean {
-  if (paging === null) return true;
-  const links = paging.links;
-  if (Array.isArray(links)) {
-    if (links.length > 16) throw new Error("LinkedIn profile-activity paging links exceeded their bound");
-    if (links.some((link) => isRecord(link) && link.rel === "next")) return true;
+function profileActivityPageCursor(input: {
+  readonly paging: unknown;
+  readonly profileUrn: string;
+  readonly queryId: string;
+  readonly requestedCount: number;
+  readonly requestedStart: number;
+  readonly returnedCount: number;
+}): { readonly known: boolean; readonly nextStart: number | null } {
+  if (input.paging === undefined) {
+    return Object.freeze({ known: false, nextStart: null });
   }
-  const total = optionalNonnegativeInteger(paging.total, "LinkedIn profile-activity paging.total");
-  if (total !== null) return start + count < total;
-  return false;
+  const paging = record(input.paging, "LinkedIn profile-activity paging");
+  const start = nonnegativeInteger(
+    paging.start,
+    "LinkedIn profile-activity paging.start",
+  );
+  const count = nonnegativeInteger(
+    paging.count,
+    "LinkedIn profile-activity paging.count",
+  );
+  if (start !== input.requestedStart || count !== input.requestedCount) {
+    throw new Error("LinkedIn profile-activity paging did not bind the exact requested page");
+  }
+  if (input.returnedCount > count) {
+    throw new Error("LinkedIn profile-activity paging count contradicted the returned page");
+  }
+  const total = optionalNonnegativeInteger(
+    paging.total,
+    "LinkedIn profile-activity paging.total",
+  );
+  if (total !== null) {
+    const expectedReturned = Math.min(count, Math.max(total - start, 0));
+    if (input.returnedCount !== expectedReturned) {
+      throw new Error("LinkedIn profile-activity page length contradicted its paging total");
+    }
+  }
+
+  if (paging.links === undefined) {
+    return Object.freeze({ known: false, nextStart: null });
+  }
+  if (!Array.isArray(paging.links) || paging.links.length > 16) {
+    throw new Error("LinkedIn profile-activity paging links were invalid or exceeded their bound");
+  }
+  const seenRelations = new Set<string>();
+  let nextStart: number | null = null;
+  for (let index = 0; index < paging.links.length; index += 1) {
+    const label = `LinkedIn profile-activity paging.links[${index}]`;
+    const link = record(paging.links[index], label);
+    const relation = boundedText(link.rel, `${label}.rel`, 100);
+    if (relation !== "next" && relation !== "prev") {
+      throw new Error("LinkedIn profile-activity paging returned an invalid relation");
+    }
+    if (seenRelations.has(relation)) {
+      throw new Error(`LinkedIn profile-activity paging repeated its ${relation} relation`);
+    }
+    seenRelations.add(relation);
+    const href = boundedText(link.href, `${label}.href`, 8_192);
+    if (/\s/u.test(href)) {
+      throw new Error("LinkedIn profile-activity paging returned an invalid URL");
+    }
+    const linkedStart = relation === "next"
+      ? start + count
+      : Math.max(0, start - count);
+    if (
+      !Number.isSafeInteger(linkedStart)
+      || linkedStart > LINKEDIN_PROFILE_ACTIVITY_MAX_START
+      || (relation === "next" && linkedStart <= start)
+      || (relation === "prev" && start === 0)
+    ) {
+      throw new Error(`LinkedIn profile-activity paging returned a contradictory ${relation} link`);
+    }
+    let linkedPage: URL;
+    try {
+      linkedPage = new URL(href, LINKEDIN_ORIGIN);
+    } catch {
+      throw new Error("LinkedIn profile-activity paging returned an invalid URL");
+    }
+    linkedInProfileActivityQueryId(linkedPage.searchParams.get("queryId"));
+    const expectedPage = linkedInProfileActivityPageUrl({
+      queryId: input.queryId,
+      profileUrn: input.profileUrn,
+      count,
+      start: linkedStart,
+    });
+    if (linkedPage.href !== expectedPage.href) {
+      throw new Error("LinkedIn profile-activity paging link changed the exact collection");
+    }
+    if (relation === "next") nextStart = linkedStart;
+  }
+
+  if (nextStart !== null) {
+    if (input.returnedCount === 0) {
+      throw new Error("LinkedIn profile-activity page did not advance its cursor");
+    }
+    if (input.returnedCount < count) {
+      throw new Error("LinkedIn profile-activity paging linked past a terminal short page");
+    }
+    if (total !== null && start + input.returnedCount >= total) {
+      throw new Error("LinkedIn profile-activity paging contradicted its terminal total");
+    }
+    return Object.freeze({ known: true, nextStart });
+  }
+  if (total !== null && start + input.returnedCount < total) {
+    throw new Error("LinkedIn profile-activity paging omitted a required next link");
+  }
+  return Object.freeze({ known: true, nextStart: null });
 }
 
 export function projectLinkedInProfileActivityPage(input: {
   readonly response: unknown;
   readonly target: LinkedInProfileActivityTarget;
   readonly profileUrn: unknown;
+  readonly queryId: unknown;
   readonly limit: number;
   readonly start: number;
   readonly observedAt: string;
 }): LinkedInProfileActivityPage {
   const profileUrn = linkedInProfileActivityProfileUrn(input.profileUrn);
+  const queryId = linkedInProfileActivityQueryId(input.queryId);
   const limit = nonnegativeInteger(input.limit, "LinkedIn profile-activity limit");
   const start = nonnegativeInteger(input.start, "LinkedIn profile-activity start");
   if (limit < 1 || limit > LINKEDIN_PROFILE_ACTIVITY_MAX_ITEMS) {
@@ -687,14 +785,23 @@ export function projectLinkedInProfileActivityPage(input: {
     }
     return projectUpdate(entity, counts);
   });
-  const paging = isRecord(collection.paging) ? collection.paging : null;
-  const hasNext = pagingHasNext(paging, start, posts.length) || posts.length === limit;
-  const nextCursor = hasNext
-    ? encodeLinkedInProfileActivityCursor({
+  const cursor = profileActivityPageCursor({
+    paging: collection.paging,
+    profileUrn,
+    queryId,
+    requestedCount: limit,
+    requestedStart: start,
+    returnedCount: posts.length,
+  });
+  if (!cursor.known && posts.length === 0) {
+    throw new Error("LinkedIn profile-activity page did not advance its cursor");
+  }
+  const nextCursor = cursor.nextStart === null
+    ? null
+    : encodeLinkedInProfileActivityCursor({
         slug: input.target.slug,
-        start: start + posts.length,
-      })
-    : null;
+        start: cursor.nextStart,
+      });
   return Object.freeze({
     schemaVersion: 1,
     provider: "linkedin",
@@ -711,7 +818,7 @@ export function projectLinkedInProfileActivityPage(input: {
       url: post.url,
     }))),
     nextCursor,
-    complete: nextCursor === null,
+    complete: cursor.known && nextCursor === null,
   });
 }
 
