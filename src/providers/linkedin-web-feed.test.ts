@@ -278,6 +278,45 @@ describe("LinkedIn profile-activity projection", () => {
     });
   });
 
+  test("treats LinkedIn total:0 with a full page and no next link as complete", () => {
+    const page = projectLinkedInProfileActivityPage({
+      response: pageResponse([updateEntity({
+        imageComponent: { images: [{}] },
+      })], [countsEntity()], {
+        count: 1,
+        start: 0,
+        total: 0,
+      }),
+      target,
+      queryId: QUERY_ID,
+      profileUrn: PROFILE_URN,
+      limit: 1,
+      start: 0,
+      observedAt: OBSERVED_AT,
+    });
+    expect(page.complete).toBeTrue();
+    expect(page.nextCursor).toBeNull();
+    expect(page.posts).toHaveLength(1);
+  });
+
+  test("advances from a positive paging total without a next link", () => {
+    const page = projectLinkedInProfileActivityPage({
+      response: pageResponse([updateEntity()], [], {
+        count: 1,
+        start: 0,
+        total: 3,
+      }),
+      target,
+      queryId: QUERY_ID,
+      profileUrn: PROFILE_URN,
+      limit: 1,
+      start: 0,
+      observedAt: OBSERVED_AT,
+    });
+    expect(page.complete).toBeFalse();
+    expect(page.nextCursor).toBe(`${LINKEDIN_PROFILE_ACTIVITY_CURSOR_PREFIX}:j-hawkins:1`);
+  });
+
   test("reports unknown completeness without inventing a cursor when paging is omitted", () => {
     const page = projectLinkedInProfileActivityPage({
       response: pageResponse([updateEntity()], [], null),
