@@ -7,10 +7,6 @@ coordinate that completed both checks.
 
 ## Unreleased
 
-- Route exact signed-in Instagram profile statistics through a bounded
-  browser-contained JSON transport while preserving target and account binding,
-  strict response integrity, and cleanup evidence.
-
 ## 0.16.5 - 2026-09-04
 
 - Require the production-outcome job after either mutually exclusive ref path,

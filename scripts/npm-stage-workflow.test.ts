@@ -1063,7 +1063,7 @@ describe("npm publication contract", () => {
         (MAX_UNPACKED_BYTES + MAX_PACKED_ENTRIES * 1_023 + 1_024) / 512,
       ) * 512,
     );
-    expect(MAX_PACKAGE_TAR_BYTES).toBe(12_544_512);
+    expect(MAX_PACKAGE_TAR_BYTES).toBe(12_596_224);
     expect(MAX_PACKAGE_TAR_BYTES % 512).toBe(0);
     expect(artifact).toContain("maxOutputLength: MAX_PACKAGE_TAR_BYTES");
     expect(artifact).not.toContain("const maximumTarBytes");
@@ -1122,27 +1122,27 @@ describe("npm publication contract", () => {
     expect(artifact).toContain('from "./package-budget.js"');
     expect(smoke).toContain('from "./package-budget.js"');
     expect(budget).toContain("two `bun pm pack` artifacts");
-    expect(budget).toContain("2,050,616 packed bytes");
-    expect(budget).toContain("12,058,977 unpacked bytes, and 460 files");
+    expect(budget).toContain("2,056,975 packed bytes");
+    expect(budget).toContain("12,108,387 unpacked bytes, and 462 files");
     expect(budget).toContain(
-      "62b9b511386075f77fce7c49a57383e0fcbdc47f4c3b3f7d3b75578b69719474",
+      "41972e167b039ea5bc30993c9cbcb0bbf07d5405e37dfc8c2376be19c34f5df6",
     );
     expect(budget).toContain("measured a 3,543-byte Linux/macOS gzip spread");
     expect(budget).toContain("Keep the existing 2,178,192 packed-byte ceiling");
     expect(budget).toContain("13,702 unpacked bytes of bounded headroom");
     expect(MAX_PACKED_BYTES).toBe(2_178_192);
-    expect(MAX_PACKED_ENTRIES).toBe(460);
-    expect(MAX_PACKED_FILES).toBe(460);
-    expect(MAX_UNPACKED_BYTES).toBe(12_072_679);
+    expect(MAX_PACKED_ENTRIES).toBe(462);
+    expect(MAX_PACKED_FILES).toBe(462);
+    expect(MAX_UNPACKED_BYTES).toBe(12_122_089);
     expect(Object.isFrozen(packageArtifactBudget)).toBe(true);
     for (const range of Object.values(packageArtifactBudget)) {
       expect(Object.isFrozen(range)).toBe(true);
     }
     expect(packageArtifactBudget).toEqual({
-      entryCount: { min: 460, max: 460 },
-      fileCount: { min: 460, max: 460 },
+      entryCount: { min: 462, max: 462 },
+      fileCount: { min: 462, max: 462 },
       packedBytes: { min: 1_600_000, max: 2_178_192 },
-      unpackedBytes: { min: 9_000_000, max: 12_072_679 },
+      unpackedBytes: { min: 9_000_000, max: 12_122_089 },
     });
   });
 

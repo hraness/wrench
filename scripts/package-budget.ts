@@ -1,15 +1,14 @@
 // After a clean Bun 1.3.14 build, two `bun pm pack` artifacts of the
-// LinkedIn profile-activity candidate were byte-identical: 2,050,616 packed bytes,
-// 12,058,977 unpacked bytes, and 460 files. Their SHA-256 was
-// 62b9b511386075f77fce7c49a57383e0fcbdc47f4c3b3f7d3b75578b69719474. Prior CI
+// Instagram profile-read candidate were byte-identical: 2,056,975 packed bytes,
+// 12,108,387 unpacked bytes, and 462 files. Their SHA-256 was
+// 41972e167b039ea5bc30993c9cbcb0bbf07d5405e37dfc8c2376be19c34f5df6. Prior CI
 // measured a 3,543-byte Linux/macOS gzip spread. Keep the existing 2,178,192 packed-byte ceiling
-// and 13,702 unpacked bytes of bounded headroom. File inventory is exact at 460
-// after adding linkedin-web-feed.ts, linkedin-web-feed-browser.ts, and
-// wrench-web-adapter.v1.19.0.json.
+// and 13,702 unpacked bytes of bounded headroom. File inventory is exact at 462
+// after adding instagram-web-profile-browser.ts and wrench-web-adapter.v1.7.0.json.
 export const MAX_PACKED_BYTES = 2_178_192;
-export const MAX_PACKED_ENTRIES = 460;
-export const MAX_PACKED_FILES = 460;
-export const MAX_UNPACKED_BYTES = 12_072_679;
+export const MAX_PACKED_ENTRIES = 462;
+export const MAX_PACKED_FILES = 462;
+export const MAX_UNPACKED_BYTES = 12_122_089;
 
 const TAR_BLOCK_BYTES = 512;
 const TAR_ENTRY_ALLOWANCE_BYTES = TAR_BLOCK_BYTES + (TAR_BLOCK_BYTES - 1);
