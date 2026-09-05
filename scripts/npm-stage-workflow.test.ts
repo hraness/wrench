@@ -1081,21 +1081,38 @@ describe("npm publication contract", () => {
     ).toThrow();
   });
 
-  test("keeps both complete CI checks within the reviewed wall-time budget", async () => {
+  test("keeps the PR Required gate as the union of Linux shards and the macOS subset", async () => {
     const workflow = await readFile(ciWorkflowUrl, "utf8");
-    const checkStart = workflow.indexOf("\n  check:\n");
+    const staticStart = workflow.indexOf("\n  static:\n");
+    const packageStart = workflow.indexOf("\n  package:\n");
+    const testStart = workflow.indexOf("\n  test:\n");
+    const testOmniStart = workflow.indexOf("\n  test-omni:\n");
+    const standaloneStart = workflow.indexOf("\n  standalone:\n");
     const macosStart = workflow.indexOf("\n  macos:\n");
     const requiredStart = workflow.indexOf("\n  required:\n");
 
-    expect(workflow.match(/^  check:$/gmu)).toHaveLength(1);
+    expect(workflow.match(/^  static:$/gmu)).toHaveLength(1);
+    expect(workflow.match(/^  package:$/gmu)).toHaveLength(1);
+    expect(workflow.match(/^  test:$/gmu)).toHaveLength(1);
+    expect(workflow.match(/^  test-omni:$/gmu)).toHaveLength(1);
+    expect(workflow.match(/^  standalone:$/gmu)).toHaveLength(1);
     expect(workflow.match(/^  macos:$/gmu)).toHaveLength(1);
     expect(workflow.match(/^  required:$/gmu)).toHaveLength(1);
-    expect(workflow.match(/^    timeout-minutes: [0-9]+$/gmu)).toHaveLength(3);
-    expect(checkStart).toBeGreaterThan(-1);
-    expect(macosStart).toBeGreaterThan(checkStart);
+    expect(workflow.match(/^  check:$/gmu) ?? []).toHaveLength(0);
+    expect(workflow.match(/^    timeout-minutes: [0-9]+$/gmu)).toHaveLength(7);
+    expect(staticStart).toBeGreaterThan(-1);
+    expect(packageStart).toBeGreaterThan(staticStart);
+    expect(testStart).toBeGreaterThan(packageStart);
+    expect(testOmniStart).toBeGreaterThan(testStart);
+    expect(standaloneStart).toBeGreaterThan(testOmniStart);
+    expect(macosStart).toBeGreaterThan(standaloneStart);
     expect(requiredStart).toBeGreaterThan(macosStart);
 
-    const checkJob = workflow.slice(checkStart, macosStart);
+    const staticJob = workflow.slice(staticStart, packageStart);
+    const packageJob = workflow.slice(packageStart, testStart);
+    const testJob = workflow.slice(testStart, testOmniStart);
+    const testOmniJob = workflow.slice(testOmniStart, standaloneStart);
+    const standaloneJob = workflow.slice(standaloneStart, macosStart);
     const macosJob = workflow.slice(macosStart, requiredStart);
     const requiredJob = workflow.slice(requiredStart);
 
@@ -1103,13 +1120,28 @@ describe("npm publication contract", () => {
       [...job.matchAll(/^    timeout-minutes: ([0-9]+)$/gmu)]
         .map((match) => Number(match[1]));
 
-    expect(timeoutValues(checkJob)).toEqual([75]);
-    expect(timeoutValues(macosJob)).toEqual([75]);
+    expect(timeoutValues(staticJob)).toEqual([15]);
+    expect(timeoutValues(packageJob)).toEqual([20]);
+    expect(timeoutValues(testJob)).toEqual([40]);
+    expect(timeoutValues(testOmniJob)).toEqual([25]);
+    expect(timeoutValues(standaloneJob)).toEqual([20]);
+    expect(timeoutValues(macosJob)).toEqual([25]);
     expect(timeoutValues(requiredJob)).toEqual([5]);
-    expect(checkJob.match(/^      - run: bun run check$/gmu) ?? []).toHaveLength(1);
-    expect(macosJob.match(/^      - run: bun run check$/gmu) ?? []).toHaveLength(1);
+    expect(staticJob.match(/^      - run: bun run check:static$/gmu) ?? []).toHaveLength(1);
+    expect(packageJob.match(/^      - run: bun run check:package$/gmu) ?? []).toHaveLength(1);
+    expect(packageJob).toContain("git status --porcelain --untracked-files=all -- dist bun.lock");
+    expect(packageJob).toContain("./dist/index.js");
+    expect(testJob).toContain("bun run ./scripts/ci-test-shard.ts");
+    expect(testJob).toContain("shard: [1, 2, 3, 4]");
+    expect(testOmniJob.match(/^      - run: bun run test:omni$/gmu) ?? []).toHaveLength(1);
+    expect(standaloneJob.match(/^      - run: bun run test:standalone$/gmu) ?? []).toHaveLength(1);
+    expect(macosJob.match(/^      - run: bun run check:macos$/gmu) ?? []).toHaveLength(1);
+    expect(macosJob.match(/^      - run: bun run check$/gmu) ?? []).toHaveLength(0);
     expect(requiredJob.match(/^      - run: bun run check$/gmu) ?? []).toHaveLength(0);
-    expect(requiredJob.match(/^    needs: \[check, macos\]$/gmu) ?? []).toHaveLength(1);
+    expect(requiredJob.match(
+      /^    needs: \[static, package, test, test-omni, standalone, macos\]$/gmu,
+    ) ?? []).toHaveLength(1);
+    expect(workflow.match(/^      - run: bun run check$/gmu) ?? []).toHaveLength(0);
   });
 
   test("keeps one narrow release-authoritative package budget", async () => {
