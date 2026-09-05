@@ -13,7 +13,7 @@
         "typescript": "6.0.3",
       },
       "devDependencies": {
-        "@hraness/design-kit": "github:hraness/design-kit#v0.3.0",
+        "@hraness/design-kit": "github:hraness/design-kit#v0.4.0",
         "@hraness/site-footer": "github:hraness/site-footer#v0.4.6",
         "@hraness/ui": "github:hraness/ui#v0.4.10",
         "@steipete/sweet-cookie": "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2",
@@ -29,7 +29,7 @@
   "packages": {
     "@hono/node-server": ["@hono/node-server@1.19.17", "", { "peerDependencies": { "hono": "^4" } }, "sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ=="],
 
-    "@hraness/design-kit": ["@hraness/design-kit@github:hraness/design-kit#a50a8f2", { "dependencies": { "@hugeicons/core-free-icons": "^4.2.2", "@stylexjs/stylex": "0.19.0", "motion": "12.42.0", "next-themes": "0.4.6", "react-aria-components": "1.19.0", "recharts": "3.8.0", "sugar-high": "^1.2.1", "web-haptics": "0.0.6" }, "peerDependencies": { "@hraness/ui": ">=0.4.7 <0.5.0", "react": ">=18 <20", "react-dom": ">=18 <20" }, "optionalPeers": ["@hraness/ui"] }, "hraness-design-kit-a50a8f2", "sha512-nCmHqqXFfIbuakK86yXJSiBuoyaCD3IIihLMWEZzITLnkGsPLkFVMvFdiPI492OjfBY4Aq85YRGdAFV8pm350w=="],
+    "@hraness/design-kit": ["@hraness/design-kit@github:hraness/design-kit#ca58915", { "dependencies": { "@hugeicons/core-free-icons": "^4.2.2", "@stylexjs/stylex": "0.19.0", "motion": "12.42.0", "next-themes": "0.4.6", "react-aria-components": "1.19.0", "recharts": "3.8.0", "sugar-high": "^1.2.1", "web-haptics": "0.0.6" }, "peerDependencies": { "@hraness/ui": ">=0.4.7 <0.5.0", "react": ">=18 <20", "react-dom": ">=18 <20" }, "optionalPeers": ["@hraness/ui"] }, "hraness-design-kit-ca58915", "sha512-wbvg8kHU0aspoNLmRJl4pyZJ3FZfF/TnD5gcd2QP6YFezWlm3QS6jq8bcPIvBff5mViii+1EPnQkpU9ea/V2Gw=="],
 
     "@hraness/kb": ["@hraness/kb@0.17.1", "", { "dependencies": { "@steipete/sweet-cookie": "github:hraness/sweet-cookie#v0.4.2", "@tobilu/qmd": "git+https://github.com/hraness/qmd.git#aa993dceb3ef8cfb71d470554ca437570f5a2b3c", "agent-browser": "0.32.3", "defuddle": "0.19.1", "yaml": "^2.9.0", "zod": "^4.4.3" }, "bin": { "kb": "dist/cli.js", "kb-evaluation-builder": "dist/evaluation-builder.js" } }, "sha512-/6f4O6H4v8ww63trm+fNTwazx0SN/AXYNqA4XyAb1bPLF8uIzz2qlJN3Uhcf5BUsgZvaoSQ+3hNro+QUqIksig=="],
 
