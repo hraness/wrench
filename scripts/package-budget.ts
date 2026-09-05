@@ -1,16 +1,17 @@
-// After a clean Bun 1.3.14 build, two `bun pm pack` artifacts of the Beeper
-// contacts.list@3 Desktop loopback, archived 2.3.0 adapter baseline, and
-// rebuilt public beeper client were byte-identical: 2,072,396 packed bytes,
-// 12,231,301 unpacked bytes, and 466 files. Their SHA-256 was
-// eb1f11ee0573220c0eb415132b076b5885f39fc6e75136990df47ee32e44f878. Prior CI
-// measured a 3,543-byte Linux/macOS gzip spread. Keep the existing 2,178,192 packed-byte ceiling
-// and 4,244 unpacked bytes of bounded headroom. File
-// inventory is exact at 466 after adding the immutable Beeper v2.3.0 adapter
-// baseline so contacts.list@2 stays on official CLI v0.6.2.
-export const MAX_PACKED_BYTES = 2_178_192;
+// After a clean checkout of current 0.16.6 main, two `npm pack --ignore-scripts`
+// artifacts of the same tree were byte-identical: 2,214,175 packed bytes,
+// 12,232,594 unpacked bytes, and 466 files. Their SHA-256 was
+// e49aa949b885960aa42a0ee5f99a70cfd1bc115934bdc8131a2823fe62f5ff03.
+// GitHub-hosted Stage Verify (npm 11.19.0) reported the same packed size.
+// Staging and Release pack with npm, not `bun pm pack`; the older bun-pack
+// measurement sat under the previous ceiling until that npm tarball exceeded
+// it. Prior CI measured a 3,543-byte Linux/macOS gzip spread. Set the packed
+// ceiling to the measured npm pack plus that spread, and keep 4,244 unpacked
+// bytes of bounded headroom. File inventory stays exact at 466.
+export const MAX_PACKED_BYTES = 2_217_718;
 export const MAX_PACKED_ENTRIES = 466;
 export const MAX_PACKED_FILES = 466;
-export const MAX_UNPACKED_BYTES = 12_235_545;
+export const MAX_UNPACKED_BYTES = 12_236_838;
 
 const TAR_BLOCK_BYTES = 512;
 const TAR_ENTRY_ALLOWANCE_BYTES = TAR_BLOCK_BYTES + (TAR_BLOCK_BYTES - 1);

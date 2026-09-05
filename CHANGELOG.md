@@ -24,6 +24,8 @@ coordinate that completed both checks.
   browser session with fail-closed drift handling.
 - Align the public website with the shared Hraness footer and marketing
   design contracts.
+- Remeasure the published npm tarball with `npm pack` and raise the packed-byte
+  ceiling so Stage Verify accepts the current 0.16.6 tree. File count stays 466.
 
 ## 0.16.5 - 2026-09-04
 
