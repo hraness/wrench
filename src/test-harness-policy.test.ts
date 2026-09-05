@@ -657,18 +657,26 @@ describe("test harness policy", () => {
       || !("scripts" in packageJson)
       || typeof packageJson.scripts !== "object"
       || packageJson.scripts === null
-      || !("test" in packageJson.scripts)
-      || typeof packageJson.scripts.test !== "string"
     ) {
-      throw new Error("package.json scripts.test must be a string");
+      throw new Error("package.json scripts must be an object");
     }
-    const expectedTestCommand =
+    const scripts = packageJson.scripts as Record<string, unknown>;
+    const readScript = (name: string): string => {
+      const value = scripts[name];
+      if (typeof value !== "string") {
+        throw new Error(`package.json scripts.${name} must be a string`);
+      }
+      return value;
+    };
+    const unitCommand =
       "bun test --no-orphans --timeout 180000 --max-concurrency \"$"
-      + "{GOMAXPROCS:-4}\" ./src --path-ignore-patterns='**/src/omni-runtime.test.ts'"
-      + " && bun test --no-orphans --timeout 180000 --max-concurrency 1"
+      + "{GOMAXPROCS:-4}\" ./src --path-ignore-patterns='**/src/omni-runtime.test.ts'";
+    const omniCommand =
+      "bun test --no-orphans --timeout 180000 --max-concurrency 1"
       + " ./src/omni-runtime.test.ts";
-    expect(packageJson.scripts.test).toBe(
-      expectedTestCommand,
-    );
+    expect(readScript("test:unit")).toBe(unitCommand);
+    expect(readScript("test:omni")).toBe(omniCommand);
+    expect(readScript("test")).toBe("bun run test:unit && bun run test:omni");
+    expect(readScript("test:shard")).toBe("bun run ./scripts/ci-test-shard.ts");
   });
 });
