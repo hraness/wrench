@@ -1,11 +1,31 @@
 # Reddit flair
 
-Inspect `wrench capabilities reddit-web --json` before using flair. The
-`flair.user.choices`, `flair.post.choices`, `flair.user.select`, and
-`flair.post.select` contracts are currently **capture-required**. Their schemas
-are reserved and tested, but they perform no authenticated request. Do not
-report that Wrench can apply flair until the installed contract is observed
-and a same-account live readback passes.
+Inspect `wrench capabilities reddit-web --json` before using flair.
+`flair.user.choices` reads the bound account's self-selectable user flair.
+`flair.post.choices` reads the post flair available for a new submission. Both
+are observed R1 contracts:
+
+```sh
+wrench reddit-web flair.user.choices \
+  --auth <reddit-auth> \
+  --input '{"community":"Python"}' \
+  --json
+
+wrench reddit-web flair.post.choices \
+  --auth <reddit-auth> \
+  --input '{"community":"Python"}' \
+  --json
+```
+
+The output contains exact template IDs, visible text, text editability,
+position, and current-selection state. Duplicate IDs, malformed markup,
+account drift, redirects, oversized responses, and unreviewed provider shapes
+fail closed. Empty text is valid for an icon-only flair.
+
+`flair.user.select` and `flair.post.select` remain **capture-required**. Their
+schemas are reserved, but they perform no mutation. Do not report that Wrench
+can apply flair until the relevant selection contract is observed and an
+independent same-account readback passes.
 
 ## Choose flair under the caller's authority
 
@@ -21,20 +41,19 @@ or a role supported by the user's stated facts. Do not invent an occupation,
 credential, diagnosis, housing status, or moderator role. Skip a destination
 with no truthful choice. Flair does not make a prohibited contribution eligible.
 
-The caller owns this decision. Wrench supplies the account-bound options and
-exact mutation boundary; it does not infer personal facts or run a growth loop.
+The caller owns this decision. Wrench supplies account-bound options and a
+separate exact mutation boundary; it does not infer personal facts or run a
+growth loop.
 
-## Complete the live contract before enabling it
+## Complete a selection contract before enabling it
 
 Use [managed derivation](derivation.md) for one explicitly authorized account,
 community, and low-stakes selection. Verify the displayed account against the
 outreach account before recording or changing anything. An existing browser
 auth locator may belong to a different account; never silently substitute it.
 
-Capture user choices and post choices separately. Bind the exact response to
-the current account and community, project template IDs, labels, eligibility,
-and existing selection, and reject duplicate IDs or incomplete choice sets.
-For a post, prove that it belongs to the same account and community. The
+Capture user and post selection separately. For a post, prove that it belongs
+to the same account and community. The
 [Reddit API reference](https://www.reddit.com/dev/api/) and
 [PRAW's submission flair documentation](https://praw.readthedocs.io/en/stable/code_overview/other/submissionflair.html)
 describe choices and selection; they do not prove an authenticated-web exchange.
@@ -52,7 +71,7 @@ account, community, post when relevant, template ID, and visible label through
 independent readback. Treat uncertain writes as indeterminate, never retry them
 blindly. A setup-only flair change is not a new public contribution.
 
-Before promoting either contract, test account drift, wrong-post ownership,
+Before promoting either selection contract, test account drift, wrong-post ownership,
 template changes, moderator-only choices, duplicate labels, denied selection,
 unexpected content type or redirect, and uncertain dispatch. Keep the other
 contracts capture-required if their evidence is missing. No DOM recipe, raw

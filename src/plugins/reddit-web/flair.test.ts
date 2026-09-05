@@ -3,7 +3,10 @@ import manifest from "../../assets/adapters/reddit/wrench-web-adapter.json";
 import { createProviderPluginRegistry } from "../../provider-plugin-registry";
 import { redditWebPlugin } from "./plugin";
 import {
-  REDDIT_FLAIR_OPERATION_NAMES, parseRedditFlairInput, redditFlairContracts,
+  REDDIT_FLAIR_OPERATION_NAMES,
+  parseRedditFlairChoicesResponse,
+  parseRedditFlairInput,
+  redditFlairContracts,
 } from "./flair";
 
 const templateId = "01234567-89ab-cdef-0123-456789abcdef";
@@ -44,16 +47,17 @@ describe("Reddit flair input boundaries", () => {
     })).toThrow("unsupported fields");
   });
 
-  test("post choices bind one exact post instead of a comment or URL", () => {
+  test("post choices target a new submission without accepting a caller-selected post", () => {
     expect(parseRedditFlairInput("flair.post.choices", {
-      community: "example", post_id: "t3_abc123",
-    })).toEqual({ action: "choices", target: {
-      kind: "post", community: "example", postId: "t3_abc123",
-    } });
+      community: "example",
+    })).toEqual({
+      action: "choices",
+      target: { kind: "post", community: "example" },
+    });
     for (const postId of ["t1_abc123", "abc123", "t3_abc/123", "https://reddit.com/"]) {
       expect(() => parseRedditFlairInput("flair.post.choices", {
         community: "example", post_id: postId,
-      })).toThrow("post fullname");
+      })).toThrow("unsupported fields");
     }
   });
 
@@ -91,6 +95,126 @@ describe("Reddit flair input boundaries", () => {
   });
 });
 
+describe("Reddit flair choice projection", () => {
+  const firstId = "680f43b8-1fec-11e3-80d1-12313b0b80bc";
+  const secondId = "16cabd0a-a68d-11e5-8349-0e8ff96e6679";
+  const response = {
+    choices: [
+      {
+        flair_css_class: "satisfied",
+        flair_template_id: firstId,
+        flair_text_editable: false,
+        flair_position: "left",
+        flair_text: "SATISFIED",
+      },
+      {
+        flair_css_class: "",
+        flair_template_id: secondId,
+        flair_text_editable: true,
+        flair_position: "right",
+        flair_text: "STATS",
+      },
+    ],
+    current: {
+      flair_css_class: "satisfied",
+      flair_template_id: firstId,
+      flair_text: "SATISFIED",
+      flair_position: "left",
+    },
+  };
+
+  test("projects bounded choices and binds the current selection", () => {
+    expect(parseRedditFlairChoicesResponse(response, {
+      community: "subreddit_stats",
+      kind: "post",
+    })).toEqual({
+      schemaVersion: 1,
+      community: "subreddit_stats",
+      kind: "post",
+      choices: [
+        {
+          templateId: firstId,
+          text: "SATISFIED",
+          textEditable: false,
+          position: "left",
+          selected: true,
+        },
+        {
+          templateId: secondId,
+          text: "STATS",
+          textEditable: true,
+          position: "right",
+          selected: false,
+        },
+      ],
+      selectedTemplateId: firstId,
+      selectedText: "SATISFIED",
+    });
+  });
+
+  test("projects the captured old-Reddit selector HTML without exposing form state", () => {
+    expect(parseRedditFlairChoicesResponse(`
+      <h2>select flair</h2>
+      <div class="flairoptionpane"><ul>
+        <li class="flairsample-left selected" id="${firstId}">
+          <span class="linkflairlabel" title="SATISFIED">SATISFIED</span>
+        </li>
+        <li class="flairsample-right texteditable" id="${secondId}">
+          <span class="flair stats">STATS &amp; DATA</span>
+        </li>
+      </ul></div>
+      <form action="/post/selectflair" method="post">
+        <div class="flairselection"></div>
+        <input type="hidden" name="flair_template_id">
+        <input type="text" name="text">
+        <button type="submit">save</button>
+      </form>
+    `, { community: "subreddit_stats", kind: "post" })).toMatchObject({
+      choices: [
+        { templateId: firstId, text: "SATISFIED", selected: true },
+        {
+          templateId: secondId,
+          text: "STATS & DATA",
+          textEditable: true,
+          position: "right",
+          selected: false,
+        },
+      ],
+      selectedTemplateId: firstId,
+      selectedText: "SATISFIED",
+    });
+  });
+
+  test("accepts only the exact selector unavailable state when no choices exist", () => {
+    expect(parseRedditFlairChoicesResponse(`
+      <h2>select flair</h2><div class="error">flair selection unavailable</div>
+    `, { community: "example", kind: "user" }).choices).toEqual([]);
+    expect(() => parseRedditFlairChoicesResponse(
+      "<html><body>please sign in</body></html>",
+      { community: "example", kind: "user" },
+    )).toThrow("full or active document");
+  });
+
+  test("rejects provider drift, duplicate IDs, partial current state, and unsafe text", () => {
+    expect(() => parseRedditFlairChoicesResponse({
+      ...response,
+      future: true,
+    }, { community: "example", kind: "user" })).toThrow("reviewed fields");
+    expect(() => parseRedditFlairChoicesResponse({
+      ...response,
+      choices: [response.choices[0], response.choices[0]],
+    }, { community: "example", kind: "user" })).toThrow("repeated a template ID");
+    expect(() => parseRedditFlairChoicesResponse({
+      ...response,
+      current: { ...response.current, flair_text: null },
+    }, { community: "example", kind: "user" })).toThrow("incomplete");
+    expect(() => parseRedditFlairChoicesResponse({
+      ...response,
+      choices: [{ ...response.choices[0], flair_text: "unsafe\ntext" }],
+    }, { community: "example", kind: "user" })).toThrow("bounded text");
+  });
+});
+
 test("flair manifest reservations match code-owned risk and input boundaries", () => {
   expect(redditFlairContracts.map((contract) => contract.operation))
     .toEqual([...REDDIT_FLAIR_OPERATION_NAMES]);
@@ -102,6 +226,8 @@ test("flair manifest reservations match code-owned risk and input boundaries", (
     expect(operation.idempotency).toBe(contract.idempotency);
     expect(operation.dedupeWindowMs).toBe(contract.dedupeWindowMs);
     expect(operation.webSession.contractVersion).toBe(contract.contractVersion);
-    expect(contract.state).toBe("capture-required");
+    expect(contract.state).toBe(contract.operation.endsWith(".select")
+      ? "capture-required"
+      : "observed");
   }
 });

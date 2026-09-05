@@ -64,11 +64,14 @@ const captureRequired = (
 });
 
 export const REDDIT_WEB_OPERATIONS = Object.freeze({
-  ...Object.fromEntries(redditFlairContracts.map((contract) => [contract.operation, captureRequired(
-    contract.risk === "R1" ? "read" : "write",
-    contract.risk as RedditWebRisk,
-    contract.implementation,
-  )])) as Record<(typeof REDDIT_FLAIR_OPERATION_NAMES)[number], RedditWebOperationContract>,
+  ...Object.fromEntries(redditFlairContracts.map((contract) => [
+    contract.operation,
+    (contract.state === "observed" ? observed : captureRequired)(
+      contract.risk === "R1" ? "read" : "write",
+      contract.risk as RedditWebRisk,
+      contract.implementation,
+    ),
+  ])) as Record<(typeof REDDIT_FLAIR_OPERATION_NAMES)[number], RedditWebOperationContract>,
   "profiles.read": observed(
     "read",
     "R1",
@@ -389,6 +392,8 @@ export type RedditWebRequestOperation =
   | "messages.read"
   | "media.read"
   | "state.readback"
+  | "flair.user.choices"
+  | "flair.post.choices"
   | "media.lease"
   | "media.publish"
   | "reactions.set"
@@ -415,6 +420,7 @@ export type RedditWebRequestInput = {
   readonly mediaUrl?: string;
   readonly posterUrl?: string;
   readonly profile?: string;
+  readonly username?: string;
 };
 
 export type RedditWebRequestBinding = {
@@ -436,7 +442,7 @@ export function authorizeRedditWebRequest(
   const url = exactUrl(
     input.url,
     "Reddit request URL",
-    input.operation === "media.lease"
+    input.operation === "media.lease" || input.operation.startsWith("flair.")
       ? "https://old.reddit.com"
       : "https://www.reddit.com",
   );
@@ -561,6 +567,44 @@ export function authorizeRedditWebRequest(
       throw new Error(`Reddit ${input.operation} query did not bind its target`);
     }
     requireFixed(query, "raw_json", "1", `Reddit ${input.operation} query`);
+    return finish();
+  }
+
+  if (
+    input.operation === "flair.user.choices"
+    || input.operation === "flair.post.choices"
+  ) {
+    if (
+      method !== "POST"
+      || url.pathname !== "/api/flairselector"
+      || input.community === undefined
+    ) throw new Error("Reddit flair choices request changed its reviewed exchange");
+    exactNames(query, [], [], "Reddit flair choices query");
+    const community = redditCommunity(input.community, "Reddit flair community");
+    const commonFields = ["r", "uh"] as const;
+    exactNames(
+      form,
+      input.operation === "flair.user.choices"
+        ? [...commonFields, "name"]
+        : [...commonFields, "is_newlink"],
+      [],
+      "Reddit flair choices form",
+    );
+    requireFixed(form, "r", community, "Reddit flair choices form");
+    boundedString(form.get("uh"), "Reddit flair choices modhash", 256);
+    if (input.operation === "flair.user.choices") {
+      const username = boundedString(
+        input.username,
+        "Reddit flair username",
+        64,
+      );
+      if (!/^[A-Za-z0-9_-]{1,64}$/u.test(username)) {
+        throw new Error("Reddit flair username is invalid");
+      }
+      requireFixed(form, "name", username, "Reddit flair choices form");
+    } else {
+      requireFixed(form, "is_newlink", "true", "Reddit flair choices form");
+    }
     return finish();
   }
 

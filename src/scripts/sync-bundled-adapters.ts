@@ -472,6 +472,7 @@ function publishBundledAdapterGeneration(
 
   const selections: BundledAdapterGenerationSelection[] = [];
   const preservedIds: string[] = [];
+  const repairedIds: string[] = [];
   let installed = 0;
   const installedSnapshots = new Map(
     listInstalledDiagnosticManifestSnapshots(environment, registry).map((entry) =>
@@ -533,6 +534,19 @@ function publishBundledAdapterGeneration(
       installed += 1;
       continue;
     }
+    const runtime = parseRuntimeManifest(snapshot.result.value, registry);
+    if (!runtime.ok) {
+      selections.push({
+        id: adapter.id,
+        state: "present",
+        manifest: adapter.current.manifest,
+        sourceContentSha256: adapter.current.sourceContentSha256,
+        expectedCurrentContentSha256: snapshot.contentSha256,
+      });
+      repairedIds.push(adapter.id);
+      installed += 1;
+      continue;
+    }
     if (snapshot.contentSha256 === null) {
       throw new Error(`installed adapter ${adapter.id} omitted its content hash`);
     }
@@ -563,6 +577,11 @@ function publishBundledAdapterGeneration(
   for (const id of preservedIds) {
     output.stderr(
       `wrench installer: preserved the installed ${id} adapter because it differs from the bundled version; inspect it or reinstall with --force\n`,
+    );
+  }
+  for (const id of repairedIds) {
+    output.stderr(
+      `wrench installer: repaired the incompatible installed ${id} adapter with this Wrench release's bundled contract; reinstall a newer Wrench release to restore newer contracts\n`,
     );
   }
   return Object.freeze({
