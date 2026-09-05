@@ -218,7 +218,7 @@ describe("Beeper pinned local-CLI provider plugin", () => {
     expect(readOmniV1.materialize).not.toBe(readOmniV2.materialize);
     expect(readOmniV2.materialize).not.toBe(readOmniV3.materialize);
     expect(readOmniV1.materialize).not.toBe(readOmniV3.materialize);
-    expect(binding.operations.filter((operation) => operation.risk === "R1")).toHaveLength(22);
+    expect(binding.operations.filter((operation) => operation.risk === "R1")).toHaveLength(23);
     expect(binding.operations.every((operation) => operation.state === "observed")).toBeTrue();
     for (const operationName of [
       "accounts.list",
