@@ -2391,8 +2391,6 @@ async function executeLinkedInProfileActivityRead(
     const binding = await browserTransport.resolveProfileActivityBinding(target.slug);
     requestStage = "contained-browser profile-activity page read";
     const response = await browserTransport.readProfileActivityPage({
-      queryId: binding.queryId,
-      profileUrn: binding.profileUrn,
       count: limit,
       start: cursor.start,
     });
@@ -2401,6 +2399,7 @@ async function executeLinkedInProfileActivityRead(
       response,
       target,
       profileUrn: binding.profileUrn,
+      queryId: binding.queryId,
       limit,
       start: cursor.start,
       observedAt: new Date(options.dependencies?.now?.() ?? Date.now()).toISOString(),
