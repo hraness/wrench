@@ -41,155 +41,87 @@
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
-    <header class="topbar">
-      <a aria-label="Wrench home" class="wordmark" href="/">Wrench</a>
-      <nav aria-label="Primary">
-        <a href="#start">Install</a>
-        <a href="/provider-capabilities/">Providers</a>
-        <a
-          data-analytics-event="project link opened"
-          data-analytics-id="nav-github"
-          data-analytics-kind="repository"
-          href="https://github.com/hraness/wrench"
-        >GitHub <span aria-hidden="true">↗</span></a>
-      </nav>
+    <header class="hraness-marketing-header" data-hraness-marketing="header">
+      <div class="hraness-marketing-header__inner">
+        <a aria-label="Wrench home" class="wordmark" href="/">Wrench</a>
+        <nav aria-label="Primary" class="hraness-marketing-header__nav">
+          <a href="#how-it-works">How it works</a>
+          <a href="#providers">Providers</a>
+          <a href="#questions">Questions</a>
+          <a href="/getting-started/">Docs</a>
+          <a
+            data-analytics-event="project link opened"
+            data-analytics-id="nav-github"
+            data-analytics-kind="repository"
+            href="https://github.com/hraness/wrench"
+          >GitHub <span aria-hidden="true">↗</span></a>
+        </nav>
+        <div class="hraness-marketing-header__actions">
+          <a class="hraness-marketing-action" data-emphasis="primary" href="#start">Install Wrench</a>
+        </div>
+      </div>
     </header>
 
     <main id="main">
-      <section aria-labelledby="brand-name" class="hero">
-        <header class="hraness-marketing-hero wrench-product-hero" data-hraness-marketing="hero">
-          <div class="hero-intro hraness-marketing-hero__copy">
-            <p class="eyebrow hraness-marketing-hero__eyebrow">Capture · archive · connected services</p>
+      <div class="hraness-marketing-page">
+        <header aria-labelledby="brand-name" class="hraness-marketing-hero wrench-product-hero" data-align="center" data-hraness-marketing="hero" data-tone="paper">
+          <div class="hraness-marketing-hero__copy">
+            <p class="hraness-marketing-hero__eyebrow">Open-source CLI and TypeScript SDK</p>
             <p aria-hidden="true" class="hraness-marketing-hero__name">Wrench</p>
-            <h1 class="hraness-marketing-hero__heading" id="brand-name">Give your coding agent bounded access to the web.</h1>
-            <p class="hero-explainer hraness-marketing-hero__summary">
-            Wrench is a local CLI and TypeScript SDK for capturing public pages,
-            preserving finite media, and using supported actions in connected
-            services. You bring the model and interface.
-            </p>
-            <div class="action-row hraness-marketing-hero__actions">
-              <a class="button button-primary hraness-marketing-action" data-emphasis="primary" href="#start">Install Wrench</a>
-              <a class="button button-secondary hraness-marketing-action" data-emphasis="secondary" href="/provider-capabilities/">See provider support</a>
+            <h1 class="hraness-marketing-hero__heading" id="brand-name">Give your coding agent bounded access to the web</h1>
+            <p class="hraness-marketing-hero__summary hero-explainer">Wrench is a local CLI and TypeScript SDK that lets an agent read public pages, archive media, and take supported actions in the services you’ve signed into. You keep the model, the keys, and the browser.</p>
+            <p class="hraness-marketing-hero__example">Ask your agent to read this page as Markdown, archive one YouTube video with its transcript, and list your recent Beeper conversations.</p>
+            <div class="hraness-marketing-hero__actions">
+              <a class="hraness-marketing-action" data-emphasis="primary" href="#start">Install Wrench</a>
+              <a class="hraness-marketing-action" data-emphasis="secondary" href="#how-it-works">See how it works</a>
             </div>
-            <p class="hraness-marketing-hero__boundary">Local CLI and SDK · macOS and Linux · no hosted runtime or general browser fallback</p>
+            <p class="hraness-marketing-hero__boundary">Free and MIT licensed. Runs on macOS and Linux with Bun 1.3.14. Release {{WRENCH_RELEASE}}.</p>
           </div>
-          <aside aria-labelledby="brand-name-proof" class="hraness-marketing-proof">
-            <p class="hraness-marketing-proof__kicker">First useful run</p>
-            <h2 class="hraness-marketing-proof__heading" id="brand-name-proof">One public page, three inspectable transitions.</h2>
-            <ol aria-label="First Wrench capture" class="hraness-marketing-flow" data-hraness-marketing="flow">
-              <li class="hraness-marketing-flow__step"><span aria-hidden="true" class="hraness-marketing-flow__number">01</span><div class="hraness-marketing-flow__body"><strong class="hraness-marketing-flow__label">Check the local boundary</strong><code class="hraness-marketing-flow__code">wrench doctor</code><p class="hraness-marketing-flow__detail">Verify capture, media, authentication, and action dependencies.</p></div></li>
-              <li class="hraness-marketing-flow__step"><span aria-hidden="true" class="hraness-marketing-flow__number">02</span><div class="hraness-marketing-flow__body"><strong class="hraness-marketing-flow__label">Read without saving</strong><code class="hraness-marketing-flow__code">wrench read https://example.com/article</code><p class="hraness-marketing-flow__detail">Return bounded Markdown from one authorized public URL.</p></div></li>
-              <li class="hraness-marketing-flow__step"><span aria-hidden="true" class="hraness-marketing-flow__number">03</span><div class="hraness-marketing-flow__body"><strong class="hraness-marketing-flow__label">Inspect installed authority</strong><code class="hraness-marketing-flow__code">wrench capabilities --json</code><p class="hraness-marketing-flow__detail">List only the semantic operations available on this machine.</p></div></li>
-            </ol>
-          </aside>
-          <dl class="hraness-marketing-facts" data-hraness-marketing="facts">
-            <div><dt>Public web</dt><dd><strong>Page capture</strong><span>Readable output before persistence.</span></dd></div>
-            <div><dt>Finite media</dt><dd><strong>Verified archive</strong><span>Source bytes, derivatives, and hashes.</span></dd></div>
-            <div><dt>Providers</dt><dd><strong>Named operations</strong><span>Unsupported actions remain unavailable.</span></dd></div>
-            <div><dt>Interfaces</dt><dd><strong>CLI · SDK · Skill</strong><span>One local capability layer.</span></dd></div>
-          </dl>
+          <div class="hraness-marketing-hero__frame">
+            <figure class="hraness-marketing-proof-frame" data-hraness-marketing="proof-frame">
+              <div aria-hidden="true" class="hraness-marketing-proof-frame__chrome">
+                <span class="hraness-marketing-proof-frame__lights"><span></span><span></span><span></span></span>
+                <span class="hraness-marketing-proof-frame__title">wrench read https://example.com</span>
+              </div>
+              <div class="hraness-marketing-proof-frame__content"><pre class="proof-transcript" tabindex="0"><code><span class="proof-transcript__prompt">$</span> wrench read https://example.com
+<span class="proof-transcript__meta">Capturing https://example.com/ (auto, auto) ...</span>
+---
+title: "Example Domain"
+source: "https://example.com/"
+clipped: "2026-09-05"
+platform: "generic"
+capture_status: "complete"
+capture_method: "http"
+capture_scope: "page"
+---
+# Example Domain
+
+This domain is for use in documentation examples without needing permission. Avoid use in operations.
+
+[Learn more](https://iana.org/domains/example)</code></pre></div>
+              <figcaption class="hraness-marketing-proof-frame__caption">
+                <span>The complete output of one <code>wrench read</code> for a public page: a short record of what was captured and how, then the page as Markdown. Nothing was saved.</span>
+                <small>Wrench {{WRENCH_RELEASE}}, run on September 5, 2026</small>
+              </figcaption>
+            </figure>
+          </div>
         </header>
-      </section>
 
-      <div class="content">
-        <section aria-labelledby="providers-title" class="section provider-section" id="providers">
-          <div class="section-heading section-heading-wide">
-            <p class="eyebrow">Provider support</p>
-            <h2 id="providers-title">Reviewed operations across {{PROVIDER_SURFACE_COUNT}} supported services.</h2>
-            <p>
-              These cards summarize capability families and access methods, then link
-              to the named actions supported in this release. If an action is not
-              listed there, Wrench does not offer it.
-            </p>
-          </div>
-          <div class="provider-directory">
-            {{PROVIDER_OVERVIEW_CARDS}}
-          </div>
-          <p class="provider-status-note">
-            Provider names identify compatible services and do not imply endorsement.
-          </p>
-          <div class="action-row provider-actions">
-            <a class="button button-primary" href="/provider-capabilities/">Browse supported actions</a>
-          </div>
-        </section>
+        <dl aria-label="Wrench in three points" class="hraness-marketing-pillars" data-hraness-marketing="pillars">
+          <div><dt>Read</dt><dd>Turn a public URL into Markdown your agent can inspect on the spot or keep in a local knowledge base.</dd></div>
+          <div><dt>Archive</dt><dd>Preserve one media item you’re allowed to access, with its source bytes, transcript, manifest, and SHA-256 records.</dd></div>
+          <div><dt>Act</dt><dd>Use named actions in {{PROVIDER_SURFACE_COUNT}} services you’ve signed into, from Beeper and Gmail to YouTube. If an action isn’t listed, Wrench doesn’t offer it.</dd></div>
+        </dl>
 
-        <section aria-labelledby="use-cases-title" class="section">
-          <div class="section-heading">
-            <p class="eyebrow">Capture, preserve, read, and act</p>
-            <h2 id="use-cases-title">Four bounded jobs from one CLI.</h2>
-            <p>
-              Start with a public URL. Add authenticated capabilities only when you
-              need them. The same command surface scales from a readable page capture
-              to account-bound provider operations.
-            </p>
-          </div>
-          <div class="card-grid">
-            <article class="card">
-              <span aria-hidden="true" class="card-index">01</span>
-              <h3>Capture knowledge</h3>
-              <p>Turn a URL into durable Markdown, inspect it without saving, and search the knowledge you keep locally.</p>
-            </article>
-            <article class="card">
-              <span aria-hidden="true" class="card-index">02</span>
-              <h3>Preserve media</h3>
-              <p>Archive one authorized, accessible media item with its source bytes, requested derivatives, transcript, manifest, and SHA-256 records.</p>
-            </article>
-            <article class="card">
-              <span aria-hidden="true" class="card-index">03</span>
-              <h3>Read connected services</h3>
-              <p>Keep validated reads from installed capabilities in encrypted local snapshots, then load them without reopening a browser or contacting the provider.</p>
-            </article>
-            <article class="card">
-              <span aria-hidden="true" class="card-index">04</span>
-              <h3>Add one capability</h3>
-              <p>Turn one authorized first-party exchange into a named operation such as <code>messaging.list</code>, with exact origins, typed inputs, strict outputs, and explicit trust.</p>
-            </article>
-          </div>
-        </section>
-
-        <section aria-labelledby="how" class="section section-dark">
-          <div class="section-heading section-heading-wide">
-            <p class="eyebrow">One job, one handle</p>
-            <h2 id="how">The browser stays behind the boundary.</h2>
-            <p>
-              Wrench begins with the exact outcome an agent may request. It exposes a
-              small semantic operation and keeps the browser, provider plumbing,
-              account session, and credentials inside a local kernel.
-            </p>
-          </div>
-          <ol class="flow">
-            <li>
-              <span aria-hidden="true" class="flow-index">01</span>
-              <div><h3>Name the job</h3><p>The agent asks for a named outcome, such as reading an inbox or preserving one video.</p></div>
-            </li>
-            <li>
-              <span aria-hidden="true" class="flow-index">02</span>
-              <div><h3>Select a capability</h3><p>Wrench resolves one installed, supported capability instead of handing the caller a general browser or request tool.</p></div>
-            </li>
-            <li>
-              <span aria-hidden="true" class="flow-index">03</span>
-              <div><h3>Check the boundary</h3><p>The kernel binds the exact provider, transport, account realm, contract version, implementation, input, and risk.</p></div>
-            </li>
-            <li>
-              <span aria-hidden="true" class="flow-index">04</span>
-              <div><h3>Run one exchange</h3><p>Credentials remain opaque to the caller and can terminate only at sinks declared by that capability.</p></div>
-            </li>
-            <li>
-              <span aria-hidden="true" class="flow-index">05</span>
-              <div><h3>Return evidence</h3><p>The caller receives a bounded result, explicit completeness, or durable evidence that the outcome remains unsettled.</p></div>
-            </li>
-          </ol>
-        </section>
-
-        <section aria-labelledby="start" class="section start-section hraness-marketing-install" data-hraness-marketing="install">
+        <section aria-labelledby="start-heading" class="start-section hraness-marketing-install" data-hraness-marketing="install" id="start">
           <div class="hraness-marketing-install__heading-group">
-            <p class="eyebrow hraness-marketing-install__eyebrow">A public page is the easiest first step</p>
-            <h2 class="hraness-marketing-install__heading" id="start">Install the verified local release.</h2>
+            <p class="hraness-marketing-install__eyebrow">Local release {{WRENCH_RELEASE}}</p>
+            <h2 class="hraness-marketing-install__heading" id="start-heading">Install the verified local release.</h2>
+            <p class="install-summary">Wrench requires Bun 1.3.14 and runs on macOS and Linux. Install the CLI and SDK from the <a href="{{WRENCH_NPM_PACKAGE}}"><code>@hraness/wrench</code> package on npm</a>, then run the doctor before you connect a service.</p>
           </div>
           <div class="hraness-marketing-install__commands">
-            <p class="install-summary">Wrench requires Bun 1.3.14 and runs on macOS and Linux. Install the CLI and SDK from the <a href="{{WRENCH_NPM_PACKAGE}}"><code>@hraness/wrench</code> package on npm</a>, then verify the machine before opening a provider boundary.</p>
             <div class="skill-install" data-skill-install>
-              <p class="skill-install-label" id="hero-skill-install-label">Install the Agent Skill</p>
+              <p class="skill-install-label" id="hero-skill-install-label">Add the Agent Skill</p>
               <div class="skill-install-control">
                 <span aria-hidden="true" class="skill-install-prompt">$</span>
                 <code aria-describedby="hero-skill-install-note hero-skill-install-status" aria-labelledby="hero-skill-install-label" class="skill-install-command" data-skill-install-command id="hero-skill-install-command" tabindex="0">{{WRENCH_SKILL_INSTALL_COMMAND}}</code>
@@ -202,152 +134,190 @@
               <p aria-live="polite" class="visually-hidden" data-skill-install-status id="hero-skill-install-status" role="status"></p>
             </div>
             <div class="command-stack">
-            <div class="command-panel">
-              <div class="command-label"><span>terminal</span><span>{{WRENCH_RELEASE}}</span></div>
-              <pre><code>{{WRENCH_INSTALL_COMMAND}}
+              <div class="command-panel">
+                <div class="command-label"><span>terminal</span><span>{{WRENCH_RELEASE}}</span></div>
+                <pre><code>{{WRENCH_INSTALL_COMMAND}}
 wrench doctor
 wrench read https://example.com/article
 wrench capabilities --json</code></pre>
-            </div>
-            <aside class="prompt-card">
-              <p class="prompt-label">Or ask a command-capable agent</p>
-              <p>“Install Wrench {{WRENCH_RELEASE}}, run <code>wrench doctor</code>, then use it to read this URL: …”</p>
-            </aside>
+              </div>
+              <aside class="prompt-card">
+                <p class="prompt-label">Or ask an agent that can run commands</p>
+                <p>“Install Wrench {{WRENCH_RELEASE}}, run <code>wrench doctor</code>, then use it to read this URL: …”</p>
+              </aside>
             </div>
           </div>
         </section>
 
-        <section aria-labelledby="interfaces-title" class="section hraness-marketing-interfaces" data-hraness-marketing="interfaces" id="interfaces">
+        <section aria-labelledby="how-it-works-heading" class="hraness-marketing-section" data-hraness-marketing="section" data-layout="split" id="how-it-works">
+          <div class="hraness-marketing-section__heading-group">
+            <p class="hraness-marketing-section__label">How it works</p>
+            <h2 class="hraness-marketing-section__heading" id="how-it-works-heading">Your agent asks for an outcome, not a browser.</h2>
+            <p class="hraness-marketing-section__summary">Every request resolves to one named action with typed inputs and a typed result. The service session, cookies, and provider plumbing stay inside a local kernel the agent never touches.</p>
+          </div>
+          <div class="hraness-marketing-section__body">
+            <ol aria-label="One Wrench request" class="hraness-marketing-flow" data-hraness-marketing="flow">
+              <li class="hraness-marketing-flow__step"><span aria-hidden="true" class="hraness-marketing-flow__number">01</span><div class="hraness-marketing-flow__body"><strong class="hraness-marketing-flow__label">Name the job</strong><p class="hraness-marketing-flow__detail">The agent asks for an outcome, such as reading an inbox or preserving one video.</p></div></li>
+              <li class="hraness-marketing-flow__step"><span aria-hidden="true" class="hraness-marketing-flow__number">02</span><div class="hraness-marketing-flow__body"><strong class="hraness-marketing-flow__label">Match one action</strong><p class="hraness-marketing-flow__detail">Wrench resolves one installed, supported action. There is no general browser or request tool to fall back on.</p></div></li>
+              <li class="hraness-marketing-flow__step"><span aria-hidden="true" class="hraness-marketing-flow__number">03</span><div class="hraness-marketing-flow__body"><strong class="hraness-marketing-flow__label">Check the account</strong><p class="hraness-marketing-flow__detail">The kernel binds the exact service, account, transport, contract version, and risk level before anything runs.</p></div></li>
+              <li class="hraness-marketing-flow__step"><span aria-hidden="true" class="hraness-marketing-flow__number">04</span><div class="hraness-marketing-flow__body"><strong class="hraness-marketing-flow__label">Run one exchange</strong><p class="hraness-marketing-flow__detail">Credentials stay opaque to the caller and can reach only the endpoints that action declares.</p></div></li>
+              <li class="hraness-marketing-flow__step"><span aria-hidden="true" class="hraness-marketing-flow__number">05</span><div class="hraness-marketing-flow__body"><strong class="hraness-marketing-flow__label">Return the result</strong><p class="hraness-marketing-flow__detail">The caller gets a typed result, an explicit note of what is incomplete, or a durable record that the outcome is still unsettled.</p></div></li>
+            </ol>
+          </div>
+        </section>
+
+        <section aria-labelledby="providers-title" class="hraness-marketing-section provider-section" data-hraness-marketing="section" data-layout="stack" id="providers">
+          <div class="hraness-marketing-section__heading-group">
+            <p class="hraness-marketing-section__label">Provider support</p>
+            <h2 id="providers-title">Reviewed operations across {{PROVIDER_SURFACE_COUNT}} supported services.</h2>
+            <p class="hraness-marketing-section__summary">
+              These cards summarize capability families and access methods, then link
+              to the named actions supported in this release. If an action is not
+              listed there, Wrench does not offer it.
+            </p>
+          </div>
+          <div class="hraness-marketing-section__body">
+            <div class="provider-directory">
+              {{PROVIDER_OVERVIEW_CARDS}}
+            </div>
+            <p class="provider-status-note">
+              Provider names identify compatible services and do not imply endorsement. Counts are for release {{WRENCH_RELEASE}}.
+            </p>
+            <div class="provider-actions">
+              <a class="hraness-marketing-action" data-emphasis="secondary" href="/provider-capabilities/">Browse every supported action</a>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="interfaces-title" class="hraness-marketing-interfaces" data-hraness-marketing="interfaces" id="interfaces">
           <header class="hraness-marketing-interfaces__header">
             <p class="hraness-marketing-interfaces__label">Interfaces</p>
             <h2 class="hraness-marketing-interfaces__heading" id="interfaces-title">The same boundary from three surfaces.</h2>
-            <p>Wrench does not publish a hosted API or MCP server. Its public interfaces stay local, versioned, and inspectable.</p>
+            <p>Wrench does not publish a hosted API or MCP server. Its public interfaces stay local and versioned, so what your agent can do is the same from a skill, a terminal, or typed code.</p>
           </header>
           <div class="hraness-marketing-interface-grid">
-            <article class="hraness-marketing-interface"><h3 class="hraness-marketing-interface__heading">Agent Skill</h3><p>Add the release-matched capture, archive, provider, and publishing guide to a command-capable agent.</p><pre><code>{{WRENCH_SKILL_INSTALL_COMMAND}}</code></pre></article>
-            <article class="hraness-marketing-interface"><h3 class="hraness-marketing-interface__heading">CLI</h3><p>Use stable human output or JSON from a terminal, script, or agent tool call.</p><pre><code>wrench capabilities --json</code></pre></article>
+            <article class="hraness-marketing-interface"><h3 class="hraness-marketing-interface__heading">Agent Skill</h3><p>Add the release-matched capture, archive, provider, and publishing guide to an agent that can run commands.</p><pre><code>{{WRENCH_SKILL_INSTALL_COMMAND}}</code></pre></article>
+            <article class="hraness-marketing-interface"><h3 class="hraness-marketing-interface__heading">CLI</h3><p>Use stable human output or JSON from a terminal, a script, or an agent tool call.</p><pre><code>wrench capabilities --json</code></pre></article>
             <article class="hraness-marketing-interface"><h3 class="hraness-marketing-interface__heading">TypeScript SDK</h3><p>Import side-effect-free validators and types without starting the CLI or inspecting local state.</p><pre><code>import { isProviderPluginId } from "@hraness/wrench"</code></pre></article>
           </div>
         </section>
 
-        <section aria-labelledby="philosophy-title" class="section hraness-marketing-trust" data-hraness-marketing="trust">
+        <section aria-labelledby="local-by-design-title" class="hraness-marketing-trust" data-hraness-marketing="trust" id="local-by-design">
           <header class="hraness-marketing-trust__header">
-            <p class="hraness-marketing-trust__label">Capability boundary</p>
-            <h2 class="hraness-marketing-trust__heading" id="philosophy-title">Each capability owns inspectable authority.</h2>
-            <p>Wrench is useful because its kernel refuses broad authority. Every capability stays small enough to inspect, test, cache, revoke, and reason about when a provider changes.</p>
+            <p class="hraness-marketing-trust__label">Local by design</p>
+            <h2 class="hraness-marketing-trust__heading" id="local-by-design-title">Nothing leaves your machine unless you ask it to.</h2>
+            <p>Wrench is infrastructure around the accounts and tools you already have, not a service in front of them.</p>
           </header>
           <dl class="hraness-marketing-trust-grid">
-            <div class="hraness-marketing-trust-item"><dt>Intent over mechanism</dt><dd>Operations name the job. Provider requests, browser sessions, cookies, and selectors stay behind the contract.</dd></div>
-            <div class="hraness-marketing-trust-item"><dt>Evidence before authority</dt><dd>A captured exchange remains inert until its inputs, outputs, account proof, side effects, and failure behavior are reviewed and tested.</dd></div>
-            <div class="hraness-marketing-trust-item"><dt>Drift stays visible</dt><dd>A changed origin, account, status, field, or response shape makes the capability unavailable. Wrench never switches silently to a browser fallback.</dd></div>
-            <div class="hraness-marketing-trust-item"><dt>Unknown stays unknown</dt><dd>Incomplete reads remain incomplete. An ambiguous write stays unsettled until separate evidence can reconcile it.</dd></div>
-            <div class="hraness-marketing-trust-item"><dt>Local custody</dt><dd>Archives stay inspectable, account-bound reads stay encrypted, and exact cached views can load without a provider roundtrip.</dd></div>
-            <div class="hraness-marketing-trust-item"><dt>Interchangeable intelligence</dt><dd>Wrench supplies no model, planning loop, approval interface, or application shell. Use the agent system you already prefer.</dd></div>
+            <div class="hraness-marketing-trust-item"><dt>Your sign-ins stay here</dt><dd>Connected accounts live in encrypted local state. Your agent receives a named action and its result, never cookies, tokens, or a browser it can steer.</dd></div>
+            <div class="hraness-marketing-trust-item"><dt>Only the traffic you asked for</dt><dd>Wrench contacts the page or service the action names and nothing else. The CLI and SDK send no analytics anywhere.</dd></div>
+            <div class="hraness-marketing-trust-item"><dt>Reads you can open later</dt><dd>Account-bound reads are kept as encrypted snapshots on your machine. A failed refresh or a changed service does not erase the last verified state.</dd></div>
+            <div class="hraness-marketing-trust-item"><dt>Writes happen once or stay flagged</dt><dd>Consequential changes need a short preview and a confirmation. An indeterminate write is never blindly retried and remains unsettled until separate exact evidence can reconcile it.</dd></div>
+            <div class="hraness-marketing-trust-item"><dt>Change fails closed</dt><dd>When a service changes its shape, the affected action becomes unavailable until its contract is reviewed again. Wrench never switches silently to a browser fallback.</dd></div>
+            <div class="hraness-marketing-trust-item"><dt>Bring your own agent</dt><dd>Wrench ships no model, planner, approval screen, or app. It works with the coding agent you already use and stays out of its way.</dd></div>
           </dl>
         </section>
 
-        <section aria-labelledby="technical-title" class="section technical-section">
-          <div class="section-heading">
-            <p class="eyebrow">For technical readers</p>
-            <h2 id="technical-title">The runtime checks the boundaries it documents.</h2>
-            <p>
-              Each rule closes a specific failure mode: confused accounts, ambient
-              credentials, provider drift, stale state, duplicated mutations, or
-              trusted code that changed after review.
-            </p>
+        <section aria-labelledby="comparison-title" class="hraness-marketing-section" data-hraness-marketing="section" data-layout="stack" id="how-it-fits">
+          <div class="hraness-marketing-section__heading-group">
+            <p class="hraness-marketing-section__label">How it fits</p>
+            <h2 class="hraness-marketing-section__heading" id="comparison-title">Use Wrench with the tools you already have.</h2>
+            <p class="hraness-marketing-section__summary">Wrench owns a narrow local layer: named actions and the records they leave behind. Hosted integration catalogs, cloud Actors, and managed browsers solve broader jobs at other layers.</p>
           </div>
-          <dl class="invariants">
-            <div><dt>Strict inputs</dt><dd>Foreign manifests, messages, plans, receipts, responses, and CLI values reject unknown fields and malformed bounds.</dd></div>
-            <div><dt>Exact identity</dt><dd>Authenticated calls bind one account realm, provider surface, transport, contract version, and implementation identity.</dd></div>
-            <div><dt>Opaque credentials</dt><dd>Plugins receive declared handles. The caller does not receive cookies, tokens, ambient environment, unrestricted files, a shell, or caller-selected HTTP.</dd></div>
-            <div><dt>Content-bound trust</dt><dd>Portable-plugin trust applies to one verified bundle. Process separation contains ordinary failures and is not described as a hostile-code sandbox.</dd></div>
-            <div><dt>Last-good reads</dt><dd>Exact snapshots preserve provider paging and completeness. A failed refresh or drifted projection does not erase the last verified state.</dd></div>
-            <div><dt>At-most-once evidence</dt><dd>Consequential changes require a short-lived exact preview and confirmation. An indeterminate write is never blindly retried and remains unsettled until separate exact evidence can reconcile it.</dd></div>
-          </dl>
-        </section>
-
-        <section aria-labelledby="comparison-title" class="section">
-          <div class="section-heading section-heading-wide">
-            <p class="eyebrow">How it fits</p>
-            <h2 id="comparison-title">Use Wrench with the tools you already have.</h2>
-            <p>
-              Wrench owns a narrow capability and custody layer. Hosted integration
-              catalogs, cloud Actors, and managed browsers solve broader jobs at
-              different layers.
-            </p>
-          </div>
-          <div aria-labelledby="comparison-title" class="table-scroll" role="region" tabindex="0">
-            <table>
-              <thead><tr><th scope="col">Approach</th><th scope="col">Best fit</th><th scope="col">Wrench boundary</th></tr></thead>
-              <tbody>
-                <tr><th scope="row"><a href="https://pipedream.com/docs/connect">Pipedream Connect</a></th><td>Hosted integration breadth and managed end-user authentication across thousands of APIs and prebuilt tools</td><td>A smaller local set whose provider operations and implementations are reviewed before they run</td></tr>
-                <tr><th scope="row"><a href="https://docs.apify.com/integrations/mcp">Apify MCP</a></th><td>Discovering and running eligible Apify Store Actors through a hosted MCP service, with access to results and storage</td><td>Each provider operation and implementation must be named and reviewed before it can run</td></tr>
-                <tr><th scope="row"><a href="https://docs.browserbase.com/platform/browser/observability/session-recording">Browserbase</a></th><td>Parallel browser automation on managed cloud sessions, with live inspection and video recording by default</td><td>No remote browser runtime and no hidden browser fallback when a named operation is missing or drifted</td></tr>
-                <tr><th scope="row">Wrench</th><td>Narrow local capabilities whose exact identities, account realms, and risks need review</td><td>Encrypted provider snapshots and projections, mutation previews and receipts, and fail-closed contract drift</td></tr>
-              </tbody>
-            </table>
+          <div class="hraness-marketing-section__body">
+            <div aria-labelledby="comparison-title" class="table-scroll" role="region" tabindex="0">
+              <table>
+                <thead><tr><th scope="col">Approach</th><th scope="col">Best fit</th><th scope="col">Wrench boundary</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row"><a href="https://pipedream.com/docs/connect">Pipedream Connect</a></th><td>Hosted integration breadth and managed end-user authentication across thousands of APIs and prebuilt tools</td><td>A smaller local set whose provider operations and implementations are reviewed before they run</td></tr>
+                  <tr><th scope="row"><a href="https://docs.apify.com/integrations/mcp">Apify MCP</a></th><td>Discovering and running eligible Apify Store Actors through a hosted MCP service, with access to results and storage</td><td>Each provider operation and implementation must be named and reviewed before it can run</td></tr>
+                  <tr><th scope="row"><a href="https://docs.browserbase.com/platform/browser/observability/session-recording">Browserbase</a></th><td>Parallel browser automation on managed cloud sessions, with live inspection and video recording by default</td><td>No remote browser runtime and no hidden browser fallback when a named operation is missing or drifted</td></tr>
+                  <tr><th scope="row">Wrench</th><td>Narrow local capabilities whose exact identities, account realms, and risks need review</td><td>Encrypted provider snapshots and projections, mutation previews and receipts, and fail-closed contract drift</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </section>
 
-        <section aria-labelledby="faq-title" class="section faq-section hraness-marketing-questions" data-hraness-marketing="questions">
+        <section aria-labelledby="faq-title" class="hraness-marketing-questions" data-hraness-marketing="questions" id="questions">
           <header class="hraness-marketing-questions__header">
-            <p class="hraness-marketing-questions__label">The important limits</p>
-            <h2 class="hraness-marketing-questions__heading" id="faq-title">Questions Wrench should answer plainly.</h2>
+            <p class="hraness-marketing-questions__label">Questions</p>
+            <h2 class="hraness-marketing-questions__heading" id="faq-title">Before you install.</h2>
           </header>
-          <div class="faq-list hraness-marketing-question-list">
-            <details class="hraness-marketing-question"><summary>Is Wrench an AI agent?</summary><div class="hraness-marketing-question__answer"><p>No. Wrench provides <code>@hraness/wrench</code>, a CLI, and an SDK. Your agent owns the model, planning loop, approvals, and interface.</p></div></details>
-            <details class="hraness-marketing-question"><summary>Does it work with every service?</summary><div class="hraness-marketing-question__answer"><p>No. Public capture and authenticated provider operations have different boundaries. <code>wrench capabilities</code> is the source of truth for operations available on the current machine.</p></div></details>
-            <details class="hraness-marketing-question"><summary>Does it bypass login, paywalls, access controls, or DRM?</summary><div class="hraness-marketing-question__answer"><p>No. Media acquisition is limited to one authorized, accessible, finite, non-DRM item. Wrench does not bypass payment, authentication, access controls, or DRM.</p></div></details>
-            <details class="hraness-marketing-question"><summary>What happens when a provider changes?</summary><div class="hraness-marketing-question__answer"><p>The affected operation becomes unavailable until its contract is updated, reviewed, and tested. Wrench does not switch to a browser fallback silently.</p></div></details>
-            <details class="hraness-marketing-question"><summary>Why does Wrench refuse to retry some writes?</summary><div class="hraness-marketing-question__answer"><p>If a request left the machine and its response was lost, the effect may already exist. Wrench retains that uncertainty and reconciles it from separately obtained evidence.</p></div></details>
+          <div class="hraness-marketing-question-list">
+            <details class="hraness-marketing-question"><summary>Does Wrench need an account?</summary><div class="hraness-marketing-question__answer"><p>No. Install the CLI and read a public page. You connect a service only when you want its actions, and each connection is stored on your machine. There is no Wrench account and no Wrench server in the loop.</p></div></details>
+            <details class="hraness-marketing-question"><summary>Does it use my credentials?</summary><div class="hraness-marketing-question__answer"><p>It uses a sign-in you already have for a service, on this machine, and keeps it out of your agent’s hands. The agent calls a named action and gets a typed result. It never receives cookies, tokens, a shell, or a browser it can steer.</p></div></details>
+            <details class="hraness-marketing-question"><summary>What does it cost?</summary><div class="hraness-marketing-question__answer"><p>Nothing. Wrench is free and MIT licensed, with no hosted tier and no paid plan. You pay your model provider and any service subscriptions you already have.</p></div></details>
+            <details class="hraness-marketing-question"><summary>Does it phone home?</summary><div class="hraness-marketing-question__answer"><p>No. The CLI and SDK send no analytics to wrench.rip; they make only the network requests the action you chose requires. This website counts page views with cookieless analytics and honors Do Not Track. The <a href="/privacy/">privacy page</a> explains both.</p></div></details>
+            <details class="hraness-marketing-question"><summary>Which platforms does it run on?</summary><div class="hraness-marketing-question__answer"><p>macOS and Linux with Bun 1.3.14. Actions that read iMessage or Apple Photos need macOS. Beeper actions need Beeper Desktop on the same machine, and WhatsApp reads need a linked device.</p></div></details>
+            <details class="hraness-marketing-question"><summary>Is Wrench an AI agent?</summary><div class="hraness-marketing-question__answer"><p>No. Wrench is a CLI and an SDK. Your agent owns the model, the plan, approvals, and the interface. Wrench gives it a set of actions it can call and a record of what happened.</p></div></details>
+            <details class="hraness-marketing-question"><summary>Does it bypass login, paywalls, access controls, or DRM?</summary><div class="hraness-marketing-question__answer"><p>No. Media archiving is limited to one item you are authorized to access that is finite and not protected by DRM. Wrench does not bypass payment, authentication, access controls, or DRM.</p></div></details>
+            <details class="hraness-marketing-question"><summary>What happens when a service changes?</summary><div class="hraness-marketing-question__answer"><p>The affected action becomes unavailable until its contract is updated, reviewed, and tested. Wrench does not switch to a browser fallback silently, so a changed page never turns into a guessed action.</p></div></details>
+            <details class="hraness-marketing-question"><summary>Why does Wrench refuse to retry some writes?</summary><div class="hraness-marketing-question__answer"><p>If a request left the machine and its response was lost, the effect may already exist. Wrench keeps that uncertainty visible and reconciles it from separately obtained evidence instead of sending the request again.</p></div></details>
+            <details class="hraness-marketing-question"><summary>What does release {{WRENCH_RELEASE}} include?</summary><div class="hraness-marketing-question__answer"><p>Page capture, media archives, encrypted reads, and {{PROVIDER_CAPABILITY_OBSERVED_COUNT}} supported actions across {{PROVIDER_SURFACE_COUNT}} services. <code>wrench capabilities</code> is the source of truth for what is installed and available on your machine, and the <a href="/provider-capabilities/">provider list</a> names every action in this release.</p></div></details>
+            <details class="hraness-marketing-question"><summary>Who made it?</summary><div class="hraness-marketing-question__answer"><p>Ben Guo, a musician and builder who was a founder and engineering leader at companies including Venmo and Stripe, and who now builds from Puerto Rico. Wrench is published in the open under the Hraness GitHub organization.</p></div></details>
           </div>
         </section>
 
-        <section aria-labelledby="final-title" class="section final-section hraness-marketing-cta" data-hraness-marketing="cta">
-          <p class="hraness-marketing-cta__eyebrow">Bring the intelligence</p>
-          <h2 class="hraness-marketing-cta__heading" id="final-title">Install Wrench for the agent you already use.</h2>
-          <p class="hraness-marketing-cta__summary">Open source, MIT licensed, and local by default. Start with one public URL before granting a provider boundary.</p>
-          <div class="action-row hraness-marketing-cta__actions">
-            <a class="button button-primary hraness-marketing-action" data-emphasis="primary" href="#start">Install Wrench</a>
-            <a
-              class="button button-secondary hraness-marketing-action"
-              data-emphasis="secondary"
-              data-analytics-event="project link opened"
-              data-analytics-id="final-source"
-              data-analytics-kind="repository"
-              href="https://github.com/hraness/wrench"
-            >Read the source <span aria-hidden="true">↗</span></a>
+        <section aria-labelledby="maker-title" class="hraness-marketing-maker" data-hraness-marketing="maker" id="maker">
+          <header class="hraness-marketing-maker__header">
+            <p class="hraness-marketing-maker__label">Built by</p>
+            <h2 class="hraness-marketing-maker__heading" id="maker-title">Ben Guo</h2>
+          </header>
+          <div class="hraness-marketing-maker__body">
+            <p>Wrench is built by Ben Guo, a musician and builder, formerly a founder and engineering leader at companies including Venmo and Stripe, now building from Puerto Rico. He publishes it in the open with the rest of his projects at hraness.com.</p>
+            <ul class="hraness-marketing-maker__links">
+              <li><a href="https://hraness.com">hraness.com</a></li>
+              <li><a href="https://x.com/hraness">@hraness</a></li>
+              <li><a
+                data-analytics-event="project link opened"
+                data-analytics-id="maker-source"
+                data-analytics-kind="repository"
+                href="https://github.com/hraness/wrench"
+              >GitHub <span aria-hidden="true">↗</span></a></li>
+            </ul>
           </div>
         </section>
 
-        <section aria-labelledby="arguments-title" class="section editorial-cluster">
-          <div class="section-heading section-heading-wide">
-            <p class="eyebrow">Where the boundary changes</p>
-            <h2 id="arguments-title">Arguments and comparisons</h2>
-            <p>These essays compare named, attested operations with browser control, account identity, virtual machines, device policy, rumour-driven agentic search, and desktop privilege grants.</p>
+        <section aria-labelledby="final-title" class="hraness-marketing-cta" data-hraness-marketing="cta" data-tone="paper" id="closing">
+          <h2 class="hraness-marketing-cta__heading" id="final-title">Precise web capabilities for the agent you already use.</h2>
+          <p class="hraness-marketing-cta__summary">Install the CLI, read one public page, and connect a service only when you need its actions.</p>
+          <div class="hraness-marketing-cta__actions">
+            <a class="hraness-marketing-action" data-emphasis="primary" href="#start">Install Wrench</a>
           </div>
-          <div class="card-grid editorial-card-grid">
-            {{EDITORIAL_CARDS}}
-            <article class="card"><h3><a href="/paypal-grapheneos-attestation/">Read about PayPal and GrapheneOS attestation</a></h3><p>PayPal crashed on GrapheneOS after a root-detection check. Device-policy attestation is not a named web operation.</p></article>
-            <article class="card"><h3><a href="/rumour-is-the-exploit/">Read about rumour and named operations</a></h3><p>A rumour of a bug can be enough for agentic search. A search direction is not a named web operation.</p></article>
-            <article class="card"><h3><a href="/omarchy-root-escalation/">Read about Omarchy and named operations</a></h3><p>Omarchy’s default desktop let any user process escalate to root. A host privilege grant is not a named web operation.</p></article>
-          </div>
+          <p class="hraness-marketing-cta__footnote">Free and MIT licensed. Runs on macOS and Linux with Bun 1.3.14. Release {{WRENCH_RELEASE}}.</p>
         </section>
 
-        <section aria-labelledby="guides-title" class="section guide-cluster">
-          <div class="section-heading section-heading-wide">
-            <p class="eyebrow">Documentation by task</p>
-            <h2 id="guides-title">Start with the outcome you need.</h2>
-            <p>These focused guides describe the current release, the commands to use, and the limits that stay in force.</p>
-          </div>
-          <div class="card-grid">
-            <article class="card"><h3><a href="/getting-started/">Install and verify Wrench</a></h3><p>Pin the current release, run the doctor, capture a first URL, and inspect local capabilities.</p></article>
-            <article class="card"><h3><a href="/capture-and-archives/">Capture URLs and archive media</a></h3><p>Choose between an inspection, durable Markdown capture, or one verified finite-item media archive.</p></article>
-            <article class="card"><h3><a href="/provider-capabilities/">Check provider support</a></h3><p>See every provider action available in the current release and the access method it uses.</p></article>
-            <article class="card"><h3><a href="/security/">Understand the security boundary</a></h3><p>Review local custody, account binding, encrypted state, risk levels, and fail-closed drift behavior.</p></article>
-            <article class="card"><h3><a href="/plugins/">Author a provider plugin</a></h3><p>Define one operation, prove its contract, then check, test, pack, trust, and install the exact code.</p></article>
-          </div>
-        </section>
+        <div class="home-reading">
+          <section aria-labelledby="arguments-title" class="section editorial-cluster">
+            <div class="section-heading section-heading-wide">
+              <p class="eyebrow">Where the boundary changes</p>
+              <h2 id="arguments-title">Arguments and comparisons</h2>
+              <p>These essays compare named, attested operations with browser control, account identity, virtual machines, device policy, rumour-driven agentic search, and desktop privilege grants.</p>
+            </div>
+            <div class="card-grid editorial-card-grid">
+              {{EDITORIAL_CARDS}}
+              <article class="card"><h3><a href="/paypal-grapheneos-attestation/">Read about PayPal and GrapheneOS attestation</a></h3><p>PayPal crashed on GrapheneOS after a root-detection check. Device-policy attestation is not a named web operation.</p></article>
+              <article class="card"><h3><a href="/rumour-is-the-exploit/">Read about rumour and named operations</a></h3><p>A rumour of a bug can be enough for agentic search. A search direction is not a named web operation.</p></article>
+              <article class="card"><h3><a href="/omarchy-root-escalation/">Read about Omarchy and named operations</a></h3><p>Omarchy’s default desktop let any user process escalate to root. A host privilege grant is not a named web operation.</p></article>
+            </div>
+          </section>
+
+          <section aria-labelledby="guides-title" class="section guide-cluster">
+            <div class="section-heading section-heading-wide">
+              <p class="eyebrow">Documentation by task</p>
+              <h2 id="guides-title">Start with the outcome you need.</h2>
+              <p>These guides describe the current release, the commands to use, and the limits that stay in force.</p>
+            </div>
+            <div class="card-grid">
+              <article class="card"><h3><a href="/getting-started/">Install and verify Wrench</a></h3><p>Pin the current release, run the doctor, capture a first URL, and inspect local capabilities.</p></article>
+              <article class="card"><h3><a href="/capture-and-archives/">Capture URLs and archive media</a></h3><p>Choose between an inspection, durable Markdown capture, or one verified finite-item media archive.</p></article>
+              <article class="card"><h3><a href="/provider-capabilities/">Check provider support</a></h3><p>See every provider action available in the current release and the access method it uses.</p></article>
+              <article class="card"><h3><a href="/security/">Understand the security boundary</a></h3><p>Review local custody, account binding, encrypted state, risk levels, and fail-closed drift behavior.</p></article>
+              <article class="card"><h3><a href="/plugins/">Author a provider plugin</a></h3><p>Define one operation, prove its contract, then check, test, pack, trust, and install the exact code.</p></article>
+            </div>
+          </section>
+        </div>
       </div>
     </main>
 

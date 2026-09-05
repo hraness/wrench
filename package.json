@@ -549,7 +549,7 @@
     "typescript": "6.0.3"
   },
   "devDependencies": {
-    "@hraness/design-kit": "github:hraness/design-kit#v0.3.0",
+    "@hraness/design-kit": "github:hraness/design-kit#v0.4.0",
     "@hraness/site-footer": "github:hraness/site-footer#v0.4.6",
     "@hraness/ui": "github:hraness/ui#v0.4.10",
     "@steipete/sweet-cookie": "https://codeload.github.com/hraness/sweet-cookie/tar.gz/refs/tags/v0.4.2",
