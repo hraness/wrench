@@ -137,7 +137,10 @@ describe("LinkedIn profile-activity cursors and requests", () => {
     expect(url.searchParams.get("includeWebMetadata")).toBe("true");
     expect(url.searchParams.get("queryId")).toBe(QUERY_ID);
     expect(url.searchParams.get("variables")).toBe(
-      `(count:10,profileUrn:${PROFILE_URN},start:20)`,
+      `(count:10,start:20,profileUrn:${PROFILE_URN})`,
+    );
+    expect(url.search).toBe(
+      `?includeWebMetadata=true&queryId=${encodeURIComponent(QUERY_ID)}&variables=(count:10,start:20,profileUrn:urn%3Ali%3Afsd_profile%3AACoAAExactTargetProfile)`,
     );
     expect(() => assertLinkedInProfileActivityRequest({ method: "GET", url }, {
       queryId: QUERY_ID,

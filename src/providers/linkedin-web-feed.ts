@@ -1,5 +1,6 @@
 import {
   LINKEDIN_GRAPHQL_PATH,
+  encodeRestliV2Value,
   linkedInPersonalProfilePublicIdentifier,
   normalizeLinkedInGraphqlEnvelope,
   resolveLinkedInRegisteredQueryId,
@@ -263,14 +264,10 @@ export function linkedInProfileActivityPageUrl(input: {
   if (start > LINKEDIN_PROFILE_ACTIVITY_MAX_START) {
     throw new Error("LinkedIn profile-activity start exceeded its reviewed bound");
   }
-  const url = new URL(LINKEDIN_GRAPHQL_PATH, LINKEDIN_ORIGIN);
-  url.searchParams.set("includeWebMetadata", "true");
-  url.searchParams.set("queryId", queryId);
-  url.searchParams.set(
-    "variables",
-    `(count:${count},profileUrn:${profileUrn},start:${start})`,
+  const variables = `(count:${count},start:${start},profileUrn:${encodeRestliV2Value(profileUrn)})`;
+  return new URL(
+    `${LINKEDIN_ORIGIN}${LINKEDIN_GRAPHQL_PATH}?includeWebMetadata=true&queryId=${encodeURIComponent(queryId)}&variables=${variables}`,
   );
-  return url;
 }
 
 export function assertLinkedInProfileActivityRequest(

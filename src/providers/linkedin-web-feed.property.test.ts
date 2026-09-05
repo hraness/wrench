@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { assertProperty, fc } from "../test-support";
 
+import { encodeRestliV2Value } from "./linkedin-web";
 import {
   LINKEDIN_PROFILE_ACTIVITY_QUERY_PREFIX,
   encodeLinkedInProfileActivityCursor,
@@ -46,7 +47,10 @@ test("LinkedIn profile-activity page URLs bind exactly one registered query and 
         `${LINKEDIN_PROFILE_ACTIVITY_QUERY_PREFIX}.${hash}`,
       );
       expect(url.searchParams.get("variables")).toBe(
-        `(count:${count},profileUrn:${urn},start:${offset})`,
+        `(count:${count},start:${offset},profileUrn:${urn})`,
+      );
+      expect(url.search).toBe(
+        `?includeWebMetadata=true&queryId=${encodeURIComponent(`${LINKEDIN_PROFILE_ACTIVITY_QUERY_PREFIX}.${hash}`)}&variables=(count:${count},start:${offset},profileUrn:${encodeRestliV2Value(urn)})`,
       );
     },
   ));
