@@ -52,8 +52,6 @@ export type LinkedInFeedBrowserTransport = {
   readonly currentIdentityResponse: () => Promise<unknown>;
   readonly resolveProfileActivityBinding: (vanity: string) => Promise<LinkedInProfileActivityBinding>;
   readonly readProfileActivityPage: (input: {
-    readonly queryId: string;
-    readonly profileUrn: string;
     readonly count: number;
     readonly start: number;
   }) => Promise<unknown>;
@@ -67,6 +65,7 @@ export type LinkedInFeedBrowserDependencies = {
 };
 
 type BrowserReadBinding = {
+  readonly documentUrl: string | null;
   readonly kind: "json";
   readonly maxBytes: number;
   readonly path: string;
@@ -74,6 +73,16 @@ type BrowserReadBinding = {
 };
 
 type BrowserReadState = "ready" | "identity" | "bound";
+
+type ObservedBrowserRequest = Readonly<Record<string, unknown>> & {
+  readonly requestId: string;
+};
+
+type BoundProfileActivityPage = {
+  readonly binding: LinkedInProfileActivityBinding;
+  readonly targetUrl: string;
+  readonly vanity: string;
+};
 
 const LINKEDIN_RESPONSE_MEDIA_TYPE =
   /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/u;
@@ -141,7 +150,7 @@ function exactKeys(
 
 function browserReadEvaluationSource(binding: BrowserReadBinding): string {
   const bound = JSON.stringify(binding);
-  return `(async()=>{const input=${bound};if(location.origin!=="${LINKEDIN_ORIGIN}")throw new Error("unexpected LinkedIn origin");if(input.kind!=="json"||!Number.isSafeInteger(input.maxBytes)||input.maxBytes<1||input.maxBytes>${MAX_FEED_PAGE_BYTES})throw new Error("invalid LinkedIn profile-activity browser request binding");const expected=new URL(input.path,"${LINKEDIN_ORIGIN}");if(expected.origin!=="${LINKEDIN_ORIGIN}"||expected.username!==""||expected.password!==""||expected.hash!==""||expected.href!=="${LINKEDIN_ORIGIN}"+input.path)throw new Error("invalid LinkedIn profile-activity browser path binding");if(expected.pathname!=="/voyager/api/me"&&expected.pathname!=="${LINKEDIN_GRAPHQL_PATH}")throw new Error("invalid LinkedIn profile-activity browser path binding");const headers={accept:"application/vnd.linkedin.normalized+json+2.1","x-li-lang":"en_US","x-requested-with":"XMLHttpRequest","x-restli-protocol-version":"2.0.0"};const raw=document.cookie.split("; ").find((part)=>part.startsWith("JSESSIONID="));if(typeof raw!=="string")throw new Error("missing LinkedIn browser CSRF cookie");const csrf=decodeURIComponent(raw.slice("JSESSIONID=".length)).replace(/^\"|\"$/g,"");if(!/^ajax:[A-Za-z0-9_-]{1,512}$/.test(csrf))throw new Error("invalid LinkedIn browser CSRF cookie");headers["csrf-token"]=csrf;const response=await fetch(input.path,{credentials:"include",headers,method:"GET",redirect:"error",referrer:input.referrer});const responseUrl=new URL(response.url);if(responseUrl.origin!=="${LINKEDIN_ORIGIN}"||responseUrl.username!==""||responseUrl.password!==""||responseUrl.hash!==""||responseUrl.href!==expected.href)throw new Error("LinkedIn profile-activity browser response escaped its exact route");const contentType=(response.headers.get("content-type")||"").split(";",1)[0].trim().toLowerCase();if(response.status!==200||(contentType!=="application/vnd.linkedin.normalized+json+2.1"&&contentType!=="application/json")){response.body?.cancel();return{authWall:false,bodyBase64:null,bodyBytes:0,bodySha256:null,contentType,status:response.status}}if(response.body===null)throw new Error("LinkedIn profile-activity browser response omitted its body");const reader=response.body.getReader();const chunks=[];let bytes=0;while(true){const part=await reader.read();if(part.done)break;bytes+=part.value.byteLength;if(bytes>input.maxBytes){await reader.cancel();throw new Error("LinkedIn profile-activity browser response exceeded its reviewed byte bound")}chunks.push(part.value)}const body=new Uint8Array(bytes);let cursor=0;for(const chunk of chunks){body.set(chunk,cursor);cursor+=chunk.byteLength}const digest=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",body)),(value)=>value.toString(16).padStart(2,"0")).join("");let binary="";for(let offset=0;offset<body.length;offset+=32768)binary+=String.fromCharCode(...body.subarray(offset,Math.min(offset+32768,body.length)));return{authWall:false,bodyBase64:btoa(binary),bodyBytes:body.byteLength,bodySha256:digest,contentType,status:response.status}})()`;
+  return `(async()=>{const input=${bound};if(location.origin!=="${LINKEDIN_ORIGIN}")throw new Error("unexpected LinkedIn origin");if(input.kind!=="json"||!Number.isSafeInteger(input.maxBytes)||input.maxBytes<1||input.maxBytes>${MAX_FEED_PAGE_BYTES}||(input.documentUrl!==null&&typeof input.documentUrl!=="string"))throw new Error("invalid LinkedIn profile-activity browser request binding");if(input.documentUrl!==null&&location.href!==input.documentUrl){if(location.origin==="${LINKEDIN_ORIGIN}"&&/^\/(?:authwall|checkpoint|login|uas\/login(?:-submit)?)(?:\/|$)/u.test(location.pathname))throw new Error("LinkedIn profile-activity browser reached its signed-out authwall");throw new Error("LinkedIn profile-activity browser left its bound document")}const expected=new URL(input.path,"${LINKEDIN_ORIGIN}");if(expected.origin!=="${LINKEDIN_ORIGIN}"||expected.username!==""||expected.password!==""||expected.hash!==""||expected.href!=="${LINKEDIN_ORIGIN}"+input.path)throw new Error("invalid LinkedIn profile-activity browser path binding");if(expected.pathname!=="/voyager/api/me"&&expected.pathname!=="${LINKEDIN_GRAPHQL_PATH}")throw new Error("invalid LinkedIn profile-activity browser path binding");const headers={accept:"application/vnd.linkedin.normalized+json+2.1","x-li-lang":"en_US","x-requested-with":"XMLHttpRequest","x-restli-protocol-version":"2.0.0"};const raw=document.cookie.split("; ").find((part)=>part.startsWith("JSESSIONID="));if(typeof raw!=="string")throw new Error("missing LinkedIn browser CSRF cookie");const csrf=decodeURIComponent(raw.slice("JSESSIONID=".length)).replace(/^\"|\"$/g,"");if(!/^ajax:[A-Za-z0-9_-]{1,512}$/.test(csrf))throw new Error("invalid LinkedIn browser CSRF cookie");headers["csrf-token"]=csrf;const response=await fetch(input.path,{credentials:"include",headers,method:"GET",redirect:"manual",referrer:input.referrer});if(response.type==="opaqueredirect"){response.body?.cancel();return{authWall:true,bodyBase64:null,bodyBytes:0,bodySha256:null,contentType:"",status:0}}const responseUrl=new URL(response.url);if(responseUrl.origin!=="${LINKEDIN_ORIGIN}"||responseUrl.username!==""||responseUrl.password!==""||responseUrl.hash!==""||responseUrl.href!==expected.href)throw new Error("LinkedIn profile-activity browser response escaped its exact route");if(response.status>=300&&response.status<=399){response.body?.cancel();return{authWall:true,bodyBase64:null,bodyBytes:0,bodySha256:null,contentType:"",status:response.status}}const contentType=(response.headers.get("content-type")||"").split(";",1)[0].trim().toLowerCase();if(response.status!==200||(contentType!=="application/vnd.linkedin.normalized+json+2.1"&&contentType!=="application/json")){response.body?.cancel();return{authWall:false,bodyBase64:null,bodyBytes:0,bodySha256:null,contentType,status:response.status}}if(response.body===null)throw new Error("LinkedIn profile-activity browser response omitted its body");const reader=response.body.getReader();const chunks=[];let bytes=0;while(true){const part=await reader.read();if(part.done)break;bytes+=part.value.byteLength;if(bytes>input.maxBytes){await reader.cancel();throw new Error("LinkedIn profile-activity browser response exceeded its reviewed byte bound")}chunks.push(part.value)}const body=new Uint8Array(bytes);let cursor=0;for(const chunk of chunks){body.set(chunk,cursor);cursor+=chunk.byteLength}const digest=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",body)),(value)=>value.toString(16).padStart(2,"0")).join("");let binary="";for(let offset=0;offset<body.length;offset+=32768)binary+=String.fromCharCode(...body.subarray(offset,Math.min(offset+32768,body.length)));return{authWall:false,bodyBase64:btoa(binary),bodyBytes:body.byteLength,bodySha256:digest,contentType,status:response.status}})()`;
 }
 
 function encodedBodyBound(bytes: number): number {
@@ -262,6 +271,18 @@ function classifiedBrowserCommandFailure(error: unknown): LinkedInFeedBrowserFai
       "LinkedIn profile-activity browser response escaped its exact route",
     );
   }
+  if (message.endsWith("LinkedIn profile-activity browser left its bound document")) {
+    return new LinkedInFeedBrowserFailure(
+      "response-envelope",
+      "LinkedIn profile-activity browser left its exact target page",
+    );
+  }
+  if (message.endsWith("LinkedIn profile-activity browser reached its signed-out authwall")) {
+    return new LinkedInFeedBrowserFailure(
+      "authwall",
+      "LinkedIn profile-activity browser reached the signed-out authwall",
+    );
+  }
   if (
     message.includes("process output exceeded")
     || message.includes("response exceeded its reviewed byte bound")
@@ -369,24 +390,90 @@ async function finalizeBrowserSession(session: BrowserSession): Promise<void> {
   );
 }
 
-function observedRequests(value: unknown): readonly Readonly<Record<string, unknown>>[] {
+function observedRequests(value: unknown): readonly ObservedBrowserRequest[] {
   if (!isRecord(value) || !Array.isArray(value.requests) || value.requests.length > MAX_NETWORK_REQUESTS) {
     throw new LinkedInFeedBrowserFailure(
       "browser-envelope",
       "LinkedIn profile-activity network observation returned a malformed bounded request list",
     );
   }
-  const requests: Readonly<Record<string, unknown>>[] = [];
+  const requests: ObservedBrowserRequest[] = [];
   for (const item of value.requests) {
-    if (!isRecord(item)) {
+    if (
+      !isRecord(item)
+      || typeof item.requestId !== "string"
+      || item.requestId.length < 1
+      || item.requestId.length > 512
+      || /[\0\r\n]/u.test(item.requestId)
+    ) {
       throw new LinkedInFeedBrowserFailure(
         "browser-envelope",
         "LinkedIn profile-activity network observation returned a malformed request",
       );
     }
-    requests.push(item);
+    requests.push(Object.freeze({
+      requestId: item.requestId,
+      method: item.method,
+      status: item.status,
+      url: item.url,
+    }));
   }
   return requests;
+}
+
+function observedRequestIds(
+  requests: readonly ObservedBrowserRequest[],
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const request of requests) {
+    if (ids.has(request.requestId)) {
+      throw new LinkedInFeedBrowserFailure(
+        "browser-envelope",
+        "LinkedIn profile-activity network observation returned duplicate request identities",
+      );
+    }
+    ids.add(request.requestId);
+  }
+  return ids;
+}
+
+function currentProfileActivityUrl(
+  value: unknown,
+  expected: string,
+): void {
+  if (!isRecord(value) || typeof value.url !== "string" || value.url.length > 2_048) {
+    throw new LinkedInFeedBrowserFailure(
+      "browser-envelope",
+      "LinkedIn profile-activity browser omitted its current URL",
+    );
+  }
+  let current: URL;
+  try {
+    current = new URL(value.url);
+  } catch {
+    throw new LinkedInFeedBrowserFailure(
+      "browser-envelope",
+      "LinkedIn profile-activity browser returned a malformed current URL",
+    );
+  }
+  if (
+    current.origin === LINKEDIN_ORIGIN
+    && /^\/(?:authwall|checkpoint|login|uas\/login(?:-submit)?)(?:\/|$)/u.test(current.pathname)
+  ) {
+    throw new LinkedInFeedBrowserFailure(
+      "authwall",
+      "LinkedIn profile-activity browser reached the signed-out authwall",
+    );
+  }
+  if (
+    current.username !== ""
+    || current.password !== ""
+    || current.hash !== ""
+    || current.href !== expected
+  ) throw new LinkedInFeedBrowserFailure(
+    "response-envelope",
+    "LinkedIn profile-activity browser left its exact target page",
+  );
 }
 
 export async function createLinkedInFeedBrowserTransport(
@@ -443,9 +530,26 @@ export async function createLinkedInFeedBrowserTransport(
   }
   let closed = false;
   let state: BrowserReadState = "ready";
+  let boundPage: BoundProfileActivityPage | null = null;
 
   const remainingTimeMs = (): number =>
     options.operationDeadline?.remainingTimeMs() ?? options.timeoutMs;
+
+  const observeProfileActivityRequests = async (): Promise<readonly ObservedBrowserRequest[]> => {
+    const entries = await session.runBatch(
+      [["network", "requests", "--filter", LINKEDIN_PROFILE_ACTIVITY_QUERY_PREFIX]],
+      Math.min(remainingTimeMs(), 30_000),
+      8 * 1024 * 1024,
+    );
+    const first = entries[0];
+    if (first === undefined) {
+      throw new LinkedInFeedBrowserFailure(
+        "browser-envelope",
+        "LinkedIn profile-activity browser omitted its network observation",
+      );
+    }
+    return observedRequests(browserResultData(first));
+  };
 
   const run = async (
     binding: BrowserReadBinding,
@@ -510,10 +614,9 @@ export async function createLinkedInFeedBrowserTransport(
       );
     }
     if (
-      typeof result.status !== "number"
+      typeof result.authWall !== "boolean"
+      || typeof result.status !== "number"
       || !Number.isSafeInteger(result.status)
-      || result.status < 100
-      || result.status > 599
       || typeof result.contentType !== "string"
       || result.contentType.length > 128
       || (result.contentType !== "" && !LINKEDIN_RESPONSE_MEDIA_TYPE.test(result.contentType))
@@ -521,17 +624,38 @@ export async function createLinkedInFeedBrowserTransport(
       "response-envelope",
       "LinkedIn profile-activity browser returned a malformed response category",
     );
-    if (result.authWall !== false) {
-      throw new LinkedInFeedBrowserFailure(
+    if (result.authWall) {
+      if (
+        !(
+          result.status === 0
+          || (result.status >= 300 && result.status <= 399)
+        )
+        || result.contentType !== ""
+        || result.bodyBase64 !== null
+        || result.bodyBytes !== 0
+        || result.bodySha256 !== null
+      ) throw new LinkedInFeedBrowserFailure(
         "response-envelope",
         "LinkedIn profile-activity browser returned a malformed authwall envelope",
       );
+      throw new LinkedInFeedBrowserFailure(
+        "authwall",
+        "LinkedIn profile-activity browser reached the signed-out authwall",
+      );
     }
-    if (
-      result.status === 302
-      || result.status === 401
-      || result.status === 403
-    ) {
+    if (result.status < 100 || result.status > 599) {
+      throw new LinkedInFeedBrowserFailure(
+        "response-envelope",
+        "LinkedIn profile-activity browser returned a malformed response category",
+      );
+    }
+    if (result.status >= 300 && result.status <= 399) {
+      throw new LinkedInFeedBrowserFailure(
+        "response-envelope",
+        "LinkedIn profile-activity browser returned a malformed redirect envelope",
+      );
+    }
+    if (result.status === 401 || result.status === 403) {
       if (
         result.bodyBase64 !== null
         || result.bodyBytes !== 0
@@ -590,6 +714,7 @@ export async function createLinkedInFeedBrowserTransport(
         throw new Error("LinkedIn profile-activity browser identity read is out of order");
       }
       const result = await run({
+        documentUrl: null,
         kind: "json",
         maxBytes: Math.min(MAX_IDENTITY_BYTES, options.maxOutputBytes),
         path: "/voyager/api/me",
@@ -608,6 +733,9 @@ export async function createLinkedInFeedBrowserTransport(
       }
       const target = linkedInProfileActivityTargetFromVanity(vanity);
       try {
+        const baselineRequestIds = observedRequestIds(
+          await observeProfileActivityRequests(),
+        );
         await session.runBatch(
           [["open", target.activityUrl]],
           remainingTimeMs(),
@@ -618,20 +746,23 @@ export async function createLinkedInFeedBrowserTransport(
           Math.min(remainingTimeMs(), 20_000),
           1024 * 1024,
         );
-        const entries = await session.runBatch(
-          [["network", "requests", "--filter", LINKEDIN_PROFILE_ACTIVITY_QUERY_PREFIX]],
-          Math.min(remainingTimeMs(), 30_000),
-          8 * 1024 * 1024,
+        const requests = await observeProfileActivityRequests();
+        observedRequestIds(requests);
+        const currentUrlEntries = await session.runBatch(
+          [["get", "url"]],
+          Math.min(remainingTimeMs(), 10_000),
+          1024 * 1024,
         );
-        const first = entries[0];
-        if (first === undefined) {
+        const currentUrl = currentUrlEntries[0];
+        if (currentUrl === undefined) {
           throw new LinkedInFeedBrowserFailure(
             "browser-envelope",
-            "LinkedIn profile-activity browser omitted its network observation",
+            "LinkedIn profile-activity browser omitted its current URL",
           );
         }
-        const requests = observedRequests(browserResultData(first));
+        currentProfileActivityUrl(browserResultData(currentUrl), target.activityUrl);
         const bounded = requests.flatMap((request) => {
+          if (baselineRequestIds.has(request.requestId)) return [];
           if (typeof request.url !== "string" || request.url.length > MAX_REQUEST_URL_CHARACTERS) {
             return [];
           }
@@ -642,6 +773,11 @@ export async function createLinkedInFeedBrowserTransport(
           }];
         });
         const binding = resolveLinkedInProfileActivityBinding(bounded);
+        boundPage = Object.freeze({
+          binding,
+          targetUrl: target.activityUrl,
+          vanity: target.slug,
+        });
         state = "bound";
         return binding;
       } catch (error) {
@@ -657,22 +793,27 @@ export async function createLinkedInFeedBrowserTransport(
       }
     },
     readProfileActivityPage: async (input: {
-      readonly queryId: string;
-      readonly profileUrn: string;
       readonly count: number;
       readonly start: number;
     }) => {
-      if (state !== "bound" && state !== "identity") {
+      if (state !== "bound" || boundPage === null) {
         throw new Error("LinkedIn profile-activity browser page read is out of order");
       }
-      const url = linkedInProfileActivityPageUrl(input);
-      assertLinkedInProfileActivityRequest({ method: "GET", url }, input);
+      const request = {
+        queryId: boundPage.binding.queryId,
+        profileUrn: boundPage.binding.profileUrn,
+        count: input.count,
+        start: input.start,
+      } as const;
+      const url = linkedInProfileActivityPageUrl(request);
+      assertLinkedInProfileActivityRequest({ method: "GET", url }, request);
       const path = `${url.pathname}${url.search}`;
       const result = await run({
+        documentUrl: boundPage.targetUrl,
         kind: "json",
         maxBytes: options.maxOutputBytes,
         path,
-        referrer: LINKEDIN_FEED_URL,
+        referrer: boundPage.targetUrl,
       });
       state = "bound";
       return parseJsonBody(

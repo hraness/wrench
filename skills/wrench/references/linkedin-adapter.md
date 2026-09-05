@@ -171,9 +171,11 @@ URN. Zero or several hashes fail closed. Each item projects the activity URN,
 canonical feed URL, author vanity or URN when present, full commentary text,
 created or relative time when present, reaction/comment/repost counts when
 LinkedIn supplies them, media presence, and original-versus-reshare kind.
-Missing counts stay `null`; the runtime never invents zero. If LinkedIn omits
-paging or the page is full, `complete` stays false and `nextCursor` continues.
-A provider page larger than `limit` fails closed.
+Missing counts stay `null`; the runtime never invents zero. A next cursor is
+returned only from paging metadata bound to the exact requested collection and
+a strictly advancing next link. When LinkedIn omits paging, `complete` stays
+false and `nextCursor` is `null` rather than guessing an offset. Contradictory
+paging or a provider page larger than `limit` fails closed.
 
 ```sh
 printf '%s' '{"feed":"profile-activity","profile_url":"https://www.linkedin.com/in/j-hawkins/","limit":20}' \

@@ -3046,8 +3046,6 @@ describe("LinkedIn authenticated internal-API runtime", () => {
       readProfileActivityPage: (input) => {
         browserCalls.push(`page:${input.count}:${input.start}`);
         expect(input).toEqual({
-          queryId,
-          profileUrn,
           count: 10,
           start: 0,
         });
@@ -3057,7 +3055,7 @@ describe("LinkedIn authenticated internal-API runtime", () => {
               feedDashProfileUpdatesByMemberFeed: {
                 $type: "com.linkedin.restli.common.CollectionResponse",
                 "*elements": [updateUrn],
-                paging: { count: 1, start: 0, links: [] },
+                paging: { count: 10, start: 0, links: [] },
               },
             },
           },
