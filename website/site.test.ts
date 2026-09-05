@@ -440,6 +440,9 @@ describe("wrench.rip static site", () => {
     expect(favicon).toContain('viewBox="0 0 64 64"');
     expect(sourceCss).toContain("@media (prefers-reduced-motion: reduce)");
     expect(sourceCss).toContain("@media (forced-colors: active)");
+    expect(sourceCss).toContain(
+      "code:not(pre code):not(.hraness-marketing-flow__code)",
+    );
     expect(sourceCss).not.toContain(".footer {");
     expect(builtCss).toContain(".hraness-site-footer {");
     expect(builtCss).toContain(".hraness-marketing-hero {");
@@ -471,7 +474,7 @@ describe("wrench.rip static site", () => {
       expect(footer).toContain('name="audience" type="hidden" value="wrench"');
       expect(footer).toContain(`src="${HRANESS_TURNSTILE_SCRIPT_URL}"`);
       expect(footer?.match(/data-slot="hraness-mark"/gu)).toHaveLength(1);
-      expect(footer?.match(/data-slot="social-icon"/gu)).toHaveLength(10);
+      expect(footer?.match(/data-slot="social-icon"/gu)).toHaveLength(11);
       expect(
         [...(footer?.matchAll(/<a\b[^>]*\shref="([^"]+)"/gu) ?? [])]
           .map((match) => match[1]),
