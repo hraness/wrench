@@ -421,6 +421,7 @@ export function parseBrowserRecoveryHandle(
 
 const browserIdentityDecimalPattern = /^(?:0|[1-9][0-9]{0,39})$/u;
 const processIdentityDigestPattern = /^[a-f0-9]{64}$/u;
+const agentBrowserBoundaryNoncePattern = /^[a-f0-9]{32}$/u;
 const agentBrowserLaunchHashPattern = /^(?:0|[1-9][0-9]{0,19})$/u;
 const maximumAgentBrowserControlLaunchHash = (1n << 64n) - 1n;
 
@@ -462,6 +463,39 @@ function browserIdentityExactKeys(
     actual.length !== wanted.length
     || actual.some((key, index) => key !== wanted[index])
   ) throw new Error(`${label} is malformed`);
+}
+
+function unwrapAgentBrowserIdentityResult(
+  value: unknown,
+  label: string,
+): {
+  readonly data: unknown;
+  readonly success: unknown;
+} {
+  const root = browserIdentityRecord(value, label);
+  const keys = Object.keys(root).sort();
+  if (keys.length === 2 && keys[0] === "data" && keys[1] === "success") {
+    return Object.freeze({
+      data: root.data,
+      success: root.success,
+    });
+  }
+  browserIdentityExactKeys(
+    root,
+    ["_boundary", "data", "error", "success"],
+    label,
+  );
+  const boundary = browserIdentityRecord(root._boundary, `${label} boundary`);
+  browserIdentityExactKeys(boundary, ["nonce", "origin"], `${label} boundary`);
+  if (
+    typeof boundary.nonce !== "string"
+    || !agentBrowserBoundaryNoncePattern.test(boundary.nonce)
+    || boundary.origin !== "unknown"
+  ) throw new Error(`${label} is malformed`);
+  return Object.freeze({
+    data: root.data,
+    success: root.success,
+  });
 }
 
 function browserIdentityDecimal(value: unknown, label: string): string {
@@ -906,10 +940,11 @@ const inheritedProxyKeys = new Set([
   "no_proxy",
 ]);
 
-/** Exact policy vocabulary required by the pinned agent-browser release. */
+/** Exact policy vocabulary required by pinned agent-browser 0.32.3. */
 export const runtimeBrowserPolicyActions = [
   "launch", "navigate", "snapshot", "click", "fill", "scroll", "wait", "read", "get", "interact", "state",
   "type", "hover", "focus", "press", "url", "inputvalue", "waitfortext", "waitforurl", "cookies_set", "close",
+  "session_info", "cdp_url",
   "upload", "select", "check", "uncheck", "ischecked",
   "getbyrole", "getbytext", "getbylabel", "getbyplaceholder", "getbyalttext", "getbytitle", "getbytestid",
 ] as const;
@@ -1707,7 +1742,6 @@ function parseAgentBrowserLifecycle(
         lifecycle.launched !== false
         || lifecycle.relaunchedBrowser !== false
         || lifecycle.restartedBackground !== false
-        || lifecycle.reused !== true
         || lifecycle.restoreStatus !== "not_configured"
         || lifecycle.saveStatus !== "not_attempted"
       )
@@ -1723,8 +1757,10 @@ function parseAgentBrowserSessionState(
   value: unknown,
   resource: BrowserCleanupResourceIdentity,
 ): AgentBrowserSessionState {
-  const root = browserIdentityRecord(value, "agent-browser session result");
-  browserIdentityExactKeys(root, ["data", "success"], "agent-browser session result");
+  const root = unwrapAgentBrowserIdentityResult(
+    value,
+    "agent-browser session result",
+  );
   const data = browserIdentityRecord(root.data, "agent-browser session data");
   browserIdentityExactKeys(data, [
     "active",
@@ -1852,8 +1888,10 @@ function parseAgentBrowserCdpControl(
   readonly engine: "chrome";
   readonly launchHash: string;
 } {
-  const root = browserIdentityRecord(value, "agent-browser CDP result");
-  browserIdentityExactKeys(root, ["data", "success"], "agent-browser CDP result");
+  const root = unwrapAgentBrowserIdentityResult(
+    value,
+    "agent-browser CDP result",
+  );
   const data = browserIdentityRecord(root.data, "agent-browser CDP data");
   browserIdentityExactKeys(data, ["cdpUrl", "lifecycle"], "agent-browser CDP data");
   if (root.success !== true || typeof data.cdpUrl !== "string") {
