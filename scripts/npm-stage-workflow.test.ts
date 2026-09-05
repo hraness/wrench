@@ -1155,8 +1155,7 @@ describe("npm publication contract", () => {
     expect(smoke).toContain('from "./package-budget.js"');
     expect(budget).toContain("two npm 10.9.7 packs");
     expect(budget).toContain("2,214,175 packed bytes");
-    expect(budget).toContain("12,232,594 unpacked bytes, and 466");
-    expect(budget).toContain("466 files");
+    expect(budget).toContain("12,232,594 unpacked bytes, and 466 files");
     expect(budget).toContain(
       "e49aa949b885960aa42a0ee5f99a70cfd1bc115934bdc8131a2823fe62f5ff03",
     );
