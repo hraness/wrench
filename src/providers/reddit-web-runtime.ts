@@ -19,6 +19,11 @@ import type {
   WebSessionOperationDeadline,
   WebSessionProviderAcceptedMutationTargetEvent,
 } from "../web-session-execution";
+import {
+  isRedditFlairOperation,
+  parseRedditFlairChoicesResponse,
+  parseRedditFlairInput,
+} from "../plugins/reddit-web/flair";
 import { failedProviderRead, type ProviderReadFailureStage } from "./read-failure";
 import {
   REDDIT_WEB_OPERATION_NAMES,
@@ -335,6 +340,23 @@ function exactLeaseHeaders(
   });
 }
 
+function exactFlairHeaders(
+  community: string,
+  kind: "user" | "post",
+): Readonly<Record<string, string>> {
+  const subreddit = redditCommunity(community);
+  return Object.freeze({
+    accept: "text/html",
+    "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+    origin: REDDIT_LEASE_ORIGIN,
+    referer: kind === "post"
+      ? `${REDDIT_LEASE_ORIGIN}/r/${subreddit}/submit`
+      : `${REDDIT_LEASE_ORIGIN}/r/${subreddit}/`,
+    "user-agent": REDDIT_USER_AGENT,
+    "x-requested-with": "XMLHttpRequest",
+  });
+}
+
 function redditMultipartUpload(
   lease: RedditMediaLease,
   bytes: Uint8Array,
@@ -500,6 +522,73 @@ async function requireBoundViewer(
   const viewer = await currentViewer(client);
   assertBoundViewer(auth, viewer);
   return viewer;
+}
+
+async function executeFlairChoices(
+  client: WebSessionClient,
+  recipe: WebSessionRecipe,
+  input: OperationInput,
+  auth: WrenchAuth,
+  options: {
+    readonly signal?: AbortSignal;
+    readonly operationDeadline?: WebSessionOperationDeadline;
+    readonly dependencies?: RedditWebRuntimeDependencies;
+  },
+): Promise<WebSessionExecution> {
+  if (!isRedditFlairOperation(recipe.action)) {
+    throw new Error("Reddit flair operation is not installed");
+  }
+  const parsed = parseRedditFlairInput(recipe.action, input);
+  if (parsed.action !== "choices") {
+    throw new Error("Reddit flair selection is capture-required");
+  }
+  const viewer = await requireBoundViewer(client, auth);
+  const flairClient = await createWebSessionClient(REDDIT_LEASE_ORIGIN, auth, {
+    timeoutMs: recipe.timeoutMs,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.operationDeadline === undefined
+      ? {}
+      : { operationDeadline: options.operationDeadline }),
+    ...(options.dependencies === undefined ? {} : { dependencies: options.dependencies }),
+  });
+  const url = new URL("/api/flairselector", REDDIT_LEASE_ORIGIN);
+  const form = new URLSearchParams();
+  if (parsed.target.kind === "user") {
+    form.set("name", viewer.username);
+  } else {
+    form.set("is_newlink", "true");
+  }
+  form.set("r", parsed.target.community);
+  form.set("uh", viewer.modhash);
+  const body = form.toString();
+  const operation = parsed.target.kind === "user"
+    ? "flair.user.choices"
+    : "flair.post.choices";
+  authorizeRedditWebRequest({
+    operation,
+    url,
+    method: "POST",
+    body,
+    community: parsed.target.community,
+    ...(parsed.target.kind === "user" ? { username: viewer.username } : {}),
+  });
+  const response = await flairClient.requestText({
+    url,
+    method: "POST",
+    headers: exactFlairHeaders(parsed.target.community, parsed.target.kind),
+    body,
+    expectedContentTypes: ["text/html"],
+    maxBytes: Math.min(recipe.maxOutputBytes, MAX_VIEWER_BYTES),
+  });
+  return {
+    status: "succeeded",
+    output: parseRedditFlairChoicesResponse(response, parsed.target),
+    finalUrl: parsed.target.kind === "post"
+      ? `${REDDIT_LEASE_ORIGIN}/r/${parsed.target.community}/submit`
+      : `${REDDIT_LEASE_ORIGIN}/r/${parsed.target.community}/`,
+    dispatchStarted: false,
+    dispatch: { planned: 0, started: 0, verified: 0 },
+  };
 }
 
 export async function probeRedditWebSubject(
@@ -1690,6 +1779,12 @@ export async function executeRedditWebOperation(
   }
   if (recipe.action === "reactions.set" || recipe.action === "content.save") {
     return executeDesiredState(client, recipe, input, auth, options);
+  }
+  if (recipe.action === "flair.user.choices" || recipe.action === "flair.post.choices") {
+    void options.beforeDispatch;
+    void options.afterProviderAcceptedMutationTarget;
+    void options.afterDispatchVerified;
+    return executeFlairChoices(client, recipe, input, auth, options);
   }
 
   if (recipe.action === "profiles.read") {

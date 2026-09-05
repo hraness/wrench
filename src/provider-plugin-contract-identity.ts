@@ -63,6 +63,17 @@ const BEEPER_2_2_DIRECT_BINDING_ROUTE_COORDINATES = Object.freeze(
   BEEPER_2_2_DIRECT_ROUTE_COORDINATES.map((route) => `local-cli:beeper/${route}`),
 );
 
+const REDDIT_1_3_BINDING_ROUTE_COORDINATES = Object.freeze([
+  "comments.create@1", "comments.read@1", "communities.membership.set@1",
+  "content.delete@1", "content.edit@1", "content.save@1", "feeds.read@1",
+  "media.publish@1", "media.publish@2", "media.publish@3", "media.publish@4",
+  "media.publish@5", "media.publish@6", "media.publish@7", "media.publish@8",
+  "media.publish@9", "media.read@1", "media.read@2", "messaging.list@1",
+  "messaging.read@1", "messaging.send@1", "posts.publish@1", "posts.read@1",
+  "posts.repost@1", "profiles.read@1", "reactions.set@1",
+  "relationships.follow.set@1", "replies.create@1",
+].map((route) => `web-session-api:reddit/${route}`));
+
 const identities = Object.freeze({
   "beeper-linked-device": {
     schemaVersion: 1,
@@ -337,23 +348,23 @@ const identities = Object.freeze({
   },
   "reddit-web": {
     schemaVersion: 1,
-    pluginVersion: "1.3.0",
-    implementationSha256: "646a29b320373f50ccdf9ae8b8b60d5147428f0f899a226480c2c5b009294d8a",
-    legacyCurrentReadImplementationSha256: [
+    pluginVersion: "1.4.0",
+    implementationSha256: "468b6032e209bcf128279c891f40d2232d6147c3fc5e14abd39c65f919fd337e",
+    legacyCurrentReadImplementationSha256: [],
+    legacyDistributionReadImplementationSha256: [
+      "64a4c1e78ce8565a50613f63ff605f0f57f488617ef31386b5ddce5e3db885c9",
+      "058987e5eac61505ca53f80d8494fb5505e697e0313e6e197a198649be7c3a3c",
+      "05173089ec6d555845fa5fb7b08a70bd0bf810a18882c9ecdd784a437db791c5",
+      "dea85e9a5bc2a134ce48769655c2e4df89d68a876012b4af3e08f40526d02512",
       "16e4e48609c12d5ffdaf47e622764e06cc9b3381c6b8ceb2c9f773fa9d99bdd9",
       "91cc3364ab1ccba66bd2e099f64fcccc187fde94145a8bf1eaa14f0f5533f6d7",
-    ],
-    legacyReadImplementationSha256: {
-      test: "64a4c1e78ce8565a50613f63ff605f0f57f488617ef31386b5ddce5e3db885c9",
-      production: "058987e5eac61505ca53f80d8494fb5505e697e0313e6e197a198649be7c3a3c",
-      development: "05173089ec6d555845fa5fb7b08a70bd0bf810a18882c9ecdd784a437db791c5",
-    },
-    legacyE71ReadImplementationSha256: {
-      default: "dea85e9a5bc2a134ce48769655c2e4df89d68a876012b4af3e08f40526d02512",
-      test: "64a4c1e78ce8565a50613f63ff605f0f57f488617ef31386b5ddce5e3db885c9",
-      production: "058987e5eac61505ca53f80d8494fb5505e697e0313e6e197a198649be7c3a3c",
-      development: "05173089ec6d555845fa5fb7b08a70bd0bf810a18882c9ecdd784a437db791c5",
-    },
+      "646a29b320373f50ccdf9ae8b8b60d5147428f0f899a226480c2c5b009294d8a",
+    ].map((implementationSha256) => ({
+      implementationSha256,
+      routes: REDDIT_1_3_BINDING_ROUTE_COORDINATES,
+    })),
+    legacyReadImplementationSha256: null,
+    legacyE71ReadImplementationSha256: null,
   },
   "substack-web": {
     schemaVersion: 1,

@@ -25,6 +25,7 @@ import {
 } from "./model";
 import type { SemanticOperationName } from "./platform-catalog";
 import type { ProviderPluginOperationName } from "./provider-plugin-identifiers";
+import { redditFlairContracts } from "./plugins/reddit-web/flair";
 
 export type WebSessionContractState = "observed" | "capture-required";
 
@@ -664,6 +665,7 @@ const x = {
 } as const satisfies Readonly<Partial<Record<SemanticOperationName, WebSessionContract>>>;
 
 const reddit = {
+  ...Object.fromEntries(redditFlairContracts.map((definition) => [definition.operation, definition])),
   "comments.create": contract("reddit", "comments.create", REDDIT_WEB_OPERATIONS["comments.create"].risk, REDDIT_WEB_OPERATIONS["comments.create"].state, REDDIT_WEB_OPERATIONS["comments.create"].reason),
   "comments.read": contract("reddit", "comments.read", REDDIT_WEB_OPERATIONS["comments.read"].risk, REDDIT_WEB_OPERATIONS["comments.read"].state, REDDIT_WEB_OPERATIONS["comments.read"].reason),
   "communities.membership.set": contract("reddit", "communities.membership.set", REDDIT_WEB_OPERATIONS["communities.membership.set"].risk, REDDIT_WEB_OPERATIONS["communities.membership.set"].state, REDDIT_WEB_OPERATIONS["communities.membership.set"].reason),

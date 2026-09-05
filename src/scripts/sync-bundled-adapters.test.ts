@@ -206,6 +206,7 @@ describe("single-process bundled adapter generation sync", () => {
       "reddit-web@1.1.0",
       "reddit-web@1.10.0",
       "reddit-web@1.11.0",
+      "reddit-web@1.12.0",
       "reddit-web@1.2.0",
       "reddit-web@1.3.0",
       "reddit-web@1.4.0",
@@ -654,5 +655,71 @@ describe("single-process bundled adapter generation sync", () => {
     expect(selectedX?.state).toBe("present");
     if (selectedX?.state !== "present") throw new Error("x selection missing");
     expect(selectedX.manifest.version).toBe("9.9.9");
+  });
+
+  test("repairs a diagnostically valid installed adapter that this runtime cannot execute", async () => {
+    const state = temporaryState();
+    const captured = outputCapture();
+    const discovered = discoverBundledAdapters();
+    const reddit = discovered.find((adapter) => adapter.id === "reddit-web")!;
+    const futureManifest = structuredClone(reddit.current.manifest) as unknown as {
+      version: string;
+      operations: Record<string, {
+        webSession?: { contractVersion: number };
+      }>;
+    };
+    futureManifest.version = "99.0.0";
+    const futureMediaRead = futureManifest.operations["media.read"]!;
+    if (futureMediaRead.webSession === undefined) {
+      throw new Error("Reddit media.read fixture omitted its web-session recipe");
+    }
+    futureMediaRead.webSession.contractVersion = 999;
+    mkdirSync(state.environment.WRENCH_STATE_HOME!, {
+      recursive: true,
+      mode: 0o700,
+    });
+    const legacyPath = adapterManifestPath("reddit-web", state.environment);
+    mkdirSync(dirname(legacyPath), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      legacyPath,
+      `${JSON.stringify(futureManifest)}\n`,
+      { mode: 0o600 },
+    );
+    let selections: readonly BundledAdapterGenerationSelection[] = [];
+
+    const result = await syncBundledAdapters({
+      environment: state.environment,
+      output: captured.output,
+      wrenchMain: (arguments_, _environment, output) => {
+        writeSuccessfulValidation(arguments_, output);
+        return Promise.resolve(0);
+      },
+      installGeneration: (value) => {
+        selections = value;
+        return {
+          commitId: "00000000-0000-4000-8000-000000000004",
+          installed: value.length,
+          preservedLegacy: 0,
+        };
+      },
+    });
+
+    expect(result.preserved).toBe(0);
+    expect(captured.stderr()).toContain(
+      "repaired the incompatible installed reddit-web adapter",
+    );
+    expect(captured.stderr()).toContain(
+      "reinstall a newer Wrench release to restore newer contracts",
+    );
+    const selectedReddit = selections.find((selection) =>
+      selection.id === "reddit-web"
+    );
+    expect(selectedReddit?.state).toBe("present");
+    if (selectedReddit?.state !== "present") {
+      throw new Error("Reddit selection missing");
+    }
+    expect(selectedReddit.manifest.version).toBe(
+      reddit.current.manifest.version,
+    );
   });
 });
