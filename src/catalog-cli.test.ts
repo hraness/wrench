@@ -70,7 +70,7 @@ test("catalogs the installed local CLI capability with its exact contract and to
     for (const [operationId, contractVersion] of [
       ["accounts.list", 2],
       ["bridges.list", 2],
-      ["contacts.list", 2],
+      ["contacts.list", 3],
       ["messaging.search", 2],
       ["conversations.read", 2],
       ["messaging.content.search", 2],
