@@ -123,6 +123,21 @@ async function rejectionValue(operation: Promise<unknown>): Promise<unknown> {
   throw new Error("expected operation to reject");
 }
 
+function agentBrowserBoundaryEnvelope(value: {
+  readonly success: boolean;
+  readonly data: unknown;
+}): unknown {
+  return {
+    _boundary: {
+      nonce: "a".repeat(32),
+      origin: "unknown",
+    },
+    data: value.data,
+    error: null,
+    success: value.success,
+  };
+}
+
 function decodeBrowserRecoveryHandle(handle: string): Readonly<Record<
   "session" | "config" | "socket" | "artifacts",
   string
@@ -438,6 +453,7 @@ describe("browser process isolation helpers", () => {
       "getbyrole", "getbytext", "getbylabel", "getbyplaceholder", "getbyalttext", "getbytitle", "getbytestid",
       "fill", "type", "hover", "focus", "click", "press", "upload", "select", "check", "uncheck", "ischecked",
       "waitfortext", "waitforurl", "url", "inputvalue", "close",
+      "session_info", "cdp_url",
     ]) expect(runtimeBrowserPolicyActions.includes(action as (typeof runtimeBrowserPolicyActions)[number])).toBeTrue();
     expect(runtimeBrowserPolicyActions).not.toContain("evaluate");
   });
@@ -1277,7 +1293,6 @@ describe("browser process isolation helpers", () => {
         { launched: true },
         { relaunchedBrowser: true },
         { restartedBackground: true },
-        { reused: false },
         { restoreStatus: "restored" },
         { saveStatus: "saved" },
       ] as const) {
@@ -1402,7 +1417,6 @@ describe("browser process isolation helpers", () => {
         { launched: true },
         { relaunchedBrowser: true },
         { restartedBackground: true },
-        { reused: false },
         { restoreStatus: "restored" },
         { saveStatus: "saved" },
       ] as const) {
@@ -1472,6 +1486,196 @@ describe("browser process isolation helpers", () => {
           exitCode: 0,
         }),
       }))).toContain("live control identity is unavailable");
+    } finally {
+      rmSync(socketDirectory, { recursive: true, force: true });
+      rmSync(artifactsDirectory, { recursive: true, force: true });
+    }
+  });
+
+  test("binds live cleanup after a fresh open with reused false and a _boundary envelope", async () => {
+    const artifactsDirectory = mkdtempSync(join(tmpdir(), "io-browser-"));
+    const socketDirectory = mkdtempSync(join("/tmp", "io-ab-"));
+    chmodSync(artifactsDirectory, 0o700);
+    chmodSync(socketDirectory, 0o700);
+    const session = "io-126-abcdef123456";
+    const configPath = join(artifactsDirectory, "agent-browser.json");
+    writeFileSync(configPath, "{}\n", { mode: 0o600 });
+    writeFileSync(join(artifactsDirectory, "action-policy.json"), "{}\n", {
+      mode: 0o600,
+    });
+    const statsIdentity = (path: string) => {
+      const stats = lstatSync(path, { bigint: true });
+      return {
+        device: stats.dev.toString(),
+        inode: stats.ino.toString(),
+        birthtimeNs: stats.birthtimeNs.toString(),
+        mode: "448" as const,
+        uid: stats.uid.toString(),
+      };
+    };
+    const base = parseBrowserCleanupResourceIdentity({
+      kind: "agent-browser-session-v2",
+      recoveryHandle: browserRecoveryHandle({
+        session,
+        configPath,
+        socketDirectory,
+        artifactsDirectory,
+      }),
+      session,
+      socketDirectory,
+      socketDirectoryIdentity: statsIdentity(socketDirectory),
+      artifactsDirectory,
+      artifactsDirectoryIdentity: statsIdentity(artifactsDirectory),
+      phase: "launch-intent",
+      control: null,
+    }) as BrowserCleanupResourceIdentityV2;
+    const lifecycle = (reused: boolean) => ({
+      effectiveLaunch: {
+        browserLaunched: true,
+        engine: "chrome",
+        launchHash: "41",
+      },
+      launched: false,
+      relaunchedBrowser: false,
+      restartedBackground: false,
+      restoreStatus: "not_configured",
+      reused,
+      saveStatus: "not_attempted",
+    });
+    const activeInfo = (reused: boolean) => ({
+      success: true,
+      data: {
+        active: true,
+        namespace: null,
+        pid: 43126,
+        runtime: {
+          backgroundPid: 43126,
+          browserLaunched: true,
+          compatibilityStatus: "current",
+          effectiveLaunch: lifecycle(reused).effectiveLaunch,
+          engine: "chrome",
+          launchHash: "41",
+          lifecycle: lifecycle(reused),
+          namespace: null,
+          pageCount: 1,
+          restoreCheckFn: null,
+          restoreCheckText: null,
+          restoreCheckUrl: null,
+          restoreKey: null,
+          restoreLoadedPath: null,
+          restoreSave: "auto",
+          restoreSavedPath: null,
+          restoreStatus: "not_configured",
+          restoreStatusDetail: null,
+          restoreValidationPending: false,
+          saveStatus: "not_attempted",
+          session,
+          socketDir: socketDirectory,
+        },
+        runtimeError: null,
+        session,
+        socketDir: socketDirectory,
+        version: "0.32.3",
+      },
+    });
+    const cdpInfo = (reused: boolean) => ({
+      success: true,
+      data: {
+        cdpUrl: "ws://127.0.0.1:43126/devtools/browser/exact-test",
+        lifecycle: lifecycle(reused),
+      },
+    });
+    const commandResult = (value: unknown) => ({
+      stdout: `${JSON.stringify(value).replaceAll(
+        '"launchHash":"41"',
+        '"launchHash":41',
+      )}\n`,
+      stderr: "",
+      exitCode: 0,
+    });
+    const owner = {
+      pid: 43126,
+      bootId: "a".repeat(64),
+      processStartId: "b".repeat(64),
+    } as const;
+    const bindWith = (
+      sessionValue: unknown,
+      cdpValue: unknown,
+    ) => bindLiveAgentBrowserCleanupResource(base, {
+      captureOwner: () => owner,
+      ownerStatus: () => "exact-live-owner",
+      runCommand: (command) => Promise.resolve(commandResult(
+        command.includes("info") ? sessionValue : cdpValue,
+      )),
+    });
+    try {
+      for (const reused of [false, true] as const) {
+        for (const wrap of [
+          (value: { readonly success: boolean; readonly data: unknown }) => value,
+          agentBrowserBoundaryEnvelope,
+        ] as const) {
+          const bound = await bindWith(wrap(activeInfo(reused)), wrap(cdpInfo(reused)));
+          expect(bound.phase).toBe("controlled");
+          expect(bound.session).toBe(session);
+          expect(bound.socketDirectory).toBe(socketDirectory);
+          expect(bound.control).toEqual({
+            kind: "agent-browser-control-v1",
+            version: "0.32.3",
+            session,
+            socketDirectory,
+            daemonOwner: owner,
+            engine: "chrome",
+            launchHash: "41",
+            cdpUrl: "ws://127.0.0.1:43126/devtools/browser/exact-test",
+          });
+        }
+      }
+
+      expect(await rejectionMessage(bindWith(
+        agentBrowserBoundaryEnvelope({
+          ...activeInfo(false),
+          data: {
+            ...activeInfo(false).data,
+            session: "io-999-ffffffffffff",
+          },
+        }),
+        agentBrowserBoundaryEnvelope(cdpInfo(false)),
+      ))).toContain("session identity changed");
+      expect(await rejectionMessage(bindWith(
+        agentBrowserBoundaryEnvelope({
+          ...activeInfo(false),
+          data: {
+            ...activeInfo(false).data,
+            socketDir: "/tmp/io-ab-not-the-bound-socket",
+          },
+        }),
+        agentBrowserBoundaryEnvelope(cdpInfo(false)),
+      ))).toContain("session identity changed");
+      expect(await rejectionMessage(bindWith(
+        {
+          ...agentBrowserBoundaryEnvelope(activeInfo(false)) as Record<string, unknown>,
+          extra: true,
+        },
+        cdpInfo(false),
+      ))).toContain("session result is malformed");
+      expect(await rejectionMessage(bindWith(
+        activeInfo(false),
+        {
+          _boundary: { nonce: "not-a-hex-nonce", origin: "unknown" },
+          data: cdpInfo(false).data,
+          error: null,
+          success: true,
+        },
+      ))).toContain("CDP result is malformed");
+      expect(await rejectionMessage(bindWith(
+        activeInfo(false),
+        {
+          _boundary: { nonce: "a".repeat(32), origin: "agent-browser" },
+          data: cdpInfo(false).data,
+          error: null,
+          success: true,
+        },
+      ))).toContain("CDP result is malformed");
     } finally {
       rmSync(socketDirectory, { recursive: true, force: true });
       rmSync(artifactsDirectory, { recursive: true, force: true });
