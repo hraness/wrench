@@ -437,17 +437,26 @@ describe("Apple Photos CLI recovery preflight", () => {
   test("retains global admission when post-KILL process-group exit is unproven", async () => {
     const root = privateRoot("wrench-apple-photos-cli-unproven-test-");
     const environment = { WRENCH_STATE_HOME: join(root, "state") };
-    const startedAt = performance.now();
-    await expect(exportApplePhotosContactEvidenceForCli({
+    const ready = join(root, "worker-ready");
+    const controller = new AbortController();
+    const operation = exportApplePhotosContactEvidenceForCli({
       environment,
+      signal: controller.signal,
       dependencies: { platform: "darwin" },
       supervisorDependencies: {
-        argv: blockingWorkerArgv("photos-capture", { createLease: true }),
-        timeoutMs: 1_000,
+        argv: blockingWorkerArgv("photos-capture", {
+          createLease: true,
+          readyPath: ready,
+        }),
+        timeoutMs: 5_000,
         terminationGraceMs: 20,
         processGroupAlive: () => true,
       },
-    })).rejects.toThrow("termination is indeterminate");
+    });
+    await waitForPath(ready);
+    const startedAt = performance.now();
+    controller.abort(new Error("fixture unproven kill"));
+    await expect(operation).rejects.toThrow("termination is indeterminate");
     expect(performance.now() - startedAt).toBeLessThan(2_000);
     expect(() => acquireBeeperMessageLikeMeExportAdmission({ environment }))
       .toThrow("another export is active");
