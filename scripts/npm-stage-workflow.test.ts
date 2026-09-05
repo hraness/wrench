@@ -1063,7 +1063,7 @@ describe("npm publication contract", () => {
         (MAX_UNPACKED_BYTES + MAX_PACKED_ENTRIES * 1_023 + 1_024) / 512,
       ) * 512,
     );
-    expect(MAX_PACKAGE_TAR_BYTES).toBe(12_656_128);
+    expect(MAX_PACKAGE_TAR_BYTES).toBe(12_713_472);
     expect(MAX_PACKAGE_TAR_BYTES % 512).toBe(0);
     expect(artifact).toContain("maxOutputLength: MAX_PACKAGE_TAR_BYTES");
     expect(artifact).not.toContain("const maximumTarBytes");
@@ -1122,28 +1122,28 @@ describe("npm publication contract", () => {
     expect(artifact).toContain('from "./package-budget.js"');
     expect(smoke).toContain('from "./package-budget.js"');
     expect(budget).toContain("two `bun pm pack` artifacts");
-    expect(budget).toContain("2,067,551 packed bytes");
-    expect(budget).toContain("12,174,875 unpacked bytes, and");
-    expect(budget).toContain("465 files");
+    expect(budget).toContain("2,072,396 packed bytes");
+    expect(budget).toContain("12,231,301 unpacked bytes, and");
+    expect(budget).toContain("466 files");
     expect(budget).toContain(
-      "427dc59ef3a4257e7818a54f8f8b24f40f376563e434c979328be2839f86e245",
+      "eb1f11ee0573220c0eb415132b076b5885f39fc6e75136990df47ee32e44f878",
     );
     expect(budget).toContain("measured a 3,543-byte Linux/macOS gzip spread");
     expect(budget).toContain("Keep the existing 2,178,192 packed-byte ceiling");
     expect(budget).toContain("4,244 unpacked bytes of bounded headroom");
     expect(MAX_PACKED_BYTES).toBe(2_178_192);
-    expect(MAX_PACKED_ENTRIES).toBe(465);
-    expect(MAX_PACKED_FILES).toBe(465);
-    expect(MAX_UNPACKED_BYTES).toBe(12_179_119);
+    expect(MAX_PACKED_ENTRIES).toBe(466);
+    expect(MAX_PACKED_FILES).toBe(466);
+    expect(MAX_UNPACKED_BYTES).toBe(12_235_545);
     expect(Object.isFrozen(packageArtifactBudget)).toBe(true);
     for (const range of Object.values(packageArtifactBudget)) {
       expect(Object.isFrozen(range)).toBe(true);
     }
     expect(packageArtifactBudget).toEqual({
-      entryCount: { min: 465, max: 465 },
-      fileCount: { min: 465, max: 465 },
+      entryCount: { min: 466, max: 466 },
+      fileCount: { min: 466, max: 466 },
       packedBytes: { min: 1_600_000, max: 2_178_192 },
-      unpackedBytes: { min: 9_000_000, max: 12_179_119 },
+      unpackedBytes: { min: 9_000_000, max: 12_235_545 },
     });
   });
 
@@ -1180,6 +1180,7 @@ describe("npm publication contract", () => {
     expect(new Set(files).size).toBe(files.length);
     for (const requiredSource of [
       "src/assets/adapters/beeper/wrench-web-adapter.v2.2.0.json",
+      "src/assets/adapters/beeper/wrench-web-adapter.v2.3.0.json",
       "src/local-cli-surface-contract.ts",
       "src/messaging.ts",
     ] as const) {

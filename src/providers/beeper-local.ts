@@ -167,7 +167,7 @@ export const BEEPER_LOCAL_OPERATION_CONTRACT_VERSIONS = Object.freeze({
   "accounts.read": 1,
   "bridges.list": 2,
   "bridges.read": 1,
-  "contacts.list": 2,
+  "contacts.list": 3,
   "contacts.search": 1,
   "contacts.read": 1,
   "messaging.list": 1,
@@ -209,6 +209,11 @@ const BEEPER_LOCAL_CONTRACT_V2_OPERATIONS = Object.freeze([
   "messaging.content.search",
 ] as const satisfies readonly BeeperLocalOperationName[]);
 
+const BEEPER_LOCAL_CONTRACT_V3_OPERATIONS = Object.freeze([
+  "contacts.list",
+  "messaging.read",
+] as const satisfies readonly BeeperLocalOperationName[]);
+
 export function isBeeperLocalOperationContractVersion(
   action: BeeperLocalOperationName,
   contractVersion: number,
@@ -218,7 +223,10 @@ export function isBeeperLocalOperationContractVersion(
       && BEEPER_LOCAL_CONTRACT_V2_OPERATIONS.includes(
         action as typeof BEEPER_LOCAL_CONTRACT_V2_OPERATIONS[number],
       )
-    || contractVersion === 3 && action === "messaging.read";
+    || contractVersion === 3
+      && BEEPER_LOCAL_CONTRACT_V3_OPERATIONS.includes(
+        action as typeof BEEPER_LOCAL_CONTRACT_V3_OPERATIONS[number],
+      );
 }
 
 const BEEPER_DESKTOP_LOOPBACK_V2_OPERATIONS = Object.freeze([
@@ -241,7 +249,10 @@ export function isBeeperDesktopLoopbackOperationContract(
     && BEEPER_DESKTOP_LOOPBACK_V2_OPERATIONS.includes(
       action as typeof BEEPER_DESKTOP_LOOPBACK_V2_OPERATIONS[number],
     )
-    || contractVersion === 3 && action === "messaging.read";
+    || contractVersion === 3
+      && BEEPER_LOCAL_CONTRACT_V3_OPERATIONS.includes(
+        action as typeof BEEPER_LOCAL_CONTRACT_V3_OPERATIONS[number],
+      );
 }
 
 export const BEEPER_LOCAL_OPERATION_RUNTIME_TRANSPORTS = Object.freeze(
@@ -348,6 +359,10 @@ export type BeeperContactsListInputV1 = Readonly<{
 export type BeeperContactsListInput = BeeperContactsListInputV1 & Readonly<{
   query: string | null;
 }>;
+export type BeeperContactsListInputV3 = BeeperContactsListInput & Readonly<{
+  beforeCursor: string | null;
+  afterCursor: string | null;
+}>;
 export type BeeperContactsSearchInput = BeeperContactsListInput & Readonly<{ query: string }>;
 export type BeeperMessagingListInput = Readonly<{
   accountId: string | null;
@@ -431,7 +446,8 @@ type PresenceInput = ConversationInput & Readonly<{ state: "typing" | "paused"; 
 
 export type BeeperOperationInput =
   | EmptyInput | AccountInput | BridgeListInput | BridgeInput | ContactInput
-  | BeeperContactsListInputV1 | BeeperContactsListInput | BeeperContactsSearchInput
+  | BeeperContactsListInputV1 | BeeperContactsListInput | BeeperContactsListInputV3
+  | BeeperContactsSearchInput
   | BeeperMessagingListInput | BeeperMessagingSearchInput | ConversationReadInput
   | BeeperMessagingReadInputV2 | BeeperMessagingReadInput
   | BeeperMessageContentSearchInput | MessageInput | MessageContextInput | SendInput
@@ -685,6 +701,48 @@ export function parseBeeperContactsListInput(input: OperationInput): BeeperConta
   });
 }
 
+export function parseBeeperContactsListInputV3(
+  input: OperationInput,
+): BeeperContactsListInputV3 {
+  const source = record(input, "contacts.list input");
+  exactKeys(
+    source,
+    [],
+    ["account_id", "query", "before_cursor", "after_cursor", "limit"],
+    "contacts.list input",
+  );
+  const beforeCursor = optionalOpaque(
+    source.before_cursor,
+    "contacts.list input.before_cursor",
+    2_048,
+  );
+  const afterCursor = optionalOpaque(
+    source.after_cursor,
+    "contacts.list input.after_cursor",
+    2_048,
+  );
+  if (beforeCursor !== null && afterCursor !== null) {
+    throw new Error("contacts.list input accepts only one cursor direction");
+  }
+  if (
+    (beforeCursor !== null || afterCursor !== null)
+    && source.account_id === undefined
+  ) {
+    throw new Error("contacts.list cursor input requires one exact account_id");
+  }
+  return Object.freeze({
+    accountId: optionalOpaque(source.account_id, "contacts.list input.account_id", 512),
+    query: source.query === undefined
+      ? null
+      : normalizedSearchQuery(source.query, "contacts.list input.query"),
+    beforeCursor,
+    afterCursor,
+    limit: source.limit === undefined
+      ? 200
+      : integer(source.limit, "contacts.list input.limit", 1, 200),
+  });
+}
+
 export function parseBeeperContactsSearchInput(input: OperationInput): BeeperContactsSearchInput {
   const source = record(input, "contacts.search input");
   exactKeys(source, ["query"], ["account_id", "limit"], "contacts.search input");
@@ -835,7 +893,9 @@ export function parseBeeperOperationInputForContract(
   if (action === "contacts.list") {
     return contractVersion === 1
       ? parseBeeperContactsListInputV1(input)
-      : parseBeeperContactsListInput(input);
+      : contractVersion === 2
+        ? parseBeeperContactsListInput(input)
+        : parseBeeperContactsListInputV3(input);
   }
   if (action === "contacts.search") return parseBeeperContactsSearchInput(input);
   if (action === "messaging.list") return parseBeeperMessagingListInput(input);
@@ -1109,6 +1169,10 @@ export function planBeeperOperationCommand(
   }
   if (action === "bridges.read") return command(action, ["bridges", "show", (input as BridgeInput).bridgeId, ...read], false);
   if (action === "contacts.list") {
+    // Official CLI v0.6.2 `contacts list` accepts --limit but collectPage does
+    // not pass that bound into GET /v1/accounts/{accountID}/contacts/list and
+    // does not walk hasMore/oldestCursor. The first Desktop page stays at 50.
+    // contacts.list@3 uses the Desktop loopback path instead.
     const value = input as BeeperContactsListInput | BeeperContactsListInputV1;
     return command(action, [
       "contacts", "list",
@@ -2177,7 +2241,7 @@ function commandOutput(
     privateArtifact: false,
     truncation: policy.effect === "read"
       ? blendedContactQuery
-        ? "Without query this is a bounded list; with query it is a provider-blended candidate window with no continuation metadata."
+        ? "Desktop loopback contact pages include continuation metadata. Official CLI v0.6.2 contracts remain a first-page window with no continuation."
         : "Provider limits and continuation availability are explicit in the normalized output."
       : "No upstream body, path, token, or unbounded diagnostic output is exposed.",
   });
@@ -2513,9 +2577,9 @@ export const BEEPER_CLI_V062_SURFACE_CONTRACT = defineLocalCliSurfaceContractV1(
   sdk: BEEPER_DESKTOP_API_PIN,
   runtime: {
     providerPluginId: "beeper-linked-device",
-    providerPluginVersion: "2.3.0",
+    providerPluginVersion: "2.4.0",
     adapterId: "beeper-local",
-    adapterVersion: "2.3.0",
+    adapterVersion: "2.4.0",
     operationContractVersions: BEEPER_LOCAL_OPERATION_CONTRACT_VERSIONS,
     operationInputTypes: BEEPER_LOCAL_OPERATION_INPUT_TYPES,
     target: BEEPER_DESKTOP_TARGET,
@@ -2530,11 +2594,11 @@ export const BEEPER_CLI_V062_SURFACE_CONTRACT = defineLocalCliSurfaceContractV1(
 export const BEEPER_CLI_V062_UPSTREAM_SURFACE_SHA256 =
   "74297df1af30fe89cf1596a0670983e79cf85c0768c2f68e9bc3d386be640836" as const;
 export const BEEPER_CLI_V062_CLASSIFICATION_SHA256 =
-  "9318cfcff0bf578005c5f1e6590169ef843ca90bee0f25a9f2f53ea406f6acd0" as const;
+  "bcd411af1544e5cd618cd3c04f2852a797bd804d92b7fe4cd226374b61c57d08" as const;
 export const BEEPER_CLI_V062_SEMANTIC_PROFILES_SHA256 =
-  "cfad9183e1dc2199284b203ec224589f70e97142cc5d3850b64f6f6c261e2a92" as const;
+  "fb7ea5f70f004dd8090c3e6e0996bfa00b0bab8ea5639203e2d1027602450ffe" as const;
 export const BEEPER_CLI_V062_WHOLE_SURFACE_SHA256 =
-  "c37e577e305235b3a577c8ea5ad4ed4e5a7bba80d7eae1644b649b756bfd1e42" as const;
+  "72201ac5eb3532f7c159583f19009f547d7d313e86388466b57c135bd2dc4944" as const;
 
 export const BEEPER_CLI_V062_PUBLIC_MANUAL_SEMANTIC_PROFILE_SHA256 = Object.freeze({
   "setup": "cd432e2649e5724d70398e739a2d1c0c21557a23820aaa14562575a5fe689406",
@@ -2615,7 +2679,7 @@ export const BEEPER_CLI_V062_PUBLIC_MANUAL_SEMANTIC_PROFILE_SHA256 = Object.free
   "send unreact": "f2fe46e5854571eecbde82fc59663f99b44b4484bffda7c92b12614de709b2d3",
   "send voice": "966b39e192073fc581b8efece9fa744f169b51361e9a8223a84d3c9251e08c24",
   "presence": "2d6e067b5d572f7d2524c3e4fdf41300ee82b9af03116f17b098a6afcb9fc9b7",
-  "contacts list": "7be94dccadd5b27226fe4252ca77922b08691ea1c6293a0c9b381bf66396a7a0",
+  "contacts list": "77b752f6e0a37b68cf31cd85c554a5bdec51c20b0239a8a13ef111f7d30b9c6c",
   "contacts search": "8b33f02bb3011f2dd304be5f9f5ccec2303833ae739dc4e96dc3691d6354032b",
   "contacts show": "724c25f80b5f58bbfb4b858187d5f785e946853e6a2f355bd14f8b8bc2052c92",
   "media download": "47f7e05839640b88c42e719b44f3d8f9632ddb7f5abbb1ae2f4eee32341d4f88",

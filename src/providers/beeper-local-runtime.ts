@@ -64,6 +64,7 @@ import {
   type BeeperLocalOperationName,
   type BeeperContactsSearchInput,
   type BeeperContactsListInput,
+  type BeeperContactsListInputV3,
   type BeeperMessagingListInput,
   type BeeperMessagingSearchInput,
   type BeeperMessagingReadInput,
@@ -2841,6 +2842,184 @@ async function directMessageContentSearch(
   throw new Error("Beeper Desktop direct message search exceeded its page bound");
 }
 
+type BeeperDirectContactPage = Readonly<{
+  items: readonly unknown[];
+  continuation: Readonly<{
+    direction: "before" | "after";
+    cursor: string;
+  }> | null;
+  blendedContinuationUnreplayable: boolean;
+}>;
+
+function attachContactAccountId(
+  item: unknown,
+  accountId: string,
+  label: string,
+): unknown {
+  const source = strictRecord(item, label);
+  if (source.accountID !== undefined && source.accountID !== accountId) {
+    throw new Error(`${label}.accountID did not bind the requested account`);
+  }
+  return Object.freeze({ ...source, accountID: accountId });
+}
+
+async function directContactsList(
+  realm: BeeperDirectRealm,
+  input: BeeperContactsListInputV3,
+  dependencies: BeeperDirectDependencies | undefined,
+  signal: AbortSignal | undefined,
+): Promise<BeeperDirectContactPage> {
+  if (input.accountId !== null) {
+    requireBoundAccount(realm.accounts, input.accountId, "contacts.list");
+  } else if (input.beforeCursor !== null || input.afterCursor !== null) {
+    throw new Error("contacts.list cursor input requires one exact account_id");
+  }
+  const accountIds = input.accountId === null
+    ? realm.accounts.map((account) => account.accountId)
+    : [input.accountId];
+  const collected: unknown[] = [];
+  const seenIds = new Set<string>();
+  const seenCursors = new Set<string>();
+  const direction = input.afterCursor === null ? "before" : "after";
+  const requestCursor = input.beforeCursor ?? input.afterCursor;
+  if (requestCursor !== null) seenCursors.add(`${accountIds[0] ?? ""}\0${requestCursor}`);
+  let remainingAccounts = false;
+  accountLoop: for (const [accountIndex, accountId] of accountIds.entries()) {
+    let cursor = accountIndex === 0 ? requestCursor : null;
+    for (let pageIndex = 0; pageIndex < 8; pageIndex += 1) {
+      const remaining = input.limit - collected.length;
+      if (remaining <= 0) {
+        remainingAccounts = true;
+        break accountLoop;
+      }
+      const query: [string, string][] = [["limit", String(remaining)]];
+      if (input.query !== null) query.push(["query", input.query]);
+      if (cursor !== null) query.push(["cursor", cursor], ["direction", direction]);
+      const page = parseBeeperDirectCursorPage(
+        await beeperDirectJsonRequest(
+          beeperDirectUrl(
+            realm.baseUrl,
+            `/v1/accounts/${encodeURIComponent(accountId)}/contacts/list`,
+            query,
+          ),
+          { method: "GET", headers: realm.authorizationHeaders },
+          `Beeper Desktop direct contact list page ${String(pageIndex + 1)}`,
+          dependencies,
+          signal,
+        ),
+        `Beeper Desktop direct contact list page ${String(pageIndex + 1)}`,
+        MAX_USERS,
+      );
+      const items = page.items.map((item, index) => attachContactAccountId(
+        item,
+        accountId,
+        `Beeper Desktop direct contact[${String(index)}]`,
+      ));
+      contactOutput(
+        realm.accounts,
+        realm.subject,
+        Object.freeze({ ...input, limit: MAX_USERS }),
+        items,
+      );
+      if (collected.length + items.length > input.limit) {
+        if (collected.length === 0 || cursor === null) {
+          throw new Error(
+            "Beeper Desktop direct contact page exceeded the requested no-skip result bound",
+          );
+        }
+        return Object.freeze({
+          items: Object.freeze(collected),
+          continuation: Object.freeze({ direction, cursor }),
+          blendedContinuationUnreplayable: false,
+        });
+      }
+      for (const item of items) {
+        const source = strictRecord(item, "Beeper Desktop direct contact");
+        const id = `${accountId}\0${boundedString(
+          source.id,
+          "Beeper Desktop direct contact.id",
+          2_048,
+        )}`;
+        if (seenIds.has(id)) {
+          throw new Error("Beeper Desktop direct contact list repeated an identity across pages");
+        }
+        seenIds.add(id);
+      }
+      collected.push(...items);
+      if (!page.hasMore) break;
+      const nextCursor = direction === "before"
+        ? page.oldestCursor
+        : page.newestCursor;
+      if (nextCursor === null || seenCursors.has(`${accountId}\0${nextCursor}`)) {
+        throw new Error("Beeper Desktop direct contact list did not advance its cursor");
+      }
+      seenCursors.add(`${accountId}\0${nextCursor}`);
+      if (collected.length >= input.limit) {
+        return Object.freeze({
+          items: Object.freeze(collected),
+          continuation: input.accountId === null
+            ? null
+            : Object.freeze({ direction, cursor: nextCursor }),
+          blendedContinuationUnreplayable: input.accountId === null,
+        });
+      }
+      if (pageIndex === 7) {
+        return Object.freeze({
+          items: Object.freeze(collected),
+          continuation: input.accountId === null
+            ? null
+            : Object.freeze({ direction, cursor: nextCursor }),
+          blendedContinuationUnreplayable: input.accountId === null,
+        });
+      }
+      cursor = nextCursor;
+    }
+  }
+  return Object.freeze({
+    items: Object.freeze(collected),
+    continuation: null,
+    blendedContinuationUnreplayable: remainingAccounts,
+  });
+}
+
+function directContactOutput(
+  accounts: readonly BeeperAccountProjection[],
+  subject: string,
+  input: BeeperContactsListInputV3,
+  page: BeeperDirectContactPage,
+) {
+  const projected = contactOutput(accounts, subject, input, page.items);
+  const continuationAvailable = page.continuation !== null
+    || page.blendedContinuationUnreplayable;
+  return Object.freeze({
+    ...projected,
+    projection: input.query !== null
+      ? "bounded-local-desktop-provider-filtered-candidates"
+      : "bounded-local-desktop-api",
+    continuation: page.continuation,
+    completeness: Object.freeze({
+      localPageComplete: page.continuation === null
+        && !page.blendedContinuationUnreplayable,
+      resultWindowComplete: page.continuation === null
+        && !page.blendedContinuationUnreplayable,
+      remoteContactSetComplete: false,
+      continuationAvailable,
+      requestedLimitReached: projected.contacts.length >= input.limit,
+      warnings: Object.freeze([
+        ...(input.query !== null
+          ? ["beeper-desktop-contact-list-query-is-provider-filtered-candidate-matching"]
+          : []),
+        "continuation-is-an-opaque-provider-page-boundary-cursor",
+        "provider-history-coverage-varies-by-connected-account",
+        "beeper-desktop-loopback-read-does-not-force-remote-history-sync",
+        ...(page.blendedContinuationUnreplayable
+          ? ["beeper-desktop-blended-contact-list-has-no-replayable-continuation"]
+          : []),
+      ]),
+    }),
+  });
+}
+
 export async function executeBeeperDirectReadOperation(
   recipe: LocalCliRecipe,
   inputValue: OperationInput,
@@ -2873,6 +3052,24 @@ export async function executeBeeperDirectReadOperation(
       accountSubject: realm.subject,
       accounts: publicAccountProjections(realm.accounts),
     });
+    if (Buffer.byteLength(JSON.stringify(output), "utf8") > recipe.maxOutputBytes) {
+      throw new Error("Beeper Desktop direct projection exceeded the reviewed output bound");
+    }
+    return directReadSuccess(output);
+  } else if (recipe.action === "contacts.list") {
+    const contactsInput = input as BeeperContactsListInputV3;
+    const page = await directContactsList(
+      realm,
+      contactsInput,
+      options.dependencies,
+      signal,
+    );
+    const output = directContactOutput(
+      realm.accounts,
+      realm.subject,
+      contactsInput,
+      page,
+    );
     if (Buffer.byteLength(JSON.stringify(output), "utf8") > recipe.maxOutputBytes) {
       throw new Error("Beeper Desktop direct projection exceeded the reviewed output bound");
     }

@@ -62,6 +62,13 @@ const BEEPER_V1_BINDING_ROUTE_COORDINATES = Object.freeze(
 const BEEPER_2_2_DIRECT_BINDING_ROUTE_COORDINATES = Object.freeze(
   BEEPER_2_2_DIRECT_ROUTE_COORDINATES.map((route) => `local-cli:beeper/${route}`),
 );
+const BEEPER_2_3_BINDING_ROUTE_COORDINATES = Object.freeze([
+  ...BEEPER_V1_BINDING_ROUTE_COORDINATES,
+  ...BEEPER_2_2_DIRECT_BINDING_ROUTE_COORDINATES,
+  "local-cli:beeper/bridges.list@2",
+  "local-cli:beeper/contacts.list@2",
+  "local-cli:beeper/messaging.read@3",
+]);
 
 const REDDIT_1_3_BINDING_ROUTE_COORDINATES = Object.freeze([
   "comments.create@1", "comments.read@1", "communities.membership.set@1",
@@ -77,10 +84,15 @@ const REDDIT_1_3_BINDING_ROUTE_COORDINATES = Object.freeze([
 const identities = Object.freeze({
   "beeper-linked-device": {
     schemaVersion: 1,
-    pluginVersion: "2.3.0",
-    implementationSha256: "2d2cef38ce2d0c193f4e6890c51d59f8a3547d9011d5c3aa8df18f5f077ebcdd",
+    pluginVersion: "2.4.0",
+    implementationSha256: "a989e65e372aa63af41cb36f32d6a1d769c734ba0adc207dd2f25d916f877ff5",
     legacyCurrentReadImplementationSha256: [],
     legacyDistributionReadImplementationSha256: [
+      {
+        implementationSha256:
+          "2d2cef38ce2d0c193f4e6890c51d59f8a3547d9011d5c3aa8df18f5f077ebcdd",
+        routes: [...BEEPER_2_3_BINDING_ROUTE_COORDINATES],
+      },
       {
         implementationSha256:
           "e6d49d29ece94d3c9eb1817ea194699bbe56ecb1170e3691e0242e16ef2c26eb",

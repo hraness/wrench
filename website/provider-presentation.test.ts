@@ -40,7 +40,7 @@ describe("provider presentation", () => {
 
     expect(directory.entries[0]).toMatchObject({
       adapterCount: 1,
-      adapterIdentities: [{ id: "beeper-local", version: "2.3.0" }],
+      adapterIdentities: [{ id: "beeper-local", version: "2.4.0" }],
       captureRequiredCount: 0,
       contractVersions: [1, 2, 3],
       href: "/providers/beeper/",
@@ -106,7 +106,7 @@ describe("provider presentation", () => {
     );
     const facts = createBeeperPresentationFacts(directory);
     expect(facts).toMatchObject({
-      adapterVersion: "2.3.0",
+      adapterVersion: "2.4.0",
       cliBackedOperationCount:
         BEEPER_PRESENTATION_TRANSPORT_COUNTS.cliBackedOperationCount,
       cliCommandCount: 101,

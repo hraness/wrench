@@ -286,8 +286,8 @@ describe("durable provider contract inventory", () => {
       expect(inventory).toEqual({
         rows: 323,
         sha256: predecessorDefaultInventorySha256,
-        currentOnlyRows: 57,
-        currentOnlySha256: "023ddaa364c36f5b7657792e837fae27b3571a4343bfb0f313d48522153d084b",
+        currentOnlyRows: 58,
+        currentOnlySha256: "3afd55dd919e3cd938fbf9ad414035a0815dc2c53039201c11b7025d4e103be5",
         legacyRows: [
           323,
           323,
