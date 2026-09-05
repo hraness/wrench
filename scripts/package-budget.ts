@@ -6,8 +6,8 @@
 // Staging and Release pack with npm, not `bun pm pack`; the older bun-pack
 // measurement sat under the previous ceiling until that npm tarball exceeded
 // it. Prior CI measured a 3,543-byte Linux/macOS gzip spread. Set the packed
-// ceiling to the measured npm pack plus that spread, and keep 4,244 unpacked
-// bytes of bounded headroom. File inventory stays exact at 466.
+// ceiling to the measured npm pack plus that spread, and keep 4,244 unpacked bytes of bounded headroom.
+// File inventory stays exact at 466.
 export const MAX_PACKED_BYTES = 2_217_718;
 export const MAX_PACKED_ENTRIES = 466;
 export const MAX_PACKED_FILES = 466;
