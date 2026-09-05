@@ -1681,13 +1681,22 @@ describe("schemaVersion 4 authenticated web-session binding", () => {
       "beeper",
       "wrench-web-adapter.v2.2.0.json",
     ), "utf8")) as Record<string, unknown>;
+    const cliContactBaseline = JSON.parse(readFileSync(join(
+      import.meta.dir,
+      "assets",
+      "adapters",
+      "beeper",
+      "wrench-web-adapter.v2.3.0.json",
+    ), "utf8")) as Record<string, unknown>;
 
     expect(parseDiagnosticManifest(archived).ok).toBeTrue();
     expect(parseDiagnosticManifest(intermediate).ok).toBeTrue();
     expect(parseDiagnosticManifest(predecessor).ok).toBeTrue();
+    expect(parseDiagnosticManifest(cliContactBaseline).ok).toBeTrue();
     expect(parseRuntimeManifest(archived).ok).toBeTrue();
     expect(parseRuntimeManifest(intermediate).ok).toBeTrue();
     expect(parseRuntimeManifest(predecessor).ok).toBeTrue();
+    expect(parseRuntimeManifest(cliContactBaseline).ok).toBeTrue();
     expect(parseRuntimeManifest(current).ok).toBeTrue();
 
     const archivedOperations = archived.operations as Record<
@@ -1696,6 +1705,7 @@ describe("schemaVersion 4 authenticated web-session binding", () => {
     >;
     const intermediateOperations = intermediate.operations as typeof archivedOperations;
     const predecessorOperations = predecessor.operations as typeof archivedOperations;
+    const cliContactOperations = cliContactBaseline.operations as typeof archivedOperations;
     const currentOperations = current.operations as typeof archivedOperations;
     const intermediateDirectReads = new Set([
       "accounts.list",
@@ -1710,10 +1720,13 @@ describe("schemaVersion 4 authenticated web-session binding", () => {
     const currentVersionTwo = new Set([
       "accounts.list",
       "bridges.list",
-      "contacts.list",
       "messaging.search",
       "conversations.read",
       "messaging.content.search",
+    ]);
+    const cliContactVersionTwo = new Set([
+      ...currentVersionTwo,
+      "contacts.list",
     ]);
     for (const [operation, value] of Object.entries(archivedOperations)) {
       expect(value.localCli.contractVersion).toBe(1);
@@ -1723,8 +1736,13 @@ describe("schemaVersion 4 authenticated web-session binding", () => {
       expect(predecessorOperations[operation]?.localCli.contractVersion).toBe(
         predecessorDirectReads.has(operation) ? 2 : 1,
       );
+      expect(cliContactOperations[operation]?.localCli.contractVersion).toBe(
+        operation === "messaging.read" ? 3 : cliContactVersionTwo.has(operation) ? 2 : 1,
+      );
       expect(currentOperations[operation]?.localCli.contractVersion).toBe(
-        operation === "messaging.read" ? 3 : currentVersionTwo.has(operation) ? 2 : 1,
+        operation === "messaging.read" || operation === "contacts.list"
+          ? 3
+          : currentVersionTwo.has(operation) ? 2 : 1,
       );
     }
   });

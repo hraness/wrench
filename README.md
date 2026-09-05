@@ -44,7 +44,7 @@ wrench plugin list
 
 ## Built-in provider catalog
 
-This v0.16.5 source tree supports executable actions for 20 services: Beeper,
+This v0.16.6 source tree supports executable actions for 20 services: Beeper,
 Bluesky, ClasificadosOnline, Facebook, Facebook Groups, Facebook Marketplace,
 GitHub, Gmail, Hacker News, Instagram, iMessage, LinkedIn, Reddit, Substack,
 Threads, TikTok, Twitch, WhatsApp, X, and YouTube.
@@ -116,9 +116,9 @@ the latest release that completed every gate.
 Install the single Wrench Agent Skill with either runner:
 
 ```sh
-npx skills add hraness/wrench#v0.16.5
+npx skills add hraness/wrench#v0.16.6
 # or
-bunx skills add hraness/wrench#v0.16.5
+bunx skills add hraness/wrench#v0.16.6
 ```
 
 The skill teaches Codex, Claude Code, Cursor, and other compatible coding
@@ -129,7 +129,7 @@ After the matching immutable Release exists, install this exact version from
 npm:
 
 ```sh
-bun add --global @hraness/wrench@0.16.5
+bun add --global @hraness/wrench@0.16.6
 wrench adapter sync-bundled --json
 wrench doctor
 ```
@@ -156,7 +156,7 @@ For that same released coordinate, install Wrench in an agent or application
 that owns its own model, planning, tool loop, approvals, and interface:
 
 ```sh
-bun add @hraness/wrench@0.16.5
+bun add @hraness/wrench@0.16.6
 ```
 
 ```ts
@@ -422,7 +422,7 @@ not turn missing message history into zero activity.
 | Provider | Contact collection | Directional statistics |
 | --- | --- | --- |
 | Gmail | Google People connections | Bounded Gmail message scans with explicit truncation |
-| Beeper local Desktop | One coverage-limited account-aware result window from the already-authorized local Desktop projection; the CLI exposes no continuation and may cap results below the requested limit | Unavailable; Wrench does not scan message history while listing contacts |
+| Beeper local Desktop | One coverage-limited account-aware result window from the already-authorized local Desktop projection; contract 3 walks Desktop contact pages up to 200 with an opaque continuation, while CLI contracts 1 and 2 stay on the first-page window | Unavailable; Wrench does not scan message history while listing contacts |
 | LinkedIn official API | First-degree connections with locale-selection evidence | Unavailable; the Connections API does not expose ordinary inbox history |
 | Instagram authenticated web | Unique non-viewer participants from the reviewed first Direct inbox summary page, with explicit first-page and pagination incompleteness | Unavailable until acknowledgement-free message-history paging is reviewed |
 | WhatsApp linked device | One page of the authenticated account owner's private, quiescent Whatsmeow contact store | Unavailable; Wrench does not treat a linked-device message cache as account-owned history |
@@ -630,14 +630,19 @@ running an older reviewed contract against a different Desktop build.
 Binding hashes the stable local self-account coordinate before storing or
 printing it. Every child receives operation-private CLI, oclif plugin, cache,
 and temporary state. Ambient credentials, targets, defaults, proxies, update
-checks, and user plugins cannot change a wrapped command. List and fuzzy search
-results remain explicitly incomplete when CLI 0.6.2 exposes no continuation or
-may apply an upstream cap. Use those reads to obtain exact account,
-conversation, contact, and message IDs before an exact read or action:
+checks, and user plugins cannot change a wrapped command. Official CLI list and
+fuzzy search results remain explicitly incomplete when CLI 0.6.2 exposes no
+continuation or caps the first Desktop page. `contacts.list` contract 3 walks
+Desktop contact pages up to the requested limit of 200 and returns an opaque
+continuation when more remain; contracts 1 and 2 stay on the CLI first-page
+window. Use those reads to obtain exact account, conversation, contact, and
+message IDs before an exact read or action:
 
 ```sh
 wrench beeper-local messaging.list --auth beeper-main \
   --input '{"limit":100}' --json
+wrench beeper-local contacts.list --auth beeper-main \
+  --input '{"account_id":"<account-id>","limit":200}' --json
 wrench beeper-local contacts.search --auth beeper-main \
   --input '{"query":"Ada Fixture","limit":20}' --json
 wrench beeper-local messaging.search --auth beeper-main \

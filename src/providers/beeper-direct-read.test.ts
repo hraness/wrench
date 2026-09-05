@@ -13,6 +13,7 @@ import { join } from "node:path";
 import type { WrenchAuth } from "../auth";
 import type { LocalCliRecipe, OperationInput } from "../model";
 import { OperationDeadline } from "../operation-deadline";
+import { parseBeeperContactsListInputV3 } from "./beeper-local";
 import {
   beeperSubjectFromAccountsAndTarget,
   executeBeeperLocalOperation,
@@ -140,11 +141,11 @@ function jsonResponse(value: unknown): Response {
   });
 }
 
-function recipe(action: string): LocalCliRecipe {
+function recipe(action: string, contractVersion = 2): LocalCliRecipe {
   return {
     surface: "beeper",
     action,
-    contractVersion: 2,
+    contractVersion,
     timeoutMs: 120_000,
     maxOutputBytes: 10 * 1024 * 1024,
   };
@@ -154,11 +155,12 @@ async function execute(
   action: string,
   input: OperationInput,
   dependencies: BeeperDirectDependencies,
+  contractVersion = 2,
 ) {
   const deadline = new OperationDeadline(120_000);
   deadlines.push(deadline);
   return executeBeeperLocalOperation(
-    recipe(action),
+    recipe(action, contractVersion),
     input,
     fixtureAuth(),
     {
@@ -167,6 +169,14 @@ async function execute(
       directDependencies: dependencies,
     },
   );
+}
+
+function contact(id: string, accountId = "account-telegram"): unknown {
+  return {
+    id,
+    accountID: accountId,
+    fullName: `Contact ${id}`,
+  };
 }
 
 describe("Beeper Desktop direct read contract v2", () => {
@@ -931,5 +941,269 @@ describe("Beeper Desktop direct read contract v2", () => {
       "Beeper local execution failed at a protected local boundary",
     );
     expect(requests).toBe(3);
+  });
+});
+
+describe("Beeper Desktop direct contact list contract v3", () => {
+  test("rejects cursor input without one exact account_id", () => {
+    expect(() => parseBeeperContactsListInputV3({
+      before_cursor: "opaque-before",
+      limit: 20,
+    })).toThrow("contacts.list cursor input requires one exact account_id");
+    expect(() => parseBeeperContactsListInputV3({
+      account_id: "account-telegram",
+      before_cursor: "opaque-before",
+      after_cursor: "opaque-after",
+      limit: 20,
+    })).toThrow("contacts.list input accepts only one cursor direction");
+  });
+
+  test("walks Desktop contact pages past the CLI first-page window", async () => {
+    const contactRequests: URL[] = [];
+    const firstPage = Array.from({ length: 50 }, (_unused, index) =>
+      contact(`page-1-${String(index + 1)}`));
+    const secondPage = Array.from({ length: 30 }, (_unused, index) =>
+      contact(`page-2-${String(index + 1)}`));
+    const result = await execute("contacts.list", {
+      account_id: "account-telegram",
+      limit: 80,
+    }, {
+      fetch: (input) => {
+        const url = String(input);
+        if (url.endsWith("/v1/info")) return Promise.resolve(jsonResponse(info()));
+        if (url.endsWith("/v1/accounts")) return Promise.resolve(jsonResponse(accounts));
+        const request = new URL(url);
+        contactRequests.push(request);
+        return Promise.resolve(jsonResponse(contactRequests.length === 1
+          ? {
+              items: firstPage,
+              hasMore: true,
+              oldestCursor: "opaque-before-page-1",
+              newestCursor: "opaque-after-page-1",
+            }
+          : {
+              items: secondPage,
+              hasMore: false,
+              oldestCursor: "opaque-before-page-2",
+              newestCursor: "opaque-after-page-2",
+            }));
+      },
+    }, 3);
+
+    expect(contactRequests.map((request) => ({
+      path: request.pathname,
+      limit: request.searchParams.get("limit"),
+      cursor: request.searchParams.get("cursor"),
+      direction: request.searchParams.get("direction"),
+    }))).toEqual([
+      {
+        path: "/v1/accounts/account-telegram/contacts/list",
+        limit: "80",
+        cursor: null,
+        direction: null,
+      },
+      {
+        path: "/v1/accounts/account-telegram/contacts/list",
+        limit: "30",
+        cursor: "opaque-before-page-1",
+        direction: "before",
+      },
+    ]);
+    const output = result.output as {
+      contacts: readonly { id: string }[];
+      continuation: unknown;
+      completeness: {
+        continuationAvailable: boolean;
+        localPageComplete: boolean;
+        remoteContactSetComplete: boolean;
+        requestedLimitReached: boolean;
+        resultWindowComplete: boolean;
+        warnings: readonly string[];
+      };
+      projection: string;
+    };
+    expect(result.status).toBe("succeeded");
+    expect(result.dispatchStarted).toBeFalse();
+    expect(output.contacts).toHaveLength(80);
+    expect(output.contacts[0]?.id).toBe("page-1-1");
+    expect(output.contacts[79]?.id).toBe("page-2-30");
+    expect(output.continuation).toBeNull();
+    expect(output.projection).toBe("bounded-local-desktop-api");
+    expect(output.completeness).toMatchObject({
+      continuationAvailable: false,
+      localPageComplete: true,
+      remoteContactSetComplete: false,
+      requestedLimitReached: true,
+      resultWindowComplete: true,
+    });
+    expect(output.completeness.warnings).toEqual([
+      "continuation-is-an-opaque-provider-page-boundary-cursor",
+      "provider-history-coverage-varies-by-connected-account",
+      "beeper-desktop-loopback-read-does-not-force-remote-history-sync",
+    ]);
+    expect(JSON.stringify(result.output)).not.toContain("fixture-secret");
+  });
+
+  test("forwards the optional query and exposes a replayable continuation", async () => {
+    const contactRequests: URL[] = [];
+    const result = await execute("contacts.list", {
+      account_id: "account-telegram",
+      query: "Ada Fixture",
+      limit: 2,
+    }, {
+      fetch: (input) => {
+        const url = String(input);
+        if (url.endsWith("/v1/info")) return Promise.resolve(jsonResponse(info()));
+        if (url.endsWith("/v1/accounts")) return Promise.resolve(jsonResponse(accounts));
+        const request = new URL(url);
+        contactRequests.push(request);
+        return Promise.resolve(jsonResponse({
+          items: [contact("ada-1"), contact("ada-2")],
+          hasMore: true,
+          oldestCursor: "opaque-before-ada-2",
+          newestCursor: "opaque-after-ada-1",
+        }));
+      },
+    }, 3);
+
+    expect(contactRequests).toHaveLength(1);
+    expect(contactRequests[0]?.searchParams.get("query")).toBe("Ada Fixture");
+    expect(contactRequests[0]?.searchParams.get("limit")).toBe("2");
+    const output = result.output as {
+      continuation: unknown;
+      completeness: {
+        continuationAvailable: boolean;
+        localPageComplete: boolean;
+        warnings: readonly string[];
+      };
+      projection: string;
+    };
+    expect(output.projection).toBe("bounded-local-desktop-provider-filtered-candidates");
+    expect(output.continuation).toEqual({
+      direction: "before",
+      cursor: "opaque-before-ada-2",
+    });
+    expect(output.completeness.continuationAvailable).toBeTrue();
+    expect(output.completeness.localPageComplete).toBeFalse();
+    expect(output.completeness.warnings).toContain(
+      "beeper-desktop-contact-list-query-is-provider-filtered-candidate-matching",
+    );
+  });
+
+  test("rejects an unbound account before the contacts request", async () => {
+    let contactRequests = 0;
+    const promise = execute("contacts.list", {
+      account_id: "account-outside",
+      limit: 20,
+    }, {
+      fetch: (input) => {
+        const url = String(input);
+        if (url.endsWith("/v1/info")) return Promise.resolve(jsonResponse(info()));
+        if (url.endsWith("/v1/accounts")) return Promise.resolve(jsonResponse(accounts));
+        contactRequests += 1;
+        return Promise.resolve(jsonResponse({
+          items: [],
+          hasMore: false,
+          oldestCursor: null,
+          newestCursor: null,
+        }));
+      },
+    }, 3);
+
+    await expect(promise).rejects.toThrow(
+      "Beeper local execution failed at a protected local boundary",
+    );
+    expect(contactRequests).toBe(0);
+  });
+
+  test("rejects a repeated contact identity across pages", async () => {
+    let contactRequests = 0;
+    const promise = execute("contacts.list", {
+      account_id: "account-telegram",
+      limit: 3,
+    }, {
+      fetch: (input) => {
+        const url = String(input);
+        if (url.endsWith("/v1/info")) return Promise.resolve(jsonResponse(info()));
+        if (url.endsWith("/v1/accounts")) return Promise.resolve(jsonResponse(accounts));
+        contactRequests += 1;
+        return Promise.resolve(jsonResponse(contactRequests === 1
+          ? {
+              items: [contact("ada-1")],
+              hasMore: true,
+              oldestCursor: "opaque-before-ada-1",
+              newestCursor: "opaque-after-ada-1",
+            }
+          : {
+              items: [contact("ada-1")],
+              hasMore: false,
+              oldestCursor: "opaque-before-repeat",
+              newestCursor: "opaque-after-repeat",
+            }));
+      },
+    }, 3);
+
+    await expect(promise).rejects.toThrow(
+      "Beeper local execution failed at a protected local boundary",
+    );
+    expect(contactRequests).toBe(2);
+  });
+
+  test("fails closed when the first provider page exceeds the no-skip bound", async () => {
+    const promise = execute("contacts.list", {
+      account_id: "account-telegram",
+      limit: 1,
+    }, {
+      fetch: (input) => {
+        const url = String(input);
+        if (url.endsWith("/v1/info")) return Promise.resolve(jsonResponse(info()));
+        if (url.endsWith("/v1/accounts")) return Promise.resolve(jsonResponse(accounts));
+        return Promise.resolve(jsonResponse({
+          items: [contact("ada-1"), contact("ada-2")],
+          hasMore: false,
+          oldestCursor: null,
+          newestCursor: null,
+        }));
+      },
+    }, 3);
+
+    await expect(promise).rejects.toThrow(
+      "Beeper local execution failed at a protected local boundary",
+    );
+  });
+
+  test("marks a blended limit stop as unreplayable continuation", async () => {
+    const result = await execute("contacts.list", {
+      limit: 1,
+    }, {
+      fetch: (input) => {
+        const url = String(input);
+        if (url.endsWith("/v1/info")) return Promise.resolve(jsonResponse(info()));
+        if (url.endsWith("/v1/accounts")) return Promise.resolve(jsonResponse(accounts));
+        return Promise.resolve(jsonResponse({
+          items: [contact("self-1", "account-self")],
+          hasMore: false,
+          oldestCursor: null,
+          newestCursor: null,
+        }));
+      },
+    }, 3);
+
+    const output = result.output as {
+      contacts: readonly unknown[];
+      continuation: unknown;
+      completeness: {
+        continuationAvailable: boolean;
+        localPageComplete: boolean;
+        warnings: readonly string[];
+      };
+    };
+    expect(output.contacts).toHaveLength(1);
+    expect(output.continuation).toBeNull();
+    expect(output.completeness.continuationAvailable).toBeTrue();
+    expect(output.completeness.localPageComplete).toBeFalse();
+    expect(output.completeness.warnings).toContain(
+      "beeper-desktop-blended-contact-list-has-no-replayable-continuation",
+    );
   });
 });

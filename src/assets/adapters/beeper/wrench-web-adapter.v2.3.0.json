@@ -1,7 +1,7 @@
 {
   "schemaVersion": 6,
   "id": "beeper-local",
-  "version": "2.4.0",
+  "version": "2.3.0",
   "displayName": "Beeper (Pinned Local CLI)",
   "surfaceId": "beeper",
   "origins": [
@@ -125,7 +125,7 @@
       }
     },
     "contacts.list": {
-      "description": "List one bounded account-aware contact projection through Desktop contact pages.",
+      "description": "List one bounded account-aware contact projection.",
       "risk": "R1",
       "sideEffect": "none",
       "idempotency": "none",
@@ -140,21 +140,9 @@
           },
           "query": {
             "type": "string",
-            "description": "Optional normalized provider contact-lookup query of at most 256 UTF-8 bytes",
+            "description": "Optional normalized provider-blended candidate query of at most 256 UTF-8 bytes",
             "minLength": 1,
             "maxLength": 256
-          },
-          "before_cursor": {
-            "type": "string",
-            "description": "Exact opaque provider cursor returned by a prior older-results page",
-            "minLength": 1,
-            "maxLength": 2048
-          },
-          "after_cursor": {
-            "type": "string",
-            "description": "Exact opaque provider cursor returned by a prior newer-results page",
-            "minLength": 1,
-            "maxLength": 2048
           },
           "limit": {
             "type": "number",
@@ -168,7 +156,7 @@
       "localCli": {
         "surface": "beeper",
         "action": "contacts.list",
-        "contractVersion": 3,
+        "contractVersion": 2,
         "timeoutMs": 120000,
         "maxOutputBytes": 10485760
       }

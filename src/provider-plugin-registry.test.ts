@@ -302,6 +302,8 @@ describe("provider plugin definition and registry", () => {
   test("retains Beeper reader identities only on the exact routes each distribution owned", () => {
     const plugin = providerPluginRegistry.get("beeper-linked-device");
     const binding = providerPluginRegistry.requireRoute("local-cli", "beeper");
+    const distribution23 =
+      "2d2cef38ce2d0c193f4e6890c51d59f8a3547d9011d5c3aa8df18f5f077ebcdd";
     const distribution22 =
       "e6d49d29ece94d3c9eb1817ea194699bbe56ecb1170e3691e0242e16ef2c26eb";
     const distribution21 =
@@ -310,8 +312,8 @@ describe("provider plugin definition and registry", () => {
       "1f5ed0abd4eaaef92e0d035452273e8a081f564da827897547b6e65939974a60";
     const distribution20 =
       "6b166b3cd61866e1af17d1d0fd2e63b78500f9e49255a03d89ca11ed6406ec92";
-    expect(plugin?.version).toBe("2.3.0");
-    expect(binding.operations).toHaveLength(40);
+    expect(plugin?.version).toBe("2.4.0");
+    expect(binding.operations).toHaveLength(41);
 
     const v1 = binding.operations.filter((operation) => operation.contractVersion === 1);
     const historicalDirectV2 = new Set([
@@ -322,14 +324,12 @@ describe("provider plugin definition and registry", () => {
       "messaging.content.search",
     ]);
     const newlyOwned = [
-      ["bridges.list", 2],
-      ["contacts.list", 2],
-      ["messaging.read", 3],
+      ["contacts.list", 3],
     ] as const;
     expect(v1).toHaveLength(32);
     const reviewedIdentity = reviewedBuiltInContractIdentity(
       "beeper-linked-device",
-      "2.3.0",
+      "2.4.0",
     );
     expect(reviewedIdentity.legacyCurrentReadImplementationSha256).toEqual([]);
     const v1Coordinates = v1.map((operation) => `${operation.name}@1`).sort();
@@ -347,12 +347,23 @@ describe("provider plugin definition and registry", () => {
     const bindingV1Coordinates = v1Coordinates
       .map((coordinate) => `local-cli:beeper/${coordinate}`)
       .sort();
+    const ownedBy23Coordinates = [
+      ...bindingV1Coordinates,
+      ...directV2Coordinates,
+      "local-cli:beeper/bridges.list@2",
+      "local-cli:beeper/contacts.list@2",
+      "local-cli:beeper/messaging.read@3",
+    ].sort();
     expect(reviewedIdentity.legacyDistributionReadImplementationSha256?.map(
       (distribution) => ({
         implementationSha256: distribution.implementationSha256,
         routes: [...distribution.routes].sort(),
       }),
     )).toEqual([
+      {
+        implementationSha256: distribution23,
+        routes: ownedBy23Coordinates,
+      },
       {
         implementationSha256: distribution22,
         routes: [...bindingV1Coordinates, ...directV2Coordinates].sort(),
@@ -370,6 +381,7 @@ describe("provider plugin definition and registry", () => {
         operation.name,
         1,
       ).map((hash) => hash.toString("hex"))).toEqual([
+        distribution23,
         distribution22,
         distribution21,
         distribution20Intermediate,
@@ -384,7 +396,18 @@ describe("provider plugin definition and registry", () => {
         binding,
         operation.name,
         2,
-      ).map((hash) => hash.toString("hex"))).toEqual([distribution22]);
+      ).map((hash) => hash.toString("hex"))).toEqual([distribution23, distribution22]);
+    }
+    for (const [operation, contractVersion] of [
+      ["bridges.list", 2],
+      ["contacts.list", 2],
+      ["messaging.read", 3],
+    ] as const) {
+      expect(providerPluginRegistry.legacyContractImplementationHashes(
+        binding,
+        operation,
+        contractVersion,
+      ).map((hash) => hash.toString("hex"))).toEqual([distribution23]);
     }
     for (const [operation, contractVersion] of newlyOwned) {
       expect(providerPluginRegistry.legacyContractImplementationHashes(

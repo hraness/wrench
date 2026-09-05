@@ -7,6 +7,24 @@ coordinate that completed both checks.
 
 ## Unreleased
 
+## 0.16.6 - 2026-09-05
+
+- Add Beeper `contacts.list@3` on beeper-linked-device 2.4.0 as a Desktop
+  loopback contract that walks `hasMore` and `oldestCursor` pages up to the
+  existing 200-item bound and returns an opaque continuation when more remain.
+  Keep contracts 1 and 2 on official CLI 0.6.2 with the first-page window.
+- Page a signed-in LinkedIn member's recent-activity feed through
+  `linkedin-web feeds.read@2` (`feed=profile-activity`) with durable URNs,
+  commentary, and engagement counts when LinkedIn supplies them. Keep the
+  home-feed reservation as archived `feeds.read@1`.
+- Add observed Reddit `flair.user.choices` and `flair.post.choices` reads
+  through the exact old-Reddit selector contract. Selection writes stay
+  `capture-required`.
+- Move Instagram authenticated-web profile statistics reads into a contained
+  browser session with fail-closed drift handling.
+- Align the public website with the shared Hraness footer and marketing
+  design contracts.
+
 ## 0.16.5 - 2026-09-04
 
 - Require the production-outcome job after either mutually exclusive ref path,

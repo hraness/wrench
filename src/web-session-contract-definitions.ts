@@ -414,7 +414,7 @@ const BEEPER_LOCAL_OPERATIONS = operationPolicies("beeper", [
   "messaging.search",
   "messaging.read",
 ], {
-  "contacts.list": 2,
+  "contacts.list": 3,
   "messaging.search": 2,
   "messaging.read": 3,
 });
