@@ -1,12 +1,9 @@
-name: Stage npm package
+name: Publish npm package
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - package.json
-  workflow_dispatch:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -16,154 +13,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  classify:
-    name: Classify staging request
-    permissions:
-      contents: read
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      should_stage: ${{ steps.request.outputs.should_stage }}
-      source_sha: ${{ steps.request.outputs.source_sha }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          ref: ${{ github.sha }}
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: "24"
-          package-manager-cache: false
-      - name: Classify event-source package
-        id: request
-        env:
-          BEFORE_SHA: ${{ github.event.before }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          git check-ref-format "refs/heads/$DEFAULT_BRANCH"
-          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
-            echo "::error::npm staging must run from $DEFAULT_BRANCH"
-            exit 1
-          fi
-          case "$GITHUB_EVENT_NAME" in
-            workflow_dispatch)
-              authority_output="$(node --experimental-strip-types \
-                ./scripts/release-ref-authority.ts stage-current "$GITHUB_SHA")"
-              authority=()
-              while IFS= read -r line; do authority+=("$line"); done < <(
-                printf '%s\n' "$authority_output"
-              )
-              if [[ ${#authority[@]} -ne 1 || ! "${authority[0]}" =~ ^source_sha=([a-f0-9]{40})$ ]]; then
-                echo "::error::Stage-source authority output is malformed"
-                exit 1
-              fi
-              source_sha="${BASH_REMATCH[1]}"
-              previous_sha=""
-              ;;
-            push)
-              authority_output="$(node --experimental-strip-types \
-                ./scripts/release-ref-authority.ts stage-push "$GITHUB_SHA" "$BEFORE_SHA")"
-              authority=()
-              while IFS= read -r line; do authority+=("$line"); done < <(
-                printf '%s\n' "$authority_output"
-              )
-              if [[ ${#authority[@]} -ne 2 || \
-                    ! "${authority[0]}" =~ ^source_sha=([a-f0-9]{40})$ ]]; then
-                echo "::error::Push staging authority output is malformed"
-                exit 1
-              fi
-              source_sha="${BASH_REMATCH[1]}"
-              if [[ ! "${authority[1]}" =~ ^previous_sha=([a-f0-9]{40})$ ]]; then
-                echo "::error::Push staging prior-source output is malformed"
-                exit 1
-              fi
-              previous_sha="${BASH_REMATCH[1]}"
-              ;;
-            *)
-              echo "::error::Unsupported npm staging event $GITHUB_EVENT_NAME"
-              exit 1
-              ;;
-          esac
-          if [[ "$GITHUB_SHA" != "$source_sha" ]]; then
-            echo "::error::npm staging event source does not match admitted commit $source_sha"
-            exit 1
-          fi
-
-          read_manifest_version() {
-            node -e '
-              const { readFileSync } = require("node:fs");
-              const value = JSON.parse(readFileSync(process.argv[1], "utf8"));
-              if (value === null || typeof value !== "object" || Array.isArray(value)) process.exit(1);
-              const { name, version } = value;
-              if (name !== "@hraness/wrench" || typeof version !== "string") process.exit(1);
-              if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u.test(version)) process.exit(1);
-              process.stdout.write(version);
-            ' "$1"
-          }
-
-          current_manifest="$RUNNER_TEMP/wrench-current-package.json"
-          git show "$source_sha:package.json" > "$current_manifest"
-          if ! current_version="$(read_manifest_version "$current_manifest")"; then
-            echo "::error::Current package manifest must name @hraness/wrench and use a stable semantic version"
-            exit 1
-          fi
-
-          should_stage=true
-          case "$GITHUB_EVENT_NAME" in
-            workflow_dispatch)
-              ;;
-            push)
-              previous_manifest="$RUNNER_TEMP/wrench-previous-package.json"
-              git show "$previous_sha:package.json" > "$previous_manifest"
-              if ! previous_version="$(read_manifest_version "$previous_manifest")"; then
-                echo "::error::Previous package manifest must name @hraness/wrench and use a stable semantic version"
-                exit 1
-              fi
-              if [[ "$current_version" == "$previous_version" ]]; then
-                should_stage=false
-                echo "::notice::package.json changed without a version change; npm staging is not required"
-              elif ! OLD_VERSION="$previous_version" NEW_VERSION="$current_version" node -e '
-                const parse = (value) => value.split(".").map(BigInt);
-                const oldVersion = parse(process.env.OLD_VERSION ?? "");
-                const newVersion = parse(process.env.NEW_VERSION ?? "");
-                for (let index = 0; index < 3; index += 1) {
-                  if (newVersion[index] === oldVersion[index]) continue;
-                  process.exit(newVersion[index] > oldVersion[index] ? 0 : 1);
-                }
-                process.exit(1);
-              '; then
-                echo "::error::Automatic npm staging requires a version newer than $previous_version, received $current_version"
-                exit 1
-              fi
-              ;;
-          esac
-
-          printf 'should_stage=%s\nsource_sha=%s\n' \
-            "$should_stage" "$source_sha" >> "$GITHUB_OUTPUT"
-
   verify:
-    name: Verify exact package
-    needs: classify
-    if: needs.classify.outputs.should_stage == 'true'
+    name: Verify exact tagged package
     permissions:
       contents: read
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
     outputs:
+      already_published: ${{ steps.registry.outputs.already_published }}
       artifact_name: ${{ steps.pack.outputs.artifact_name }}
-      package_version: ${{ steps.pack.outputs.version }}
+      channel: ${{ steps.identity.outputs.channel }}
+      package_version: ${{ steps.identity.outputs.version }}
       source_sha: ${{ steps.identity.outputs.source_sha }}
+      tag: ${{ steps.identity.outputs.tag }}
+      tag_object_sha: ${{ steps.identity.outputs.tag_object_sha }}
       tarball_name: ${{ steps.pack.outputs.tarball_name }}
     steps:
+      - name: Verify immutable owner tag request
+        env:
+          EVENT_ACTOR_ID: ${{ github.actor_id }}
+          EVENT_SENDER_ID: ${{ github.event.sender.id }}
+          EVENT_SENDER_TYPE: ${{ github.event.sender.type }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_ACTOR_ID" != "894119" || \
+                "$EVENT_SENDER_ID" != "894119" || \
+                "$EVENT_SENDER_TYPE" != "User" ]]; then
+            echo "::error::npm publication requires an immutable owner-created version tag"
+            exit 1
+          fi
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
-          ref: ${{ needs.classify.outputs.source_sha }}
+          ref: refs/tags/${{ github.ref_name }}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.3.14"
@@ -172,76 +56,74 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
-      - name: Verify admitted source and protected-main ancestry
+      - name: Verify owner-created protected tag source
         id: identity
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          EXPECTED_SOURCE_SHA: ${{ needs.classify.outputs.source_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_REF_NAME: ${{ github.ref_name }}
+          EVENT_REF_PROTECTED: ${{ github.ref_protected }}
+          EVENT_REF_TYPE: ${{ github.ref_type }}
+          EVENT_REPOSITORY: ${{ github.event.repository.full_name }}
+          EVENT_REPOSITORY_ID: ${{ github.repository_id }}
+          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+          EXPECTED_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
-            echo "::error::npm staging must run from $DEFAULT_BRANCH"
+          if [[ "$EVENT_NAME" != "push" || \
+                "$DEFAULT_BRANCH" != "main" || \
+                "$EVENT_REF_TYPE" != "tag" || \
+                "$EVENT_REF" != "refs/tags/$EVENT_REF_NAME" || \
+                "$EVENT_REF_PROTECTED" != "true" || \
+                "$EVENT_REPOSITORY" != "hraness/wrench" || \
+                "$EVENT_REPOSITORY_ID" != "1316443113" || \
+                ! "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::npm publication requires one exact protected version-tag push"
             exit 1
           fi
           authority_output="$(node --experimental-strip-types \
-            ./scripts/release-ref-authority.ts stage-current "$EXPECTED_SOURCE_SHA")"
+            ./scripts/release-ref-authority.ts package "$EXPECTED_TAG")"
           authority=()
           while IFS= read -r line; do authority+=("$line"); done < <(
             printf '%s\n' "$authority_output"
           )
-          if [[ ${#authority[@]} -ne 1 || \
-                ! "${authority[0]}" =~ ^source_sha=([a-f0-9]{40})$ ]]; then
-            echo "::error::Verified staging authority output is malformed"
+          if [[ ${#authority[@]} -ne 4 || \
+                "${authority[0]}" != "sha=$EXPECTED_SOURCE_SHA" || \
+                "${authority[1]}" != "tag=$EXPECTED_TAG" || \
+                ! "${authority[2]}" =~ ^main_sha=[0-9a-f]{40}$ || \
+                ! "${authority[3]}" =~ ^tag_object_sha=([0-9a-f]{40})$ ]]; then
+            echo "::error::Protected package-tag authority output is malformed"
             exit 1
           fi
-          source_sha="${BASH_REMATCH[1]}"
-          if [[ "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" || \
-                "$GITHUB_SHA" != "$source_sha" ]]; then
-            echo "::error::npm staging checkout does not match admitted source $source_sha"
+          tag_object_sha="${BASH_REMATCH[1]}"
+          package_name="$(node -p 'require("./package.json").name')"
+          package_version="$(node -p 'require("./package.json").version')"
+          if [[ "$package_name" != "@hraness/wrench" || "$EXPECTED_TAG" != "v$package_version" ]]; then
+            echo "::error::Authorized tag does not match the Wrench package coordinate"
             exit 1
           fi
-          printf 'source_sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+          channel="$(PACKAGE_VERSION="$package_version" node -e '
+            const identifier = String.raw`(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)`;
+            const pattern = new RegExp(String.raw`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(${identifier}(?:\.${identifier})*))?$`, "u");
+            const version = process.env.PACKAGE_VERSION ?? "";
+            const channel = version.includes("-") ? "beta" : "latest";
+            if (!pattern.test(version)) process.exit(1);
+            process.stdout.write(channel);
+          ')" || {
+            echo "::error::Tagged package version is invalid"
+            exit 1
+          }
+          printf 'channel=%s\nsource_sha=%s\ntag=%s\ntag_object_sha=%s\nversion=%s\n' \
+            "$channel" "$EXPECTED_SOURCE_SHA" "$EXPECTED_TAG" \
+            "$tag_object_sha" "$package_version" >> "$GITHUB_OUTPUT"
       - name: Pin npm
         run: |
           set -euo pipefail
           npm install --global npm@11.19.0 \
             --ignore-scripts \
             --registry=https://registry.npmjs.org
-          node --version
           test "$(npm --version)" = "11.19.0"
-      - name: Verify unpublished package identity
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          package_name="$(node -p 'require("./package.json").name')"
-          package_version="$(node -p 'require("./package.json").version')"
-          if [[ "$package_name" != "@hraness/wrench" ]]; then
-            echo "::error::Unexpected package name $package_name"
-            exit 1
-          fi
-          if [[ ! "$package_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "::error::Package version $package_version is not stable semantic version"
-            exit 1
-          fi
-          node --experimental-strip-types ./scripts/release-ref-authority.ts \
-            tag-absent "v$package_version" "$GITHUB_SHA" >/dev/null
-          if ! npm view "$package_name" name --json \
-            --registry=https://registry.npmjs.org >/dev/null; then
-            echo "::error::$package_name must be bootstrapped interactively before staged publishing can run"
-            exit 1
-          fi
-          version_error="$RUNNER_TEMP/npm-version-error.txt"
-          if npm view "$package_name@$package_version" version --json \
-            --registry=https://registry.npmjs.org >/dev/null 2>"$version_error"; then
-            echo "::error::$package_name@$package_version is already public"
-            exit 1
-          fi
-          if ! grep -q 'E404' "$version_error"; then
-            cat "$version_error"
-            echo "::error::Could not prove that $package_name@$package_version is unpublished"
-            exit 1
-          fi
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run check
       - name: Verify generated tree
@@ -254,6 +136,8 @@ jobs:
           fi
       - name: Pack and smoke one exact npm artifact
         id: pack
+        env:
+          EXPECTED_VERSION: ${{ steps.identity.outputs.version }}
         run: |
           set -euo pipefail
           artifact_directory="$RUNNER_TEMP/wrench-npm-package"
@@ -266,25 +150,49 @@ jobs:
             --pack-destination "$artifact_directory" \
             --registry=https://registry.npmjs.org > "$pack_json"
           tarball_name="$(node -e 'const fs = require("node:fs"); const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (!Array.isArray(value) || value.length !== 1 || typeof value[0].filename !== "string") process.exit(1); process.stdout.write(value[0].filename)' "$pack_json")"
-          version="$(node -e 'const fs = require("node:fs"); const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (!Array.isArray(value) || value.length !== 1 || typeof value[0].version !== "string") process.exit(1); process.stdout.write(value[0].version)' "$pack_json")"
           tarball="$artifact_directory/$tarball_name"
-          bun run ./scripts/package-smoke.ts \
-            --archive "$tarball" \
-            --pack-json "$pack_json"
+          if [[ "$tarball_name" != "hraness-wrench-$EXPECTED_VERSION.tgz" ]]; then
+            echo "::error::Packed tarball does not match the tagged package version"
+            exit 1
+          fi
+          bun run ./scripts/package-smoke.ts --archive "$tarball" --pack-json "$pack_json"
           sha256sum "$tarball" | awk '{ print $1 }' > "$sha256_file"
-          artifact_name="npm-package-$version-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          printf 'artifact_name=%s\ntarball_name=%s\nversion=%s\n' \
-            "$artifact_name" "$tarball_name" "$version" >> "$GITHUB_OUTPUT"
+          artifact_name="npm-package-$EXPECTED_VERSION-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          printf 'artifact_name=%s\ntarball_name=%s\n' "$artifact_name" "$tarball_name" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: ${{ steps.pack.outputs.artifact_name }}
           path: ${{ runner.temp }}/wrench-npm-package
           if-no-files-found: error
           retention-days: 30
+      - name: Classify public registry coordinate
+        id: registry
+        env:
+          EXPECTED_VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          error_file="$RUNNER_TEMP/npm-version-error.txt"
+          if public_version="$(npm view "@hraness/wrench@$EXPECTED_VERSION" version --json \
+            --registry=https://registry.npmjs.org 2>"$error_file")"; then
+            EXPECTED_VERSION="$EXPECTED_VERSION" PUBLIC_VERSION="$public_version" node -e '
+              const value = JSON.parse(process.env.PUBLIC_VERSION ?? "null");
+              if (value !== process.env.EXPECTED_VERSION) process.exit(1);
+            '
+            already_published=true
+          else
+            if ! grep -q 'E404' "$error_file"; then
+              cat "$error_file"
+              echo "::error::Could not classify @hraness/wrench@$EXPECTED_VERSION"
+              exit 1
+            fi
+            already_published=false
+          fi
+          printf 'already_published=%s\n' "$already_published" >> "$GITHUB_OUTPUT"
 
   stage:
-    name: Stage exact package
+    name: Publish exact package
     needs: verify
+    if: needs.verify.outputs.already_published != 'true'
     permissions:
       contents: read
       id-token: write
@@ -292,6 +200,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Revalidate immutable owner tag request
+        env:
+          EVENT_ACTOR_ID: ${{ github.actor_id }}
+          EVENT_SENDER_ID: ${{ github.event.sender.id }}
+          EVENT_SENDER_TYPE: ${{ github.event.sender.type }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_ACTOR_ID" != "894119" || \
+                "$EVENT_SENDER_ID" != "894119" || \
+                "$EVENT_SENDER_TYPE" != "User" ]]; then
+            echo "::error::Terminal npm publication lost its immutable owner authority"
+            exit 1
+          fi
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
@@ -304,200 +225,230 @@ jobs:
             --ignore-scripts \
             --registry=https://registry.npmjs.org
           test "$(npm --version)" = "11.19.0"
-      - name: Bind verified artifact identity
-        id: package_identity
-        env:
-          EXPECTED_ARTIFACT_NAME: ${{ needs.verify.outputs.artifact_name }}
-          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
-          EXPECTED_TARBALL_NAME: ${{ needs.verify.outputs.tarball_name }}
-          EXPECTED_VERSION: ${{ needs.verify.outputs.package_version }}
-        run: |
-          set -euo pipefail
-          if [[ ! "$EXPECTED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "::error::Verified package version is not stable semantic version"
-            exit 1
-          fi
-          if [[ ! "$EXPECTED_SOURCE_SHA" =~ ^[a-f0-9]{40}$ || "$EXPECTED_SOURCE_SHA" != "$GITHUB_SHA" ]]; then
-            echo "::error::Verified source SHA does not match this workflow revision"
-            exit 1
-          fi
-          if [[ ! "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ || ! "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::GitHub run identity is invalid"
-            exit 1
-          fi
-          tarball_name="hraness-wrench-$EXPECTED_VERSION.tgz"
-          if [[ "$EXPECTED_TARBALL_NAME" != "$tarball_name" ]]; then
-            echo "::error::Verified tarball name does not match the package version"
-            exit 1
-          fi
-          artifact_name="npm-package-$EXPECTED_VERSION-$EXPECTED_SOURCE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          if [[ "$EXPECTED_ARTIFACT_NAME" != "$artifact_name" ]]; then
-            echo "::error::Verified artifact name does not match this workflow run"
-            exit 1
-          fi
-          printf 'artifact_name=%s\ntarball_name=%s\nversion=%s\nsource_sha=%s\n' \
-            "$artifact_name" "$tarball_name" "$EXPECTED_VERSION" "$EXPECTED_SOURCE_SHA" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: ${{ steps.package_identity.outputs.artifact_name }}
+          name: ${{ needs.verify.outputs.artifact_name }}
           path: ${{ runner.temp }}/wrench-npm-package
-      - name: Bind downloaded artifact
-        id: artifact
+      - name: Revalidate protected tag and publish exact package
         env:
-          EXPECTED_TARBALL_NAME: ${{ steps.package_identity.outputs.tarball_name }}
-          EXPECTED_VERSION: ${{ steps.package_identity.outputs.version }}
+          EVENT_ACTOR_ID: ${{ github.actor_id }}
+          EVENT_SENDER_ID: ${{ github.event.sender.id }}
+          EVENT_SENDER_TYPE: ${{ github.event.sender.type }}
+          EXPECTED_ARTIFACT_NAME: ${{ needs.verify.outputs.artifact_name }}
+          EXPECTED_CHANNEL: ${{ needs.verify.outputs.channel }}
+          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          EXPECTED_TAG: ${{ needs.verify.outputs.tag }}
+          EXPECTED_TAG_OBJECT_SHA: ${{ needs.verify.outputs.tag_object_sha }}
+          EXPECTED_TARBALL_NAME: ${{ needs.verify.outputs.tarball_name }}
+          EXPECTED_VERSION: ${{ needs.verify.outputs.package_version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if [[ "$EVENT_ACTOR_ID" != "894119" || \
+                "$EVENT_SENDER_ID" != "894119" || \
+                "$EVENT_SENDER_TYPE" != "User" || \
+                "$GITHUB_REPOSITORY" != "hraness/wrench" || \
+                "$GITHUB_REF" != "refs/tags/$EXPECTED_TAG" || \
+                "$GITHUB_REF_PROTECTED" != "true" || \
+                "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" || \
+                ! "$EXPECTED_TAG_OBJECT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Terminal npm publication lost its immutable owner or protected tag authority"
+            exit 1
+          fi
           artifact_directory="$RUNNER_TEMP/wrench-npm-package"
+          tarball="$artifact_directory/$EXPECTED_TARBALL_NAME"
           pack_json="$artifact_directory/npm-pack.json"
           sha256_file="$artifact_directory/npm-package.sha256"
-          tarball="$artifact_directory/$EXPECTED_TARBALL_NAME"
-          mapfile -d '' artifact_entries < <(find "$artifact_directory" -mindepth 1 -maxdepth 1 -print0 | sort -z)
-          if [[ ${#artifact_entries[@]} -ne 3 ]]; then
-            echo "::error::Downloaded npm artifact must contain exactly the tarball, npm-pack.json, and npm-package.sha256"
+          if [[ ! -f "$tarball" || -L "$tarball" || ! -f "$pack_json" || -L "$pack_json" || ! -f "$sha256_file" || -L "$sha256_file" ]]; then
+            echo "::error::Terminal npm artifact is missing or unsafe"
             exit 1
           fi
-          for required_file in "$pack_json" "$sha256_file" "$tarball"; do
-            if [[ ! -f "$required_file" || -L "$required_file" ]]; then
-              echo "::error::Downloaded npm artifact contains an unsafe or unexpected entry"
-              exit 1
-            fi
-          done
-          PACK_JSON="$pack_json" TARBALL="$tarball" \
-            EXPECTED_TARBALL_NAME="$EXPECTED_TARBALL_NAME" \
-            EXPECTED_VERSION="$EXPECTED_VERSION" node <<'NODE'
-          const fs = require("node:fs");
-          const crypto = require("node:crypto");
-          const value = JSON.parse(fs.readFileSync(process.env.PACK_JSON, "utf8"));
-          if (!Array.isArray(value) || value.length !== 1) throw new Error("npm-pack.json must contain exactly one package");
-          const record = value[0];
-          if (record?.name !== "@hraness/wrench") throw new Error("npm-pack.json has the wrong package name");
-          if (record?.version !== process.env.EXPECTED_VERSION) throw new Error("npm-pack.json has the wrong package version");
-          if (record?.filename !== process.env.EXPECTED_TARBALL_NAME) throw new Error("npm-pack.json has the wrong tarball name");
-          if (!/^hraness-wrench-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.tgz$/u.test(record.filename)) throw new Error("npm-pack.json has an unsafe tarball name");
-          for (const field of ["entryCount", "size", "unpackedSize"]) {
-            if (!Number.isSafeInteger(record[field]) || record[field] < 0) throw new Error(`npm-pack.json has invalid ${field}`);
-          }
-          if (!Array.isArray(record.files) || record.files.length !== record.entryCount) throw new Error("npm-pack.json has an invalid file inventory");
-          const bytes = fs.readFileSync(process.env.TARBALL);
-          if (bytes.byteLength !== record.size) throw new Error("Downloaded tarball size differs from npm-pack.json");
-          const integrity = `sha512-${crypto.createHash("sha512").update(bytes).digest("base64")}`;
-          const shasum = crypto.createHash("sha1").update(bytes).digest("hex");
-          if (record.integrity !== integrity || record.shasum !== shasum) throw new Error("Downloaded tarball digest differs from npm-pack.json");
-          NODE
           expected_sha256="$(tr -d '\n' < "$sha256_file")"
-          if [[ ! "$expected_sha256" =~ ^[a-f0-9]{64}$ ]]; then
-            echo "::error::Downloaded npm-package.sha256 is invalid"
-            exit 1
-          fi
           actual_sha256="$(sha256sum "$tarball" | awk '{ print $1 }')"
-          if [[ "$actual_sha256" != "$expected_sha256" ]]; then
-            echo "::error::Downloaded tarball does not match the verified SHA-256"
+          if [[ ! "$expected_sha256" =~ ^[0-9a-f]{64}$ || "$actual_sha256" != "$expected_sha256" ]]; then
+            echo "::error::Terminal npm artifact differs from its verified digest"
             exit 1
           fi
-          printf 'sha256=%s\ntarball=%s\n' "$actual_sha256" "$tarball" >> "$GITHUB_OUTPUT"
-      - name: Revalidate protected-main ancestry and stage exact package
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          EXPECTED_SOURCE_SHA: ${{ steps.package_identity.outputs.source_sha }}
-          EXPECTED_TARBALL_SHA256: ${{ steps.artifact.outputs.sha256 }}
-          EXPECTED_VERSION: ${{ steps.package_identity.outputs.version }}
-          GH_TOKEN: ${{ github.token }}
-          TARBALL: ${{ steps.artifact.outputs.tarball }}
-        run: |
-          set -euo pipefail
-          if [[ "$GITHUB_REPOSITORY" != "hraness/wrench" || "$DEFAULT_BRANCH" != "main" ]]; then
-            echo "::error::Terminal staging must run in the Wrench protected-main context"
+          repository_url=https://github.com/hraness/wrench.git
+          export GIT_ASKPASS=/bin/false
+          export GIT_TERMINAL_PROMPT=0
+          export SSH_ASKPASS=/bin/false
+          git_readonly() {
+            git -c core.hooksPath=/dev/null \
+              -c credential.helper= \
+              -c credential.interactive=never "$@"
+          }
+          if [[ "$(git_readonly ls-remote --get-url "$repository_url")" != "$repository_url" ]]; then
+            echo "::error::Git URL rewriting changed the exact Wrench repository endpoint"
             exit 1
           fi
-          repository_url="https://github.com/hraness/wrench.git"
-          if [[ "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" ]]; then
-            echo "::error::Verified workflow source moved before staging"
-            exit 1
-          fi
-          current_tarball_sha256="$(sha256sum "$TARBALL" | awk '{ print $1 }')"
-          if [[ "$current_tarball_sha256" != "$EXPECTED_TARBALL_SHA256" ]]; then
-            echo "::error::Downloaded tarball changed after current-$DEFAULT_BRANCH verification"
-            exit 1
-          fi
-          git ls-remote --sort=refname --refs "$repository_url" \
-            "refs/heads/main" "refs/tags/v$EXPECTED_VERSION" \
-            > "$RUNNER_TEMP/governed-1.refs"
-          advertised_main="$(EXPECTED_TAG="v$EXPECTED_VERSION" \
-            SNAPSHOT="$RUNNER_TEMP/governed-1.refs" \
-            node --input-type=module <<'NODE'
-          import { readFileSync } from "node:fs";
+          git_readonly ls-remote --sort=refname --refs "$repository_url" \
+            refs/heads/main "refs/tags/$EXPECTED_TAG" > "$RUNNER_TEMP/governed-1.refs"
+          parse_snapshot() {
+            SNAPSHOT="$1" EXPECTED_TAG="$EXPECTED_TAG" \
+              EXPECTED_TAG_OBJECT_SHA="$EXPECTED_TAG_OBJECT_SHA" node <<'NODE'
+          const fs = require("node:fs");
           const sha = /^[0-9a-f]{40}$/u;
-          const stableTag = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u;
-          const expectedTag = process.env.EXPECTED_TAG ?? "";
-          if (!stableTag.test(expectedTag)) {
-            throw new Error("Terminal staging coordinates are malformed");
-          }
-          const path = process.env.SNAPSHOT;
-          if (typeof path !== "string" || path.length === 0) {
-            throw new Error("Terminal staging ref snapshot is missing");
-          }
-          const value = readFileSync(path);
-          const rows = value.reduce(
-            (count, byte) => count + (byte === 0x0a ? 1 : 0),
-            0,
-          );
-          if (value.byteLength > 64 * 1024 || rows > 500) {
-            throw new Error("Terminal staging ref snapshot exceeds its fixed bounds");
-          }
-          const snapshot = new TextDecoder("utf-8", { fatal: true }).decode(value);
-          if (snapshot.includes("\0") || snapshot.includes("\r")) {
-            throw new Error("Terminal staging ref snapshot is not canonical");
-          }
-          const expectedTagRowSuffix = `\trefs/tags/${expectedTag}`;
-          if (snapshot.split("\n").some((row) => row.endsWith(expectedTagRowSuffix))) {
-            throw new Error(`Tag ${expectedTag} exists at the terminal staging boundary`);
-          }
-          const match = /^([0-9a-f]{40})\trefs\/heads\/main\n$/u.exec(snapshot);
-          if (match?.[1] === undefined || !sha.test(match[1])) {
-            throw new Error("main or exact-tag authority is malformed at the terminal staging boundary");
-          }
+          const bytes = fs.readFileSync(process.env.SNAPSHOT);
+          if (bytes.byteLength > 65536) throw new Error("governed ref snapshot exceeds its byte bound");
+          const value = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+          const match = new RegExp(`^([0-9a-f]{40})\\trefs/heads/main\\n([0-9a-f]{40})\\trefs/tags/${process.env.EXPECTED_TAG}\\n$`, "u").exec(value);
+          if (match?.[1] === undefined || !sha.test(match[1]) || match[2] !== process.env.EXPECTED_TAG_OBJECT_SHA) throw new Error("governed main/tag snapshot is malformed");
           process.stdout.write(match[1]);
           NODE
-          )"
-          if [[ "$advertised_main" != "$EXPECTED_SOURCE_SHA" ]]; then
-            comparison="$(gh api \
-              "/repos/$GITHUB_REPOSITORY/compare/$EXPECTED_SOURCE_SHA...$advertised_main" \
-              --jq '[.status, .ahead_by, .behind_by, .base_commit.sha, .merge_base_commit.sha, .commits[-1].sha] | @tsv')"
-            EXPECTED_ANCESTOR="$EXPECTED_SOURCE_SHA" \
-              EXPECTED_DESCENDANT="$advertised_main" COMPARISON="$comparison" \
-              node --input-type=module <<'NODE'
-            const sha = /^[0-9a-f]{40}$/u;
-            const ancestor = process.env.EXPECTED_ANCESTOR ?? "";
-            const descendant = process.env.EXPECTED_DESCENDANT ?? "";
-            const fields = (process.env.COMPARISON ?? "").split("\t");
-            if (!sha.test(ancestor) || !sha.test(descendant) || fields.length !== 6) {
-              throw new Error("Terminal staging ancestry response is malformed");
-            }
-            const [status, ahead, behind, base, mergeBase, terminal] = fields;
-            if (
-              status !== "ahead" ||
-              !/^[1-9][0-9]*$/u.test(ahead ?? "") ||
-              !Number.isSafeInteger(Number(ahead)) ||
-              behind !== "0" ||
-              base !== ancestor ||
-              mergeBase !== ancestor ||
-              terminal !== descendant
-            ) {
-              throw new Error("Terminal staging source is not an ancestor of protected main");
-            }
-          NODE
-          fi
-          git ls-remote --sort=refname --refs "$repository_url" \
-            "refs/heads/main" "refs/tags/v$EXPECTED_VERSION" \
-            > "$RUNNER_TEMP/governed-2.refs"
-          if ! cmp --silent \
-            "$RUNNER_TEMP/governed-1.refs" "$RUNNER_TEMP/governed-2.refs"; then
-            echo "::error::Governed refs changed between terminal staging advertisements"
+          }
+          advertised_main="$(parse_snapshot "$RUNNER_TEMP/governed-1.refs")"
+          peeled_tag_sha="$(gh api "/repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$EXPECTED_TAG" --jq '.sha')"
+          if [[ "$peeled_tag_sha" != "$EXPECTED_SOURCE_SHA" ]]; then
+            echo "::error::Annotated package tag no longer peels to its authorized source"
             exit 1
           fi
-          npm stage publish "$TARBALL" \
+          if [[ "$advertised_main" != "$EXPECTED_SOURCE_SHA" ]]; then
+            comparison="$(gh api "/repos/$GITHUB_REPOSITORY/compare/$EXPECTED_SOURCE_SHA...$advertised_main" --jq '[.status, .behind_by, .base_commit.sha, .merge_base_commit.sha, .commits[-1].sha] | @tsv')"
+            EXPECTED_SOURCE_SHA="$EXPECTED_SOURCE_SHA" ADVERTISED_MAIN="$advertised_main" \
+              COMPARISON="$comparison" node -e '
+                const fields = (process.env.COMPARISON ?? "").split("\t");
+                if (fields.length !== 5 || fields[0] !== "ahead" || fields[1] !== "0" || fields[2] !== process.env.EXPECTED_SOURCE_SHA || fields[3] !== process.env.EXPECTED_SOURCE_SHA || fields[4] !== process.env.ADVERTISED_MAIN) process.exit(1);
+              '
+          fi
+          authority_directory="$RUNNER_TEMP/wrench-npm-publication-authority"
+          git_readonly init --bare "$authority_directory"
+          git_readonly -C "$authority_directory" fetch \
+            --depth=1 \
+            --no-tags \
+            --no-write-fetch-head \
+            --no-recurse-submodules \
+            "$repository_url" \
+            "refs/heads/main:refs/wrench-release/publication-main" \
+            "refs/tags/$EXPECTED_TAG:refs/wrench-release/publication-tag"
+          imported_main="$(git_readonly -C "$authority_directory" rev-parse \
+            --verify 'refs/wrench-release/publication-main^{commit}')"
+          imported_tag_object="$(git_readonly -C "$authority_directory" rev-parse \
+            --verify refs/wrench-release/publication-tag)"
+          imported_tag_commit="$(git_readonly -C "$authority_directory" rev-parse \
+            --verify 'refs/wrench-release/publication-tag^{commit}')"
+          if [[ "$imported_main" != "$advertised_main" || \
+                "$imported_tag_object" != "$EXPECTED_TAG_OBJECT_SHA" || \
+                "$imported_tag_commit" != "$EXPECTED_SOURCE_SHA" ]]; then
+            echo "::error::Imported terminal release authority does not match the governed refs"
+            exit 1
+          fi
+          if ! git_readonly -C "$authority_directory" diff \
+            --quiet \
+            --no-ext-diff \
+            --no-textconv \
+            "$imported_tag_commit" \
+            "$imported_main" \
+            -- \
+            .github/workflows \
+            scripts/request-package-release.ts \
+            scripts/release-ref-authority.ts \
+            scripts/release-provider-outcome.mjs \
+            scripts/release-app-token.mjs \
+            scripts/release-ref-writer.mjs; then
+            echo "::error::Release-control definitions changed before terminal npm publication"
+            exit 1
+          fi
+          git_readonly ls-remote --sort=refname --refs "$repository_url" \
+            refs/heads/main "refs/tags/$EXPECTED_TAG" > "$RUNNER_TEMP/governed-2.refs"
+          if ! cmp --silent "$RUNNER_TEMP/governed-1.refs" "$RUNNER_TEMP/governed-2.refs"; then
+            echo "::error::Governed main or package tag moved at the publication boundary"
+            exit 1
+          fi
+          test "$(parse_snapshot "$RUNNER_TEMP/governed-2.refs")" = "$advertised_main"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$EXPECTED_TAG" --jq '.sha')" = "$EXPECTED_SOURCE_SHA"
+          npm publish "$tarball" \
             --access public \
             --ignore-scripts \
             --provenance \
+            --tag "$EXPECTED_CHANNEL" \
             --registry=https://registry.npmjs.org
+
+  readback:
+    name: Verify public package
+    needs: [verify, stage]
+    if: ${{ always() && needs.verify.result == 'success' && (needs.stage.result == 'success' || needs.stage.result == 'skipped') }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+      - name: Pin npm
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.19.0 \
+            --ignore-scripts \
+            --registry=https://registry.npmjs.org
+          test "$(npm --version)" = "11.19.0"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: ${{ needs.verify.outputs.artifact_name }}
+          path: ${{ runner.temp }}/wrench-npm-package
+      - name: Compare public package with verified artifact
+        env:
+          EXPECTED_CHANNEL: ${{ needs.verify.outputs.channel }}
+          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          EXPECTED_TAG: ${{ needs.verify.outputs.tag }}
+          EXPECTED_TARBALL_NAME: ${{ needs.verify.outputs.tarball_name }}
+          EXPECTED_VERSION: ${{ needs.verify.outputs.package_version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/tags/$EXPECTED_TAG" || \
+                "$GITHUB_REF_PROTECTED" != "true" || \
+                "$GITHUB_SHA" != "$EXPECTED_SOURCE_SHA" ]]; then
+            echo "::error::Public-package readback lost its protected tag authority"
+            exit 1
+          fi
+          source_directory="$RUNNER_TEMP/wrench-npm-package"
+          source_archive="$source_directory/$EXPECTED_TARBALL_NAME"
+          source_json="$source_directory/npm-pack.json"
+          source_sha256="$source_directory/npm-package.sha256"
+          expected_sha256="$(tr -d '\n' < "$source_sha256")"
+          actual_sha256="$(sha256sum "$source_archive" | awk '{ print $1 }')"
+          if [[ ! "$expected_sha256" =~ ^[0-9a-f]{64}$ || "$actual_sha256" != "$expected_sha256" ]]; then
+            echo "::error::Verified artifact changed before registry readback"
+            exit 1
+          fi
+          registry_directory="$RUNNER_TEMP/wrench-registry-package"
+          registry_json="$registry_directory/npm-pack.json"
+          registry_view_json="$registry_directory/npm-view.json"
+          registry_tags_json="$registry_directory/npm-dist-tags.json"
+          mkdir -p "$registry_directory"
+          npm pack "@hraness/wrench@$EXPECTED_VERSION" \
+            --ignore-scripts \
+            --json \
+            --pack-destination "$registry_directory" \
+            --registry=https://registry.npmjs.org > "$registry_json"
+          npm view "@hraness/wrench@$EXPECTED_VERSION" name version dist \
+            --json \
+            --registry=https://registry.npmjs.org > "$registry_view_json"
+          npm view @hraness/wrench dist-tags \
+            --json \
+            --registry=https://registry.npmjs.org > "$registry_tags_json"
+          EXPECTED_CHANNEL="$EXPECTED_CHANNEL" EXPECTED_VERSION="$EXPECTED_VERSION" \
+            TAGS_JSON="$registry_tags_json" node -e '
+              const fs = require("node:fs");
+              const value = JSON.parse(fs.readFileSync(process.env.TAGS_JSON, "utf8"));
+              if (value?.[process.env.EXPECTED_CHANNEL] !== process.env.EXPECTED_VERSION) process.exit(1);
+            '
+          bun run ./scripts/npm-package-identity.ts \
+            --source-archive "$source_archive" \
+            --source-pack-json "$source_json" \
+            --registry-archive "$registry_directory/$EXPECTED_TARBALL_NAME" \
+            --registry-pack-json "$registry_json" \
+            --registry-view-json "$registry_view_json" \
+            --expected-name @hraness/wrench \
+            --expected-version "$EXPECTED_VERSION"
+          bun run ./scripts/package-smoke.ts \
+            --archive "$registry_directory/$EXPECTED_TARBALL_NAME" \
+            --pack-json "$registry_json"
+          test "$(gh api "/repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$EXPECTED_TAG" --jq '.sha')" = "$EXPECTED_SOURCE_SHA"

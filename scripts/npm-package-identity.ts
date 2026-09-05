@@ -9,7 +9,11 @@ import {
 } from "./package-artifact.js";
 
 const npmRegistry = "https://registry.npmjs.org";
-const stableVersionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u;
+const prereleaseIdentifier = String.raw`(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)`;
+const packageVersionPattern = new RegExp(
+  String.raw`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(${prereleaseIdentifier}(?:\.${prereleaseIdentifier})*))?$`,
+  "u",
+);
 
 type NpmPackFile = Readonly<{
   mode: number;
@@ -110,8 +114,8 @@ function expectedFilename(name: string, version: string): string {
   if (name !== "@hraness/wrench") {
     throw new Error(`Expected package name must be @hraness/wrench, received ${name}`);
   }
-  if (!stableVersionPattern.test(version)) {
-    throw new Error(`Expected package version is not stable semantic version: ${version}`);
+  if (!packageVersionPattern.test(version)) {
+    throw new Error(`Expected package version is not semantic version without build metadata: ${version}`);
   }
   return `hraness-wrench-${version}.tgz`;
 }
@@ -233,7 +237,7 @@ async function verifyPackArtifact(
     || identity.id !== `${expectedName}@${expectedVersion}`
     || identity.version !== expectedVersion
     || identity.filename !== filename
-    || !/^hraness-wrench-(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.tgz$/u.test(identity.filename)
+    || !packageVersionPattern.test(identity.version)
   ) {
     throw new Error(`${label} npm pack identity does not match ${expectedName}@${expectedVersion}`);
   }
