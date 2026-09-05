@@ -207,6 +207,8 @@ describe("Reddit internal-web operation registry", () => {
       "comments.read",
       "content.delete",
       "feeds.read",
+      "flair.post.choices",
+      "flair.user.choices",
       "media.publish",
       "media.read",
       "messaging.list",
@@ -326,6 +328,41 @@ describe("Reddit exact request authorization", () => {
     expect(JSON.stringify(save)).not.toContain(MODHASH);
   });
 
+  test("binds exact user and new-post flair selector forms without exposing credentials", () => {
+    const user = authorizeRedditWebRequest({
+      operation: "flair.user.choices",
+      url: "https://old.reddit.com/api/flairselector",
+      method: "POST",
+      body: new URLSearchParams({
+        name: "viewer",
+        r: "Python",
+        uh: MODHASH,
+      }).toString(),
+      community: "Python",
+      username: "viewer",
+    });
+    expect(user).toEqual({
+      operation: "flair.user.choices",
+      method: "POST",
+      path: "/api/flairselector",
+      queryNames: [],
+      formNames: ["name", "r", "uh"],
+    });
+    const post = authorizeRedditWebRequest({
+      operation: "flair.post.choices",
+      url: "https://old.reddit.com/api/flairselector",
+      method: "POST",
+      body: new URLSearchParams({
+        is_newlink: "true",
+        r: "Python",
+        uh: MODHASH,
+      }).toString(),
+      community: "Python",
+    });
+    expect(post.formNames).toEqual(["is_newlink", "r", "uh"]);
+    expect(JSON.stringify({ user, post })).not.toContain(MODHASH);
+  });
+
   test("binds exact Reddit video lease, submit, and authored-delete forms", () => {
     const lease = new URLSearchParams({
       filepath: "wrench-video.mp4",
@@ -436,6 +473,30 @@ describe("Reddit exact request authorization", () => {
         body: new URLSearchParams({ id: POST_ID, uh: MODHASH, category: "extra" }).toString(),
         targetId: POST_ID,
         saved: true,
+      },
+      {
+        operation: "flair.user.choices",
+        url: "https://old.reddit.com/api/flairselector",
+        method: "POST",
+        body: new URLSearchParams({
+          name: "another_viewer",
+          r: "Python",
+          uh: MODHASH,
+        }).toString(),
+        community: "Python",
+        username: "viewer",
+      },
+      {
+        operation: "flair.post.choices",
+        url: "https://old.reddit.com/api/flairselector",
+        method: "POST",
+        body: new URLSearchParams({
+          is_newlink: "true",
+          link: POST_ID,
+          r: "Python",
+          uh: MODHASH,
+        }).toString(),
+        community: "Python",
       },
     ];
     for (const candidate of candidates) {

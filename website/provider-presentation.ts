@@ -170,6 +170,7 @@ function capabilityLabel(operation: string): string {
     case "content": return "Content";
     case "conversations": return "Conversations";
     case "feeds": return "Feeds";
+    case "flair": return "Flair";
     case "likes": return "Likes";
     case "listings": return "Listings";
     case "media": return "Media";
@@ -484,6 +485,8 @@ const operationTitleOverrides: Readonly<Record<string, string>> = Object.freeze(
   "conversations.reminder.set": "Update conversation reminder",
   "conversations.start": "Start conversation",
   "conversations.title.set": "Update conversation title",
+  "flair.post.choices": "Read post flair choices",
+  "flair.user.choices": "Read user flair choices",
   "messaging.content.search": "Search message content",
   "messaging.context.read": "Read message context",
   "messaging.edit": "Edit message",

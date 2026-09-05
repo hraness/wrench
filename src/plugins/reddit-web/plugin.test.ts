@@ -19,7 +19,7 @@ const auth = {
 
 describe("Reddit provider plugin", () => {
   test("keeps the broad media reservation inert beside metadata-only hosted-video reads", () => {
-    expect(redditWebPlugin.version).toBe("1.3.0");
+    expect(redditWebPlugin.version).toBe("1.4.0");
     const reads = binding.operations.filter((operation) =>
       operation.name === "media.read");
     expect(reads.map((operation) => operation.contractVersion)).toEqual([1, 2]);

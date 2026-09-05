@@ -17,6 +17,7 @@ import archivedRedditWebManifestV1_8 from "../../assets/adapters/reddit/wrench-w
 import archivedRedditWebManifestV1_9 from "../../assets/adapters/reddit/wrench-web-adapter.v1.9.0.json";
 import archivedRedditWebMediaReadV1Manifest from "../../assets/adapters/reddit/wrench-web-adapter.v1.10.0.json";
 import type { OperationInput } from "../../model";
+import { isRedditFlairOperation, parseRedditFlairInput } from "./flair";
 import {
   planWebSessionContractDispatches,
   reviewedArchivedWebSessionContract,
@@ -34,7 +35,7 @@ if (redditContracts === undefined) {
 
 const currentOperations = webSessionContractOperations(
   Object.values(redditContracts),
-  "aadd0505f22d3952968baaf84377911f46921f3b03fc6a05254b88642cfa81ab",
+  "468b6032e209bcf128279c891f40d2232d6147c3fc5e14abd39c65f919fd337e",
   {},
   {
     "messaging.list": {
@@ -53,6 +54,20 @@ const currentOperations = webSessionContractOperations(
     },
   },
 ).map((operation) => {
+  if (isRedditFlairOperation(operation.name)) {
+    const name = operation.name;
+    return Object.freeze({
+      ...operation,
+      validateInput: (input: OperationInput): readonly string[] => {
+        try {
+          parseRedditFlairInput(name, input);
+          return [];
+        } catch (error) {
+          return [error instanceof Error ? error.message : "Invalid Reddit flair input"];
+        }
+      },
+    });
+  }
   if (operation.name === "media.publish") {
     return Object.freeze({
       ...operation,
@@ -383,7 +398,7 @@ const operations = Object.freeze([
 export const redditWebPlugin = defineProviderPlugin({
   apiVersion: 1,
   id: "reddit-web",
-  version: "1.3.0",
+  version: "1.4.0",
   displayName: "Reddit Authenticated Web",
   sourceKind: "built-in",
   implementationSources: webImplementationSources(import.meta.url, [

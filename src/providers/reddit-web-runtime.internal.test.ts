@@ -25,6 +25,29 @@ const COMMENT_ID = "t1_def456";
 const MESSAGE_ID = "t4_msg123";
 const FIRST_MODHASH = "first-synthetic-modhash";
 
+test("unobserved flair selections fail before cookies, network, or dispatch", async () => {
+  for (const action of ["flair.user.select", "flair.post.select"] as const) {
+    let acquired = false;
+    let dispatched = false;
+    const calls: CapturedRequest[] = [];
+    await expect(executeRedditWebOperation({
+      site: "reddit", action, contractVersion: 1,
+      timeoutMs: 60_000, maxOutputBytes: 524_288,
+    }, {
+      community: "example",
+      ...(action === "flair.post.select" ? { post_id: POST_ID } : {}),
+      template_id: "680f43b8-1fec-11e3-80d1-12313b0b80bc",
+      expected_text: "Discussion",
+    }, redditAuth, {
+      beforeDispatch: async () => { dispatched = true; },
+      dependencies: dependencies(calls, () => jsonResponse({}), () => { acquired = true; }),
+    })).rejects.toThrow("capture-required");
+    expect(acquired).toBe(false);
+    expect(dispatched).toBe(false);
+    expect(calls).toEqual([]);
+  }
+});
+
 const redditAuth = {
   schemaVersion: 1,
   id: "reddit-test",
@@ -103,6 +126,13 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
+function htmlResponse(value: string, status = 200): Response {
+  return new Response(value, {
+    status,
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+}
+
 function viewerResponse(modhash = FIRST_MODHASH, id = VIEWER_ID): unknown {
   return {
     kind: "t2",
@@ -112,6 +142,20 @@ function viewerResponse(modhash = FIRST_MODHASH, id = VIEWER_ID): unknown {
       modhash,
     },
   };
+}
+
+function flairChoicesResponse(): string {
+  return `<h2>select flair</h2>
+    <div class="flairoptionpane"><ul>
+      <li class="flairsample-left" id="680f43b8-1fec-11e3-80d1-12313b0b80bc">
+        <span class="linkflairlabel">Discussion</span>
+      </li>
+    </ul></div>
+    <form action="/post/selectflair" method="post">
+      <div class="flairselection"></div>
+      <input type="hidden" name="flair_template_id">
+      <button type="submit">save</button>
+    </form>`;
 }
 
 function profileResponse(): unknown {
@@ -319,6 +363,82 @@ describe("Reddit authenticated internal API runtime", () => {
     );
     expect(subject).toBe(SUBJECT);
     expect(calls).toHaveLength(1);
+  });
+
+  test("reads account-bound user and new-post flair through exact selector requests", async () => {
+    for (const action of ["flair.user.choices", "flair.post.choices"] as const) {
+      const calls: CapturedRequest[] = [];
+      let acquisitions = 0;
+      let dispatchCallbacks = 0;
+      const result = await executeRedditWebOperation(
+        recipe(action),
+        { community: "Python" },
+        redditAuth,
+        {
+          dependencies: dependencies(calls, (request) => {
+            if (request.url.origin === "https://www.reddit.com") {
+              expect(request.url.pathname).toBe("/api/me.json");
+              return jsonResponse(viewerResponse());
+            }
+            expect(request.url.origin).toBe("https://old.reddit.com");
+            expect(request.url.pathname).toBe("/api/flairselector");
+            expect(Object.fromEntries(request.url.searchParams)).toEqual({});
+            expect(request.method).toBe("POST");
+            expect(request.redirect).toBe("error");
+            expect(request.headers.get("accept")).toBe("text/html");
+            expect(request.headers.get("origin")).toBe("https://old.reddit.com");
+            expect(request.headers.get("x-requested-with")).toBe("XMLHttpRequest");
+            const form = Object.fromEntries(
+              new URLSearchParams(request.body as string),
+            );
+            expect(form).toEqual(action === "flair.user.choices"
+              ? {
+                  name: "wrench_viewer",
+                  r: "Python",
+                  uh: FIRST_MODHASH,
+                }
+              : {
+                  is_newlink: "true",
+                  r: "Python",
+                  uh: FIRST_MODHASH,
+                });
+            return htmlResponse(flairChoicesResponse());
+          }, () => {
+            acquisitions += 1;
+          }),
+          beforeDispatch: () => {
+            dispatchCallbacks += 1;
+            return Promise.resolve();
+          },
+          afterDispatchVerified: () => {
+            dispatchCallbacks += 1;
+            return Promise.resolve();
+          },
+        },
+      );
+      expect(result).toMatchObject({
+        status: "succeeded",
+        output: {
+          schemaVersion: 1,
+          community: "Python",
+          kind: action === "flair.user.choices" ? "user" : "post",
+          choices: [{
+            text: "Discussion",
+            textEditable: false,
+            selected: false,
+          }],
+          selectedTemplateId: null,
+          selectedText: null,
+        },
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+      });
+      expect(calls).toHaveLength(2);
+      expect(acquisitions).toBe(2);
+      expect(dispatchCallbacks).toBe(0);
+      expect(JSON.stringify(result)).not.toContain(FIRST_MODHASH);
+      expect(JSON.stringify(result)).not.toContain(VIEWER_ID);
+    }
   });
 
   test("reads exact profile counts and a complete visible contribution window", async () => {
