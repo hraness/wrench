@@ -15,19 +15,6 @@ import {
   verifyReleaseRefAuthority,
   verifyStageSourceAuthority,
 } from "./release-ref-authority";
-import {
-  assertCommittedPackageManifest,
-  assertMainCiJobs,
-  assertMonotonicVersionTag,
-  assertNpmStageEnvironment,
-  assertVisibleGitIndex,
-  comparePackageVersions,
-  type PackageReleaseRuntime,
-  parseMainCiRun,
-  parsePackageVersion,
-  parseVersionTagInventory,
-  requestPackageRelease,
-} from "./request-package-release";
 
 const repositoryUrl = "https://github.com/hraness/wrench.git";
 const temporaryRoots: string[] = [];
@@ -106,14 +93,7 @@ function fixture(options: Readonly<{
   }
 
   if (options.requestedTagKind === "annotated") {
-    git(source, [
-      "tag",
-      "--annotate",
-      "v1.0.0",
-      "--message",
-      `Wrench package release v1.0.0\nsource-sha ${releaseSha}`,
-      releaseSha,
-    ]);
+    git(source, ["tag", "--annotate", "v1.0.0", "--message", "annotated", releaseSha]);
   } else {
     git(source, ["tag", "v1.0.0", releaseSha]);
   }
@@ -223,332 +203,6 @@ function runnerFor(
   });
 }
 
-describe("owner-local package release admission", () => {
-  const sha = "a".repeat(40);
-  const ciRunId = 12_345;
-  const manifest = '{"name":"@hraness/wrench","version":"1.2.3"}\n';
-  const environment = Object.freeze({
-    can_admins_bypass: false,
-    deployment_branch_policy: Object.freeze({
-      custom_branch_policies: true,
-      protected_branches: false,
-    }),
-    name: "npm-stage",
-    protection_rules: Object.freeze([Object.freeze({ type: "branch_policy" })]),
-  });
-  const deploymentPolicies = Object.freeze({
-    branch_policies: Object.freeze([Object.freeze({ name: "v*", type: "tag" })]),
-    total_count: 1,
-  });
-  const ciRuns = Object.freeze({
-    total_count: 1,
-    workflow_runs: Object.freeze([Object.freeze({
-      conclusion: "success",
-      event: "push",
-      head_branch: "main",
-      head_repository: Object.freeze({ full_name: "hraness/wrench", id: 1_316_443_113 }),
-      head_sha: sha,
-      id: ciRunId,
-      name: "CI",
-      path: ".github/workflows/ci.yml",
-      repository: Object.freeze({ full_name: "hraness/wrench", id: 1_316_443_113 }),
-      run_attempt: 1,
-      status: "completed",
-      workflow_id: 323_493_607,
-    })]),
-  });
-  const ciJobs = Object.freeze({
-    jobs: Object.freeze(["check", "macOS", "Required"].map((name) => Object.freeze({
-      conclusion: "success",
-      head_sha: sha,
-      name,
-      run_attempt: 1,
-      run_id: ciRunId,
-      status: "completed",
-      workflow_name: "CI",
-    }))),
-    total_count: 3,
-  });
-
-  type RuntimeCall = Readonly<{
-    authenticated?: boolean;
-    arguments_: readonly string[];
-    command: "git" | "gh" | "local-ref" | "read-manifest";
-  }>;
-
-  const preMutationRuntime = (options: Readonly<{
-    committedManifest?: string;
-    deploymentPolicies?: unknown;
-    environment?: unknown;
-    index?: string;
-    jobs?: unknown;
-    runs?: unknown;
-    workingManifest?: string;
-  }> = {}): Readonly<{ calls: readonly RuntimeCall[]; runtime: PackageReleaseRuntime }> => {
-    const calls: RuntimeCall[] = [];
-    const runtime: PackageReleaseRuntime = Object.freeze({
-      git: (arguments_) => {
-        calls.push(Object.freeze({ arguments_: Object.freeze([...arguments_]), command: "git" }));
-        const key = JSON.stringify(arguments_);
-        if (key === JSON.stringify(["rev-parse", "--verify", "HEAD^{commit}"])) return `${sha}\n`;
-        if (key === JSON.stringify(["branch", "--show-current"])) return "main\n";
-        if (key === JSON.stringify(["ls-files", "-v", "-z"])) return options.index ?? "H package.json\0";
-        if (key === JSON.stringify(["show", `${sha}:package.json`])) return options.committedManifest ?? manifest;
-        if (key === JSON.stringify(["status", "--porcelain", "--untracked-files=all"])) return "";
-        if (key === JSON.stringify(["ls-remote", "--get-url", repositoryUrl])) return `${repositoryUrl}\n`;
-        if (key === JSON.stringify(["ls-remote", "--sort=refname", "--refs", repositoryUrl, "refs/heads/main"])) {
-          return `${sha}\trefs/heads/main\n`;
-        }
-        throw new Error(`Unexpected pre-mutation git command ${key}.`);
-      },
-      localRefExists: (ref) => {
-        calls.push(Object.freeze({ arguments_: Object.freeze([ref]), command: "local-ref" }));
-        throw new Error("Pre-mutation fixture crossed the local-tag boundary.");
-      },
-      readWorkingManifest: () => {
-        calls.push(Object.freeze({ arguments_: Object.freeze([]), command: "read-manifest" }));
-        return options.workingManifest ?? manifest;
-      },
-      run: (command, arguments_) => {
-        if (command !== "gh") throw new Error(`Unexpected pre-mutation command ${command}.`);
-        calls.push(Object.freeze({ arguments_: Object.freeze([...arguments_]), command: "gh" }));
-        const endpoint = arguments_.at(-1);
-        if (endpoint === "[.id,.type] | @tsv") return "894119\tUser\n";
-        if (endpoint === "/repos/hraness/wrench/environments/npm-stage") {
-          return JSON.stringify(options.environment ?? environment);
-        }
-        if (endpoint === "/repos/hraness/wrench/environments/npm-stage/deployment-branch-policies?per_page=100&page=1") {
-          return JSON.stringify(options.deploymentPolicies ?? deploymentPolicies);
-        }
-        if (endpoint === `/repos/hraness/wrench/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=${sha}&per_page=100&page=1&exclude_pull_requests=true`) {
-          return JSON.stringify(options.runs ?? ciRuns);
-        }
-        if (endpoint === `/repos/hraness/wrench/actions/runs/${ciRunId}/attempts/1/jobs?per_page=100&page=1`) {
-          return JSON.stringify(options.jobs ?? ciJobs);
-        }
-        throw new Error(`Unexpected pre-mutation gh command ${JSON.stringify(arguments_)}.`);
-      },
-    });
-    return Object.freeze({ calls, runtime });
-  };
-
-  const expectNoTagMutation = (calls: readonly RuntimeCall[]): void => {
-    expect(calls.some((call) => call.command === "local-ref")).toBe(false);
-    expect(calls.some((call) => call.command === "git" && (
-      call.arguments_.includes("--annotate") || call.arguments_[0] === "push"
-    ))).toBe(false);
-  };
-
-  const tagObjectSha = "c".repeat(40);
-  const lowerTagObjectSha = "d".repeat(40);
-  const changedLowerTagObjectSha = "e".repeat(40);
-  const canonicalTagObject = [
-    `object ${sha}`,
-    "type commit",
-    "tag v1.2.3",
-    "tagger Wrench Release <release@example.com> 0 +0000",
-    "",
-    "Wrench package release v1.2.3",
-    `source-sha ${sha}`,
-    "",
-  ].join("\n");
-  const lowerInventory = `${lowerTagObjectSha}\trefs/tags/v1.2.2\n`;
-  const finalInventory = `${lowerTagObjectSha}\trefs/tags/v1.2.2\n${tagObjectSha}\trefs/tags/v1.2.3\n`;
-
-  const completeRuntime = (options: Readonly<{
-    inventories: readonly string[];
-    localTagExists?: boolean;
-  }>): Readonly<{ calls: readonly RuntimeCall[]; runtime: PackageReleaseRuntime }> => {
-    const calls: RuntimeCall[] = [];
-    const inventories = [...options.inventories];
-    const runtime: PackageReleaseRuntime = Object.freeze({
-      git: (arguments_, authenticated = false) => {
-        calls.push(Object.freeze({
-          arguments_: Object.freeze([...arguments_]),
-          ...(authenticated ? { authenticated } : {}),
-          command: "git",
-        }));
-        const key = JSON.stringify(arguments_);
-        if (key === JSON.stringify(["rev-parse", "--verify", "HEAD^{commit}"])) return `${sha}\n`;
-        if (key === JSON.stringify(["branch", "--show-current"])) return "main\n";
-        if (key === JSON.stringify(["ls-files", "-v", "-z"])) return "H package.json\0";
-        if (key === JSON.stringify(["show", `${sha}:package.json`])) return manifest;
-        if (key === JSON.stringify(["status", "--porcelain", "--untracked-files=all"])) return "";
-        if (key === JSON.stringify(["ls-remote", "--get-url", repositoryUrl])) return `${repositoryUrl}\n`;
-        if (key === JSON.stringify(["ls-remote", "--sort=refname", "--refs", repositoryUrl, "refs/heads/main"])) {
-          return `${sha}\trefs/heads/main\n`;
-        }
-        if (key === JSON.stringify(["ls-remote", "--sort=refname", "--refs", repositoryUrl, "refs/tags/v*"])) {
-          const inventory = inventories.shift();
-          if (inventory === undefined) throw new Error("Complete runtime exhausted its tag inventories.");
-          return inventory;
-        }
-        if (arguments_[0] === "fetch") return "";
-        if (arguments_.includes("--annotate")) return "";
-        if (key === JSON.stringify(["rev-parse", "--verify", "refs/tags/v1.2.3"])) return `${tagObjectSha}\n`;
-        if (key === JSON.stringify(["cat-file", "-t", tagObjectSha])) return "tag\n";
-        if (key === JSON.stringify(["rev-parse", "--verify", "refs/tags/v1.2.3^{commit}"])) return `${sha}\n`;
-        if (key === JSON.stringify(["cat-file", "tag", tagObjectSha])) return canonicalTagObject;
-        if (arguments_[0] === "push") return "";
-        throw new Error(`Unexpected complete-runtime git command ${key}.`);
-      },
-      localRefExists: (ref) => {
-        calls.push(Object.freeze({ arguments_: Object.freeze([ref]), command: "local-ref" }));
-        return options.localTagExists ?? false;
-      },
-      readWorkingManifest: () => {
-        calls.push(Object.freeze({ arguments_: Object.freeze([]), command: "read-manifest" }));
-        return manifest;
-      },
-      run: (command, arguments_) => {
-        if (command !== "gh") throw new Error(`Unexpected complete-runtime command ${command}.`);
-        calls.push(Object.freeze({ arguments_: Object.freeze([...arguments_]), command: "gh" }));
-        const endpoint = arguments_.at(-1);
-        if (endpoint === "[.id,.type] | @tsv") return "894119\tUser\n";
-        if (endpoint === "/repos/hraness/wrench/environments/npm-stage") return JSON.stringify(environment);
-        if (endpoint === "/repos/hraness/wrench/environments/npm-stage/deployment-branch-policies?per_page=100&page=1") {
-          return JSON.stringify(deploymentPolicies);
-        }
-        if (endpoint === `/repos/hraness/wrench/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=${sha}&per_page=100&page=1&exclude_pull_requests=true`) {
-          return JSON.stringify(ciRuns);
-        }
-        if (endpoint === `/repos/hraness/wrench/actions/runs/${ciRunId}/attempts/1/jobs?per_page=100&page=1`) {
-          return JSON.stringify(ciJobs);
-        }
-        throw new Error(`Unexpected complete-runtime gh command ${JSON.stringify(arguments_)}.`);
-      },
-    });
-    return Object.freeze({ calls, runtime });
-  };
-
-  test("orders strict stable and prerelease versions", () => {
-    expect(comparePackageVersions(parsePackageVersion("1.2.3-beta.2"), parsePackageVersion("1.2.3-beta.1"))).toBe(1);
-    expect(comparePackageVersions(parsePackageVersion("1.2.3"), parsePackageVersion("1.2.3-rc.9"))).toBe(1);
-    expect(comparePackageVersions(parsePackageVersion("2.0.0-alpha"), parsePackageVersion("1.99.99"))).toBe(1);
-    for (const value of ["1.2", "01.2.3", "1.2.3+build", "1.2.3-01", "1.2.3-"]) {
-      expect(() => parsePackageVersion(value)).toThrow();
-    }
-  });
-
-  test("bounds, canonicalizes, and monotonically admits remote version tags", () => {
-    const input = inventory(
-      [sha, "refs/tags/v1.2.3-beta.1"],
-      [sha, "refs/tags/v1.2.3-beta.2"],
-    );
-    const tags = parseVersionTagInventory(input);
-    expect(assertMonotonicVersionTag("1.2.3-beta.3", tags)).toEqual({});
-    expect(assertMonotonicVersionTag("1.2.3-beta.2", tags).existing?.tag).toBe("v1.2.3-beta.2");
-    expect(() => assertMonotonicVersionTag("1.2.3-beta.1", tags)).toThrow("not newer");
-    expect(() => assertMonotonicVersionTag("1.2.2", tags)).toThrow("not newer");
-    expect(() => parseVersionTagInventory(inventory([sha, "refs/tags/not-a-version"]))).toThrow("malformed");
-    expect(() => parseVersionTagInventory(inventory([sha, "refs/tags/v1.2.3"], [sha, "refs/tags/v1.2.3"]))).toThrow("repeats");
-  });
-
-  test("rejects npm-stage environment drift without mutating a tag", () => {
-    expect(() => assertNpmStageEnvironment(environment, deploymentPolicies)).not.toThrow();
-    const driftCases = [
-      { environment: { ...environment, can_admins_bypass: true } },
-      { environment: { ...environment, protection_rules: [{ type: "branch_policy" }, { type: "required_reviewers" }] } },
-      { environment: { ...environment, deployment_branch_policy: { custom_branch_policies: false, protected_branches: true } } },
-      { deploymentPolicies: { ...deploymentPolicies, total_count: 2 } },
-      { deploymentPolicies: { branch_policies: [{ name: "v*", type: "branch" }], total_count: 1 } },
-      { deploymentPolicies: { branch_policies: [{ name: "v*", type: "tag" }, { name: "v1*", type: "tag" }], total_count: 2 } },
-    ] as const;
-    for (const drift of driftCases) {
-      const input = preMutationRuntime(drift);
-      expect(() => requestPackageRelease(input.runtime)).toThrow("npm-stage");
-      expectNoTagMutation(input.calls);
-    }
-  });
-
-  test("rejects current-main CI receipt drift without mutating a tag", () => {
-    const receipt = parseMainCiRun(sha, ciRuns);
-    expect(receipt).toEqual({ attempt: 1, runId: ciRunId, sourceSha: sha });
-    expect(() => assertMainCiJobs(receipt, ciJobs)).not.toThrow();
-    const firstRun = ciRuns.workflow_runs[0];
-    const firstJob = ciJobs.jobs[0];
-    if (firstRun === undefined || firstJob === undefined) throw new Error("CI fixtures are incomplete.");
-    const driftCases = [
-      { runs: { ...ciRuns, total_count: 2 } },
-      { runs: { ...ciRuns, workflow_runs: [{ ...firstRun, head_sha: "b".repeat(40) }] } },
-      { runs: { ...ciRuns, workflow_runs: [{ ...firstRun, conclusion: "failure" }] } },
-      { runs: { ...ciRuns, workflow_runs: [{ ...firstRun, path: ".github/workflows/other.yml" }] } },
-      { jobs: { ...ciJobs, total_count: 2, jobs: ciJobs.jobs.slice(0, 2) } },
-      { jobs: { ...ciJobs, jobs: [{ ...firstJob, conclusion: "failure" }, ...ciJobs.jobs.slice(1)] } },
-      { jobs: { ...ciJobs, jobs: [{ ...firstJob, name: "Required" }, ...ciJobs.jobs.slice(1)] } },
-    ] as const;
-    for (const drift of driftCases) {
-      const input = preMutationRuntime(drift);
-      expect(() => requestPackageRelease(input.runtime)).toThrow("CI");
-      expectNoTagMutation(input.calls);
-    }
-  });
-
-  test("rejects hidden-index and committed-manifest drift without mutating a tag", () => {
-    expect(() => assertVisibleGitIndex("H AGENTS.md\0H package.json\0")).not.toThrow();
-    expect(assertCommittedPackageManifest(manifest, manifest)).toEqual({
-      name: "@hraness/wrench",
-      version: "1.2.3",
-    });
-    for (const index of ["S package.json\0", "h package.json\0", "s package.json\0"] as const) {
-      const input = preMutationRuntime({ index });
-      expect(() => requestPackageRelease(input.runtime)).toThrow("skip-worktree or assume-unchanged");
-      expectNoTagMutation(input.calls);
-    }
-
-    const manifestDrift = preMutationRuntime({
-      workingManifest: '{"name":"@hraness/wrench","version":"1.2.4"}\n',
-    });
-    expect(() => requestPackageRelease(manifestDrift.runtime)).toThrow("differs from the exact committed package manifest");
-    expectNoTagMutation(manifestDrift.calls);
-  });
-
-  test("creates one annotated tag only after stable preflights and exact final readback", () => {
-    const input = completeRuntime({ inventories: [lowerInventory, lowerInventory, finalInventory] });
-    expect(requestPackageRelease(input.runtime)).toBe(
-      `Pushed immutable v1.2.3 at ${sha}; protected tag workflows now own npm publication.\n`,
-    );
-    const annotate = input.calls.findIndex((call) => call.command === "git" && call.arguments_.includes("--annotate"));
-    const push = input.calls.findIndex((call) => call.command === "git" && call.arguments_[0] === "push");
-    const ciJobsRead = input.calls.findIndex((call) => call.command === "gh" && String(call.arguments_.at(-1)).includes("/jobs?"));
-    expect(ciJobsRead).toBeGreaterThan(-1);
-    expect(annotate).toBeGreaterThan(ciJobsRead);
-    expect(push).toBeGreaterThan(annotate);
-    expect(input.calls[push]?.authenticated).toBe(true);
-    expect(input.calls.filter((call) => call.command === "git" && call.arguments_[0] === "ls-remote" && call.arguments_.includes("refs/tags/v*"))).toHaveLength(3);
-  });
-
-  test("fails immutable tag races before push and rejects changed final readback", () => {
-    const raced = completeRuntime({
-      inventories: [
-        lowerInventory,
-        `${changedLowerTagObjectSha}\trefs/tags/v1.2.2\n`,
-      ],
-    });
-    expect(() => requestPackageRelease(raced.runtime)).toThrow("changed before immutable tag creation");
-    expect(raced.calls.some((call) => call.command === "git" && call.arguments_[0] === "push")).toBe(false);
-
-    const changedReadback = completeRuntime({
-      inventories: [
-        lowerInventory,
-        lowerInventory,
-        `${lowerTagObjectSha}\trefs/tags/v1.2.2\n${changedLowerTagObjectSha}\trefs/tags/v1.2.3\n`,
-      ],
-    });
-    expect(() => requestPackageRelease(changedReadback.runtime)).toThrow("readback does not match");
-    expect(changedReadback.calls.filter((call) => call.command === "git" && call.arguments_[0] === "push")).toHaveLength(1);
-  });
-
-  test("recovers only the exact existing annotated tag without another push", () => {
-    const input = completeRuntime({
-      inventories: [`${tagObjectSha}\trefs/tags/v1.2.3\n`],
-    });
-    expect(requestPackageRelease(input.runtime)).toContain("already exists with the exact canonical source");
-    expect(input.calls.some((call) => call.command === "git" && call.arguments_[0] === "fetch")).toBe(true);
-    expect(input.calls.some((call) => call.command === "git" && call.arguments_[0] === "push")).toBe(false);
-  });
-});
-
 describe("bounded Wrench remote ref inventories", () => {
   const main = "1".repeat(40);
   const tag = "2".repeat(40);
@@ -637,7 +291,7 @@ describe("bounded Wrench remote ref inventories", () => {
 });
 
 describe("Wrench release and promotion ref authority", () => {
-  test("accepts one direct release tag below protected current main", () => {
+  test("accepts one lightweight release tag below protected current main", () => {
     const input = fixture();
     checkoutRelease(input);
     const { calls, runner } = runnerFor(input);
@@ -679,15 +333,15 @@ describe("Wrench release and promotion ref authority", () => {
     })).toEqual({ mainSha: input.mainSha, sha: input.releaseSha, tag: "v1.0.0" });
   });
 
-  test("accepts owner annotations without treating later raw tags as completed releases", () => {
+  test("rejects annotated requested tags without treating later raw tags as completed releases", () => {
     const annotated = fixture({ requestedTagKind: "annotated" });
     checkoutRelease(annotated);
-    expect(verifyReleaseRefAuthority({
+    expect(() => verifyReleaseRefAuthority({
       mode: "release",
       requestedTag: "v1.0.0",
       runner: runnerFor(annotated).runner,
       workingDirectory: annotated.work,
-    })).toEqual({ mainSha: annotated.mainSha, sha: annotated.releaseSha, tag: "v1.0.0" });
+    })).toThrow("lightweight");
 
     for (const higherTagKind of ["lightweight", "annotated"] as const) {
       const input = fixture({ higherTagKind });
@@ -699,31 +353,6 @@ describe("Wrench release and promotion ref authority", () => {
         workingDirectory: input.work,
       })).toEqual({ mainSha: input.mainSha, sha: input.releaseSha, tag: "v1.0.0" });
     }
-  });
-
-  test("requires an annotated tag for direct package publication", () => {
-    const annotated = fixture({ requestedTagKind: "annotated" });
-    checkoutRelease(annotated);
-    expect(verifyReleaseRefAuthority({
-      mode: "package",
-      requestedTag: "v1.0.0",
-      runner: runnerFor(annotated).runner,
-      workingDirectory: annotated.work,
-    })).toEqual({
-      mainSha: annotated.mainSha,
-      sha: annotated.releaseSha,
-      tag: "v1.0.0",
-      tagObjectSha: annotated.tagObjectSha,
-    });
-
-    const lightweight = fixture();
-    checkoutRelease(lightweight);
-    expect(() => verifyReleaseRefAuthority({
-      mode: "package",
-      requestedTag: "v1.0.0",
-      runner: runnerFor(lightweight).runner,
-      workingDirectory: lightweight.work,
-    })).toThrow("annotated version tag");
   });
 
   test("rejects divergent promotion and release histories", () => {
@@ -872,7 +501,6 @@ describe("Wrench release and promotion ref authority", () => {
       "refs/wrench-release/publication-main",
       "--",
       ".github/workflows",
-      "scripts/request-package-release.ts",
       "scripts/release-ref-authority.ts",
       "scripts/release-provider-outcome.mjs",
       "scripts/release-app-token.mjs",
@@ -880,21 +508,17 @@ describe("Wrench release and promotion ref authority", () => {
     ]);
   });
 
-  test("accepts an annotated publication and rejects a changed terminal advertisement", () => {
-    const annotatedInput = fixture({ mainAtRelease: true, requestedTagKind: "annotated" });
-    checkoutSha(annotatedInput, annotatedInput.releaseSha);
-    expect(verifyReleasePublicationAuthority({
-      expectedMainSha: annotatedInput.mainSha,
-      expectedReleaseSha: annotatedInput.releaseSha,
+  test("rejects an annotated request and a changed terminal advertisement", () => {
+    const rejectedInput = fixture({ mainAtRelease: true, requestedTagKind: "annotated" });
+    checkoutSha(rejectedInput, rejectedInput.releaseSha);
+    expect(() => verifyReleasePublicationAuthority({
+      expectedMainSha: rejectedInput.mainSha,
+      expectedReleaseSha: rejectedInput.releaseSha,
       phase: "prewrite",
       requestedTag: "v1.0.0",
-      runner: runnerFor(annotatedInput).runner,
-      workingDirectory: annotatedInput.work,
-    })).toEqual({
-      mainSha: annotatedInput.mainSha,
-      sha: annotatedInput.releaseSha,
-      tag: "v1.0.0",
-    });
+      runner: runnerFor(rejectedInput).runner,
+      workingDirectory: rejectedInput.work,
+    })).toThrow();
 
     const input = fixture();
     checkoutSha(input, input.releaseSha);

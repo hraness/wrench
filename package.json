@@ -521,7 +521,7 @@
     "accept:media:authenticated": "bun run scripts/media/authenticated-capture-acceptance.ts",
     "test:standalone": "bun run scripts/standalone-smoke.ts",
     "test:package": "bun run ./scripts/package-smoke.ts",
-    "test:npm-release": "bun test --timeout 30000 ./scripts/release-ref-authority.test.ts ./scripts/npm-stage-workflow.test.ts",
+    "test:npm-release": "bun test ./scripts/release-ref-authority.test.ts ./scripts/npm-stage-workflow.test.ts",
     "check": "bun run typecheck && bun run website:check && bun run test:npm-release && bun run build && bun run test:package && bun run test && bun run test:standalone",
     "kb:refresh": "bunx --bun github:hraness/kb#v0.15.2 refresh --root kb",
     "kb:check:lane": "bunx --bun github:hraness/kb#v0.15.2 check --root kb --no-catalog",

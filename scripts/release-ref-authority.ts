@@ -17,15 +17,9 @@ const MAXIMUM_GIT_OUTPUT_BYTES = 256 * 1_024;
 const GIT_TIMEOUT_MILLISECONDS = 120_000;
 const SHA = /^[0-9a-f]{40}$/u;
 const STABLE_TAG = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u;
-const VERSION_IDENTIFIER = "(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)";
-const PACKAGE_TAG = new RegExp(
-  `^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(${VERSION_IDENTIFIER}(?:\\.${VERSION_IDENTIFIER})*))?$`,
-  "u",
-);
 const TAG_REF = /^refs\/tags\/(v[A-Za-z0-9][A-Za-z0-9._-]{0,126})$/u;
 const RELEASE_CONTROL_PATHS = Object.freeze([
   ".github/workflows",
-  "scripts/request-package-release.ts",
   "scripts/release-ref-authority.ts",
   "scripts/release-provider-outcome.mjs",
   "scripts/release-app-token.mjs",
@@ -61,12 +55,11 @@ export type ReleaseRefAuthority = Readonly<{
   mainSha: string;
   sha: string;
   tag: string;
-  tagObjectSha?: string;
 }>;
 
 export type ReleaseRefAuthorityInput = Readonly<{
   expectedReleaseSha?: string;
-  mode: "package" | "promotion" | "release";
+  mode: "promotion" | "release";
   requestedTag: string;
   runner?: GitCommandRunner;
   workingDirectory?: string;
@@ -196,10 +189,6 @@ function stableVersion(tag: string): readonly [bigint, bigint, bigint] | undefin
   return Object.freeze([BigInt(match[1]), BigInt(match[2]), BigInt(match[3])]);
 }
 
-function packageVersion(tag: string): boolean {
-  return PACKAGE_TAG.test(tag);
-}
-
 function validTagRef(ref: string): boolean {
   const name = TAG_REF.exec(ref)?.[1];
   return name !== undefined
@@ -266,8 +255,8 @@ export function parseRemoteTagSnapshot(
   value: Uint8Array | string,
   requestedTag: string,
 ): RemoteTagSnapshot {
-  if (!packageVersion(requestedTag)) {
-    fail("Requested release tag is not one canonical package version.");
+  if (stableVersion(requestedTag) === undefined) {
+    fail("Requested release tag is not one canonical stable version.");
   }
   const parsed = parseInventoryRows(value, "Remote tag inventory");
   for (const entry of parsed.entries) {
@@ -430,12 +419,10 @@ function checkedHead(runner: GitCommandRunner): string {
 }
 
 export function verifyReleaseRefAuthority(input: ReleaseRefAuthorityInput): ReleaseRefAuthority {
-  if (input.mode === "package" ? !packageVersion(input.requestedTag) : stableVersion(input.requestedTag) === undefined) {
-    fail(input.mode === "package"
-      ? "Requested release tag is not one canonical package version."
-      : "Requested release tag is not one canonical stable version.");
+  if (stableVersion(input.requestedTag) === undefined) {
+    fail("Requested release tag is not one canonical stable version.");
   }
-  if (input.mode === "release" || input.mode === "package") {
+  if (input.mode === "release") {
     if (input.workflowSha !== undefined || input.expectedReleaseSha !== undefined) {
       fail("Release authority received unexpected promotion coordinates.");
     }
@@ -453,7 +440,7 @@ export function verifyReleaseRefAuthority(input: ReleaseRefAuthorityInput): Rele
   const localTagRef = `refs/tags/${input.requestedTag}`;
   expectExactLocalRefs(
     runner,
-    input.mode === "release" || input.mode === "package" ? [localTagRef] : [],
+    input.mode === "release" ? [localTagRef] : [],
     "Local release-ref preflight",
   );
   const fetchHead = removeStaleFetchHead(runner);
@@ -493,51 +480,25 @@ export function verifyReleaseRefAuthority(input: ReleaseRefAuthorityInput): Rele
     || main.peeledName !== ""
     || main.peeledType !== ""
   ) fail("Imported main ref does not match the advertised exact commit.");
-  if (tag === undefined || tag.objectName !== first.requestedTagOid) {
-    fail("Imported requested ref does not match the advertised tag object.");
-  }
-  const releaseCommit = tag.objectType === "commit"
-    && tag.peeledName === ""
-    && tag.peeledType === ""
-    ? tag.objectName
-    : tag.objectType === "tag"
-      && SHA.test(tag.peeledName)
-      && tag.peeledType === "commit"
-      ? tag.peeledName
-      : fail("Imported requested ref is not a direct commit tag.");
-  if (input.mode === "package" && tag.objectType !== "tag") {
-    fail("Package publication requires one annotated version tag.");
-  }
-  if (input.mode === "package") {
-    const annotation = decode(command(
-      runner,
-      ["cat-file", "tag", tag.objectName],
-      "Package tag annotation",
-    ), "Package tag annotation");
-    const separator = annotation.indexOf("\n\n");
-    const headers = separator < 0 ? [] : annotation.slice(0, separator).split("\n");
-    const message = separator < 0 ? "" : annotation.slice(separator + 2);
-    if (
-      headers.length !== 4
-      || headers[0] !== `object ${releaseCommit}`
-      || headers[1] !== "type commit"
-      || headers[2] !== `tag ${input.requestedTag}`
-      || !headers[3]?.startsWith("tagger ")
-      || message !== `Wrench package release ${input.requestedTag}\nsource-sha ${releaseCommit}\n`
-    ) fail("Package publication tag does not have the canonical release annotation.");
-  }
+  if (
+    tag === undefined
+    || tag.objectType !== "commit"
+    || tag.objectName !== first.requestedTagOid
+    || tag.peeledName !== ""
+    || tag.peeledType !== ""
+  ) fail("Imported requested ref is not the advertised lightweight commit tag.");
 
   const head = checkedHead(runner);
-  if (input.mode === "release" || input.mode === "package") {
-    if (head !== releaseCommit) {
+  if (input.mode === "release") {
+    if (head !== tag.objectName) {
       fail("Release tag and checkout must name one commit.");
     }
-    if (runner(["merge-base", "--is-ancestor", releaseCommit, LOCAL_MAIN_REF]).exitCode !== 0) {
+    if (runner(["merge-base", "--is-ancestor", tag.objectName, LOCAL_MAIN_REF]).exitCode !== 0) {
       fail("Verified release commit is not an ancestor of exact advertised main.");
     }
     requireUnchangedReleaseControls(
       runner,
-      releaseCommit,
+      tag.objectName,
       LOCAL_MAIN_REF,
       "Release commit and advertised main",
     );
@@ -545,10 +506,10 @@ export function verifyReleaseRefAuthority(input: ReleaseRefAuthorityInput): Rele
     if (input.workflowSha !== head) {
       fail("Promotion helper is not executing from the exact verified workflow source.");
     }
-    if (input.expectedReleaseSha !== undefined && input.expectedReleaseSha !== releaseCommit) {
-      fail("Successful Release run and tag target different commits.");
+    if (input.expectedReleaseSha !== undefined && input.expectedReleaseSha !== tag.objectName) {
+      fail("Successful Release run and lightweight tag target different commits.");
     }
-    if (runner(["merge-base", "--is-ancestor", releaseCommit, head]).exitCode !== 0) {
+    if (runner(["merge-base", "--is-ancestor", tag.objectName, head]).exitCode !== 0) {
       fail("Verified release commit is not an ancestor of the promotion workflow source.");
     }
     if (runner(["merge-base", "--is-ancestor", head, LOCAL_MAIN_REF]).exitCode !== 0) {
@@ -560,12 +521,7 @@ export function verifyReleaseRefAuthority(input: ReleaseRefAuthorityInput): Rele
   if (second.canonical !== first.canonical) {
     fail("Remote release-ref inventory changed during verification.");
   }
-  return Object.freeze({
-    mainSha: first.mainOid,
-    sha: releaseCommit,
-    tag: input.requestedTag,
-    ...(input.mode === "package" ? { tagObjectSha: first.requestedTagOid } : {}),
-  });
+  return Object.freeze({ mainSha: first.mainOid, sha: tag.objectName, tag: input.requestedTag });
 }
 
 export function verifyReleasePublicationAuthority(
@@ -588,6 +544,10 @@ export function verifyReleasePublicationAuthority(
   if (first.mainOid !== input.expectedMainSha) {
     fail("Combined advertisement does not match authenticated current main.");
   }
+  if (first.requestedTagOid !== input.expectedReleaseSha) {
+    fail("Publication requires one direct lightweight release tag from the combined advertisement.");
+  }
+
   expectExactLocalRefs(runner, [], "Local publication-ref preflight");
   const fetchHead = removeStaleFetchHead(runner);
   const shallow = decode(command(
@@ -626,21 +586,13 @@ export function verifyReleasePublicationAuthority(
     || main.peeledName !== ""
     || main.peeledType !== ""
   ) fail("Imported publication main is not the advertised commit.");
-  if (tag === undefined || tag.objectName !== first.requestedTagOid) {
-    fail("Imported publication tag does not match the advertised tag object.");
-  }
-  const releaseCommit = tag.objectType === "commit"
-    && tag.peeledName === ""
-    && tag.peeledType === ""
-    ? tag.objectName
-    : tag.objectType === "tag"
-      && SHA.test(tag.peeledName)
-      && tag.peeledType === "commit"
-      ? tag.peeledName
-      : fail("Imported publication ref is not a direct commit tag.");
-  if (releaseCommit !== input.expectedReleaseSha) {
-    fail("Imported publication tag does not peel to the verified release commit.");
-  }
+  if (
+    tag === undefined
+    || tag.objectType !== "commit"
+    || tag.objectName !== first.requestedTagOid
+    || tag.peeledName !== ""
+    || tag.peeledType !== ""
+  ) fail("Imported publication tag is not the advertised direct lightweight commit.");
   if (runner(["merge-base", "--is-ancestor", input.expectedReleaseSha, PUBLICATION_MAIN_REF]).exitCode !== 0) {
     fail("Verified release commit is not an ancestor of authenticated current main.");
   }
@@ -658,7 +610,7 @@ export function verifyReleasePublicationAuthority(
   );
   command(
     runner,
-    ["update-ref", "-d", PUBLICATION_TAG_REF, tag.objectName],
+    ["update-ref", "-d", PUBLICATION_TAG_REF, first.requestedTagOid],
     "Temporary publication tag cleanup",
   );
   expectExactLocalRefs(runner, [], "Local publication-ref cleanup");
@@ -669,7 +621,7 @@ export function verifyReleasePublicationAuthority(
   }
   return Object.freeze({
     mainSha: first.mainOid,
-    sha: releaseCommit,
+    sha: first.requestedTagOid,
     tag: input.requestedTag,
   });
 }
@@ -832,13 +784,6 @@ function main(): void {
     if (second !== undefined || third !== undefined) fail("Usage: release-ref-authority.ts release TAG");
     const authority = verifyReleaseRefAuthority({ mode, requestedTag: first });
     process.stdout.write(`sha=${authority.sha}\ntag=${authority.tag}\nmain_sha=${authority.mainSha}\n`);
-    return;
-  }
-  if (mode === "package") {
-    if (second !== undefined || third !== undefined) fail("Usage: release-ref-authority.ts package TAG");
-    const authority = verifyReleaseRefAuthority({ mode, requestedTag: first });
-    if (authority.tagObjectSha === undefined) fail("Package authority has no annotated tag object.");
-    process.stdout.write(`sha=${authority.sha}\ntag=${authority.tag}\nmain_sha=${authority.mainSha}\ntag_object_sha=${authority.tagObjectSha}\n`);
     return;
   }
   if (mode === "promotion") {

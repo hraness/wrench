@@ -1,11 +1,8 @@
 # Publish Wrench
 
-Wrench used one interactive first publication and now uses direct npm trusted
-publishing for later stable and prerelease versions. The existing
-`npm-stage.yml` workflow
-filename and `npm-stage` GitHub environment are retained as stable trust
-coordinates; ordinary releases no longer enter npm's staged-publishing queue
-and do not require per-version npm two-factor approval.
+Wrench uses one interactive first publication and stage-only trusted publishing
+for later versions. npm requires a package to exist before `npm stage publish`
+can use it, so the bootstrap cannot use the staging workflow.
 
 ## Keep discovery metadata aligned
 
@@ -23,8 +20,7 @@ administration permission only to synchronize topics.
 
 This section records the one-time bootstrap of `@hraness/wrench@0.15.1`.
 That package is already public. Do not reuse these bootstrap commands for any
-later version. Follow [Publish a later version](#publish-a-later-version)
-instead.
+later version. Follow [Stage a later version](#stage-a-later-version) instead.
 
 Start from the current `main` commit after the required checks pass. Use Node
 24, npm 11.19.0, and Bun 1.3.14. Do not create the release tag yet.
@@ -122,43 +118,38 @@ clean-consumer smoke pass. The comparator binds both archives to their own npm
 pack metadata, binds the downloaded archive to canonical registry metadata,
 and requires identical paths, entry types, modes, sizes, and file bytes. It
 deliberately ignores gzip transport headers, archive ownership, timestamps,
-and tar entry ordering. The protected-tag Release workflow repeats this source-to-registry
+and tar entry ordering. The tag workflow repeats this source-to-registry
 comparison before it creates the immutable GitHub Release.
 
-## Migrate to direct trusted publishing
+## Configure stage-only trusted publishing
 
-Keep the existing GitHub environment named `npm-stage` and workflow filename
-`.github/workflows/npm-stage.yml`; both are npm trusted-publisher identity
-coordinates. The environment name is historical. Its terminal job calls
-`npm publish`, never `npm stage publish`. Disable administrator bypass. Its
-protection rules must contain exactly one `branch_policy`; its deployment
-branch policy must set `protected_branches=false` and
-`custom_branch_policies=true`; and its deployment-policy collection must
-contain exactly one `{name:"v*", type:"tag"}` entry. Together with the workflow
-ref-protection gate, this admits only protected version tags matching `v*`.
-Configure no required deployment reviewer, wait timer, or secret.
+Create a GitHub environment named `npm-stage` after the first package is public.
+Restrict its deployment branches to `main`. The `npm-stage` environment has no
+required deployment reviewers, so passing **Verify exact package** allows
+**Stage exact package** to start automatically. Do not add a secret to the
+environment. npm's separate human inspection and two-factor approval remain
+mandatory before the version becomes public.
 
-After these workflows are merged, replace the existing stage-only npm trust
-relationship once. npm permits only one trusted-publisher configuration for a
-package, so inspect the exact relationship, revoke its ID, and immediately
-create the direct-publish replacement:
+If the current npm trust relationship does not name that environment, inspect
+and revoke it before creating the replacement:
 
 ```sh
-npm install --global npm@11.19.0 \
-  --ignore-scripts \
-  --registry=https://registry.npmjs.org
 npm trust list @hraness/wrench \
   --json \
   --registry=https://registry.npmjs.org
 npm trust revoke @hraness/wrench \
-  --id <existing-stage-trust-id> \
+  --id <trust-id> \
   --registry=https://registry.npmjs.org
+```
+
+Configure the exact GitHub Actions identity:
+
+```sh
 npm trust github @hraness/wrench \
   --file npm-stage.yml \
   --repo hraness/wrench \
   --environment npm-stage \
-  --allow-publish \
-  --yes \
+  --allow-stage-publish \
   --registry=https://registry.npmjs.org
 npm trust list @hraness/wrench \
   --json \
@@ -167,159 +158,209 @@ npm access set mfa=publish @hraness/wrench \
   --registry=https://registry.npmjs.org
 ```
 
-This is the one unavoidable npm authorization ceremony for the migration; do
-not run it for each version. Complete npm's interactive two-factor prompt and
-read the relationship back before changing `package.json`. It must name
-`hraness/wrench`, the exact `npm-stage.yml` filename, the `npm-stage`
-environment, and only direct `npm publish` permission. The package can continue
-to require two-factor authentication and disallow traditional publishing
-tokens: trusted publishing verifies the workflow's OIDC identity instead of a
-maintainer token. Do not add an npm token to GitHub and do not weaken the
-package's MFA policy.
+Complete each interactive two-factor authentication prompt. The trust
+relationship must name `hraness/wrench`, the exact `npm-stage.yml` filename, the
+`npm-stage` environment, and only `npm stage publish`. The package access setting
+must require two-factor authentication and disallow traditional publishing
+tokens. Do not add an npm token to GitHub.
 
-Initial repository setup also requires one administrator session to enable
-immutable Releases and install the two exact version-tag rulesets described
-below. That setup, the npm trust replacement, and their immediate readbacks are
-the entire migration ceremony. Ordinary versions do not repeat npm OTP,
-GitHub sudo mode, environment approval, or Administration readback.
+## Create the first tag
 
-## Historical bootstrap tag
-
-The first public package, `@hraness/wrench@0.15.1`, predates this path. Its
-already-existing lightweight tag was created manually only after the registry
-artifact was verified:
+Create the matching tag on the same `main` commit only after the registry
+artifact and trusted-publisher settings are verified.
 
 ```sh
 git tag v0.15.1
 git push origin refs/tags/v0.15.1
 ```
 
-This is historical evidence, not a command sequence for later versions. The
-release-ref verifier retains compatibility with that existing lightweight tag,
-but every new stable or prerelease coordinate uses a canonical annotated tag.
+The tag is a release request. Wait for the read-only verification job to
+rebuild and compare the exact public npm tarball, then verify that the GitHub
+Release is non-draft, immutable, and Latest.
 
-## Publish a later version
+Release verification starts from a depth-one, credential-free checkout of the
+requested tag. `scripts/release-ref-authority.ts` reads only the exact remote
+`main` ref and the bounded `refs/tags/v*` inventory. The combined inventory must
+be canonical UTF-8, at most 64 KiB and 500 rows, and stable across two reads.
+The helper imports only those governed refs with tags disabled and without
+writing `FETCH_HEAD`. Wrench release tags are lightweight direct commit tags.
+The requested tag and checkout must name one commit `C`, and protected linear
+`main` must equal or descend from `C`. An annotated requested tag, moved ref,
+divergence, rollback, or malformed advertisement fails closed. A higher raw
+`v*` tag is only a queued release request; bounded non-draft, non-prerelease,
+immutable Releases determine completed-release ordering.
 
-1. Merge a monotonically greater strict SemVer without build metadata to exact
-   protected current `main`. Use a unique prerelease such as `0.17.0-beta.1`
-   for an agent beta or a stable version such as `0.17.0`.
-2. After the required `main` checks pass, run the repository-owned local
-   admission command from a clean `main` checkout:
+## Stage a later version
 
-   ```sh
-   bun run ./scripts/request-package-release.ts
-   ```
+1. Merge a monotonically greater stable version to `main`. A push that changes
+   `package.json` starts **Stage npm package** automatically.
+2. Wait for **Verify exact package**. It packs, smokes, and uploads one exact
+   tarball with its `npm-pack.json`.
+3. **Stage exact package** starts automatically through the main-only
+   `npm-stage` environment. Only this minimal OIDC job can submit the verified
+   tarball to npm's staging area.
+4. Inspect the uploaded artifact and the staged npm package, then approve the
+   npm stage with human two-factor authentication.
+5. Download and smoke the public registry package.
+6. Create the matching `v<version>` tag on the staged source commit.
 
-   This is covered by standing task delivery authority. It does not request a
-   conversational confirmation. It first requires local `HEAD` to equal the
-   advertised remote `main`, confirms the existing `gh` credential is immutable
-   owner User ID `894119`, rejects any skip-worktree or assume-unchanged index
-   entry, and requires the working `package.json` bytes to equal the manifest
-   read from exact `HEAD`. Before any local or remote tag mutation, two fixed
-   read-only API calls prove that live `npm-stage` still disables administrator
-   bypass, has only its branch policy, admits only the single protected `v*`
-   tag policy, and has no reviewer. Two more bounded read-only calls require one
-   exact successful `push` run of CI workflow ID `323493607` at the same current
-   `main` SHA and its exact successful `check`, `macOS`, and `Required` jobs.
-   The helper rejects effective Git URL rewriting, clears inherited credential
-   helpers, disables interactive Git prompts, and admits only the existing
-   `gh auth git-credential` helper for its one authenticated push. It then reads
-   a canonical inventory of at most 500 remote `v*` tags within 64 KiB. The candidate must be strictly newer by
-   SemVer precedence than every distinct tag. It repeats that unchanged
-   bounded inventory immediately before pushing one canonical annotated
-   `v<package-version>` tag. Same-tag recovery is allowed only for the exact
-   annotation object and source SHA; the command never moves a tag.
-3. The protected tag push starts **Publish npm package**. Before verification
-   and again at the checkout-free OIDC boundary, it requires both immutable
-   initial `github.actor_id` and the push-event sender ID/type to be owner User
-   `894119`; this remains fail-closed if the creation-only ruleset drifts while
-   the separate immutable ruleset keeps `github.ref_protected == true`. It also
-   verifies repository ID `1316443113`, the tag/package coordinate, one-level
-   annotation object, exact peeled commit, protected-main ancestry, and
-   unchanged release controls. It runs the full repository gate, builds and
-   smokes one exact tarball, and passes only that same-run artifact to its
-   checkout-free OIDC job. Immediately before `npm publish`, that terminal job
-   imports only exact current main and the annotation ref
-   into a bare repository, verifies their object identities, diffs the complete
-   release-control closure without executing source, and then requires its
-   second combined main/tag advertisement to equal the first. Strict prereleases use
-   `npm publish --tag beta`; stable versions use `npm publish --tag latest`.
-4. **Verify public package** compares the canonical registry artifact byte for
-   byte with that verified artifact, checks the selected dist-tag, and repeats
-   the clean-consumer smoke. Exact same-tag recovery skips an already-public
-   coordinate only after the same verification succeeds.
-5. The same stable tag push starts **Release**. That workflow repeats the exact
-   immutable actor/sender checks at request verification and immediately before
-   its write-capable GitHub Release job. It waits for the exact
-   `npm-stage.yml` tag-push run for the same repository, workflow ID, tag, and
-   source SHA to succeed, then repeats package, registry, ancestry, and
-   release-control checks before creating or verifying the immutable Latest
-   GitHub Release. The negative tag trigger excludes prereleases, so an agent
-   beta stops after verified `beta` publication.
-
-No npm login, OTP, stage inspection, stage approval, npm access token, GitHub
-environment review, or sudo-mode ruleset readback is part of an ordinary
-version release. The only write outside Actions is the bounded owner-credential
-tag push. The creation ruleset rejects every other user, role, App, and GitHub
-Actions identity.
-
-Every beta must have a unique greater prerelease version and its own immutable
-annotated tag. Publish the eventual stable version as another immutable
-coordinate under `latest`. Never promote a beta with `npm dist-tag`: that
-post-publication mutation is outside the OIDC gate and would restore an
-interactive maintainer credential path.
-
-Do not dispatch `npm-stage.yml` or `release.yml` directly. Their only admission
-is a protected version-tag push. The tag annotation is exactly the version tag
-plus its source SHA. GitHub stores the tag ref at annotation object `T`, which
-peels to package commit `C`. Downstream verification requires `C` to remain at
-or below protected linear `main`, the tag ref to remain exactly `T`, and the
-annotation to remain canonical. The publication job observes combined exact
-`main` and tag advertisements twice around its ancestry proof immediately
-before `npm publish`.
-
-The publication workflow runs on GitHub-hosted runners with Node 24, npm 11.19.0,
-Bun 1.3.14, disabled package-manager caching, and no stored npm token. Only its
-checkout-free terminal job has `id-token:write`; all other package jobs are
-read-only and own artifact construction, registry classification, and readback.
-`scripts/package-budget.ts` owns the shared packed-byte, unpacked-byte, and
-file-count ceilings used by artifact inspection and the clean-consumer smoke.
-Remeasure the candidate with the pinned npm version after any reviewed payload
-change.
-
-Release verification intentionally executes source `S=C`: GitHub loads the
-workflow bytes from the annotated tag's peeled product/source commit.
-`scripts/release-ref-authority.ts` accepts that one-level annotated form for new
-tags and retains direct-commit compatibility for historical tags. It reads only
-the exact remote `main` ref and bounded `refs/tags/v*` inventory, imports only
-the governed refs with tags disabled and without writing `FETCH_HEAD`, and
-rejects moved refs, extra annotation levels, divergence, rollback, malformed
-advertisements, or release-control drift. The checked control closure is:
-
-```text
-.github/workflows
-scripts/request-package-release.ts
-scripts/release-ref-authority.ts
-scripts/release-provider-outcome.mjs
-scripts/release-app-token.mjs
-scripts/release-ref-writer.mjs
-```
-
+The tag-push Release workflow intentionally executes source `S=C`: GitHub loads
+the workflow bytes from the tagged product/source commit. Release-control bytes
+in `C` must therefore contain the final reviewed repair before the tag exists.
 On 2026-09-03, a stale-source manual recovery run staged and then published
 `@hraness/wrench@0.16.3` from stale source
 `c2d956ca4102d38c29e24ca4e13f26ce862b47f3`. That public npm coordinate is
-consumed. Never create a `v0.16.3` Git tag or GitHub Release and never attempt
-to unpublish, overwrite, or repair those bytes in place. The completed
-replacement is `0.16.4`; the first marker-bearing successor is `0.16.5`.
-That incident predates direct trusted publishing and remains historical
-evidence, not a current procedure.
+consumed. Never create a `v0.16.3` Git tag or GitHub Release, and never attempt
+to unpublish, overwrite, or repair those public bytes in place. The completed
+replacement is `0.16.4`; the first marker-bearing successor is `0.16.5` from
+the final reviewed control descendant and a fresh exact stage.
+If release controls change materially after staging, that stage is ineligible
+for tagging. If the ineligible stage is still pending, inspect it, reject that
+exact stage with human two-factor authentication, and confirm that it is absent
+before creating and verifying a fresh same-version stage from the final repaired
+descendant. If npm has already published the version, its semver coordinate is
+consumed instead: never unpublish or overwrite it, and prepare a greater version.
 
-If a release control changes after publication, the SemVer coordinate is
-consumed: prepare a greater version from the repaired descendant. If a workflow
-fails before npm accepts the package, repair `main` and use a greater version;
-if npm may have accepted it, rerun only the unchanged tag and let registry
-classification prove whether to skip publication. A source/registry mismatch
-is never recoverable in place.
+The read-only classifier compares the current and prior `package.json` files. A
+manifest edit with an unchanged version succeeds without running the verify or
+OIDC jobs. A prerelease, malformed version, downgrade, unavailable push base, or
+event source outside protected `main`'s linear history fails closed.
+
+Both classifier and verifier use an exact depth-one, no-tag, credential-free
+checkout of the event source `C`. They bind the advertised protected `main`
+tip `M` twice, import only that governed history under a temporary private ref,
+and require `C=M` or strict linear ancestry `C<M`. A later no-version-change
+push may therefore advance `main` during the long package gate without
+changing the artifact already bound to `C`; a later workflow change still makes
+that stage ineligible for tagging under the rule above. For a push, the
+classifier also requires GitHub's exact nonzero `before` commit to be present
+and an ancestor of `C`, removes the ref, and reads the prior manifest by object
+ID. Manual recovery has no prior commit. Neither path uses a broad ref fetch, a forced
+refspec, or `FETCH_HEAD` as authority.
+
+If the automatic run did not start or failed before npm accepted the stage,
+dispatch **Stage npm package** from the current `main` branch. Manual recovery
+runs the same verification and main-only environment path. Once npm accepts a
+stage, first inspect whether that exact source and release-control closure remain
+eligible. An accepted and eligible stage must be inspected and approved without
+a duplicate dispatch. An accepted but ineligible pending stage must be inspected,
+rejected with human two-factor authentication, and confirmed absent before one
+fresh same-version stage is dispatched from final current `main`. If the
+ineligible stage is already public, do not reject, unpublish, overwrite, tag, or
+release it; move the complete corrected release to a greater version.
+
+Use the canonical registry for every inspection and promotion command:
+
+```sh
+npm stage list @hraness/wrench \
+  --json \
+  --registry=https://registry.npmjs.org
+npm stage view <stage-id> \
+  --json \
+  --registry=https://registry.npmjs.org
+npm stage download <stage-id> \
+  --registry=https://registry.npmjs.org
+npm stage approve <stage-id> \
+  --registry=https://registry.npmjs.org
+npm stage reject <stage-id> \
+  --registry=https://registry.npmjs.org
+```
+
+To complete the marker-bearing release, download and smoke
+`@hraness/wrench@0.16.5` after approving its fresh stage. Keep the public
+coordinate and tag literal through the final registry checks. Set
+`STAGE_RUN_ID` to the numeric ID of the exact inspected successful manual
+staging run. Resolve `C` from that run rather than ambient `HEAD`, and require
+the full lowercase commit object locally before creating `v0.16.5`:
+
+```sh
+set -eu
+case "${STAGE_RUN_ID:-}" in
+  ""|*[!0-9]*) exit 1 ;;
+esac
+C="$(gh api \
+  "/repos/hraness/wrench/actions/runs/$STAGE_RUN_ID" \
+  --jq 'select(
+    .workflow_id == 344213783 and
+    .name == "Stage npm package" and
+    .path == ".github/workflows/npm-stage.yml" and
+    .event == "workflow_dispatch" and
+    .head_branch == "main" and
+    .status == "completed" and
+    .conclusion == "success" and
+    .run_attempt == 1
+  ) | .head_sha')"
+test "${#C}" -eq 40
+case "$C" in
+  *[!0-9a-f]*) exit 1 ;;
+esac
+test "$(git cat-file -t "$C")" = commit
+test "$(git rev-parse --verify "$C^{commit}")" = "$C"
+package_coordinate="$(
+  git show "${C}:package.json" |
+    node -e 'const manifest = JSON.parse(require("node:fs").readFileSync(0, "utf8")); if (manifest?.name !== "@hraness/wrench" || manifest?.version !== "0.16.5") process.exit(1); process.stdout.write(`${manifest.name}@${manifest.version}`);'
+)"
+test "$package_coordinate" = "@hraness/wrench@0.16.5"
+wrench_source_artifact="$(mktemp -d)"
+wrench_source_name="npm-package-0.16.5-$C-$STAGE_RUN_ID-1"
+gh run download "$STAGE_RUN_ID" \
+  --repo hraness/wrench \
+  --name "$wrench_source_name" \
+  --dir "$wrench_source_artifact"
+wrench_npm_archive="$wrench_source_artifact/hraness-wrench-0.16.5.tgz"
+wrench_npm_json="$wrench_source_artifact/npm-pack.json"
+wrench_registry_artifact="$(mktemp -d)"
+wrench_registry_json="$wrench_registry_artifact/npm-pack.json"
+wrench_registry_view_json="$wrench_registry_artifact/npm-view.json"
+npm pack @hraness/wrench@0.16.5 \
+  --ignore-scripts \
+  --json \
+  --pack-destination "$wrench_registry_artifact" \
+  --registry=https://registry.npmjs.org > "$wrench_registry_json"
+npm view @hraness/wrench@0.16.5 name version dist \
+  --json \
+  --registry=https://registry.npmjs.org > "$wrench_registry_view_json"
+wrench_registry_archive="$wrench_registry_artifact/hraness-wrench-0.16.5.tgz"
+bun run ./scripts/npm-package-identity.ts \
+  --source-archive "$wrench_npm_archive" \
+  --source-pack-json "$wrench_npm_json" \
+  --registry-archive "$wrench_registry_archive" \
+  --registry-pack-json "$wrench_registry_json" \
+  --registry-view-json "$wrench_registry_view_json" \
+  --expected-name @hraness/wrench \
+  --expected-version 0.16.5
+bun run ./scripts/package-smoke.ts \
+  --archive "$wrench_registry_archive" \
+  --pack-json "$wrench_registry_json"
+git tag v0.16.5 "$C"
+git push origin refs/tags/v0.16.5
+```
+
+The staging workflow runs on GitHub-hosted runners with Node 24, npm 11.19.0,
+Bun 1.3.14, disabled package-manager caching, and no stored npm token. It binds
+the verified artifact and final tarball hash to source `C`. The checkout-free
+terminal OIDC job observes the combined governed refs twice with one
+`ls-remote` connection per observation, requesting exact protected `main` and
+the prospective tag together. Each canonical advertisement is capped at 64 KiB
+and 500 rows, must contain one `main` row and no requested tag, and the pair
+must be byte-identical. If advertised main is `M!=C`, one authenticated,
+strictly parsed comparison must prove positive-ahead linear ancestry `C<M`,
+with `behind_by=0`, exact base and merge base `C`, and terminal commit `M`.
+The tarball hash precedes both observations and the second advertisement is
+immediately adjacent to `npm stage publish`. A protected descendant advance
+after that last read leaves the quarantined, reviewable stage bound to `C`;
+tagging and publication rebind the approved bytes before release. These are
+repeated governed-ref observations, not an atomic snapshot. The job does not
+initialize or fetch a repository, execute checked-out scripts, or use
+`FETCH_HEAD`. Its only GitHub token permission is `contents:read`, alongside
+OIDC `id-token:write`. The main-only `npm-stage` environment applies only to
+this terminal job and has no required deployment reviewers.
+
+`scripts/package-budget.ts` owns the shared packed-byte, unpacked-byte, and
+file-count ceilings used by artifact inspection and the clean-consumer smoke.
+Remeasure the candidate with the pinned npm version after any reviewed payload
+change. Keep enough packed-byte room for the observed Linux and macOS gzip
+spread without replacing the path and content checks with a broad size limit.
 
 ## Deploy the release-bound website
 
@@ -334,7 +375,7 @@ state fails before external verification or site generation. Production also
 requires `VERCEL_GIT_COMMIT_REF=website-production`, while that ref is rejected
 for a non-production deployment.
 `main` and pull requests are preview sources only; they may describe a package
-candidate that has not completed npm publication, tagging, or immutable Release
+candidate that has not completed npm staging, tagging, or immutable Release
 publication, so they must never replace the public production site.
 
 Keep Vercel project `prj_TZbDZ38ABPan158IqnczgsuTu6Ue` under team
@@ -431,90 +472,75 @@ Wrench currently has one eligible maintainer, so
 `require_code_owner_review` must remain `false` and the approval minimum must
 remain zero until a second eligible independent code owner exists. Enabling it
 now would make the repository unreviewable rather than safer. Repository Actions
-default to read. The checked workflow census leaves only the Release `publish`
-job with a `contents: write` `GITHUB_TOKEN`; package-tag creation stays local
-and owner-bound. The
-separate promotion job keeps that token read-only and uses the short-lived App
-token only inside the leased Git push.
+default to read, and the checked workflow census leaves only the Release
+`publish` job with a `contents: write` `GITHUB_TOKEN`; the separate promotion job
+keeps that token read-only and uses the short-lived App token only inside the
+leased Git push.
 
-After the one-time bootstrap has established `website-production`, the
-protected-tag stable **Release** workflow rebuilds and compares the exact
-public npm package, creates or verifies the non-draft, non-prerelease immutable GitHub
-Release, and proves that Release is Latest. It does not read or update
-`website-production`, wait for Vercel, or receive the dedicated production App
-key. The Release lookup accepts only an exact REST 200 or 404 response. Only an
-authenticated exact 404 permits one REST create request with server-generated
-notes; authentication, transport, other API, or malformed response failures
-abort. The workflow validates an exact REST readback before checking Latest. It
-does not use opaque `gh release view` or `gh release create` commands, so hidden
-requests cannot escape the bounded control path.
-
-The canonical annotated tag object `T` must remain on verified release commit
-`C`; historical direct lightweight tags remain read-only compatibility inputs.
-Protected linear `main` at each observation must equal or descend from `C`.
-That descendant movement is release-authority-safe only while
+After the one-time bootstrap has established `website-production`, the tag
+workflow rebuilds and compares the exact public npm package, creates or verifies
+the non-draft, non-prerelease immutable GitHub Release, and proves that Release
+is Latest. It does not read or update `website-production`, wait for Vercel, or
+receive the dedicated App key. The Release lookup accepts only an exact REST 200
+or 404 response.
+Only an authenticated exact 404 permits one REST create request with
+server-generated notes; authentication, transport, other API, or malformed
+response failures abort. The workflow validates an exact REST readback before
+checking Latest. It does not use opaque `gh release view` or
+`gh release create` commands, so hidden requests cannot escape the bounded
+control path. The direct lightweight tag must remain on the verified release
+commit `C`, and protected linear `main` at each observation must equal or
+descend from `C`. That descendant movement is release-authority-safe only while
 `git diff --quiet --no-ext-diff --no-textconv C M -- .github/workflows
-scripts/request-package-release.ts scripts/release-ref-authority.ts
-scripts/release-provider-outcome.mjs scripts/release-app-token.mjs
-scripts/release-ref-writer.mjs` confirms that the high-privilege authorization,
-publication, and promotion control closure is unchanged. The early release
-check and both publication-boundary checks enforce that condition using the
-exact imported `C` and `M` objects.
+scripts/release-ref-authority.ts scripts/release-provider-outcome.mjs
+scripts/release-app-token.mjs scripts/release-ref-writer.mjs` confirms that the
+high-privilege authority, publication, and promotion control closure is
+unchanged. The early release check and both publication-boundary checks enforce
+that condition using the exact imported `C` and `M` objects. After
+completed-release-order validation
+and immediately before the irreversible create request, authenticated GitHub
+API reads still bind both coordinates. The release-ref helper then observes
+the combined governed `main` and `refs/tags/v*` advertisement twice, through
+one `ls-remote` connection per observation, and requires the two canonical
+advertisements to be equal. This is a bounded repeated observation, not an
+atomic provider snapshot. Protected tag immutability and monotonic main ancestry
+keep a later main fast-forward from changing `C`; that movement remains
+release-authority-safe only when it also preserves that release-control
+closure. The terminal readback repeats both the authenticated API checks and
+the combined-advertisement helper, including the release-control comparison. A
+release-control change in the irreducible prewrite-to-POST window makes the
+terminal readback fail closed even though GitHub may already have created the
+immutable Release. Recovery must inspect that exact Release and the current
+Latest Release; the workflow never deletes, patches, or rolls back a Release
+in response. The POST has no conditional-write lease and uses
+`make_latest=legacy`; a higher raw
+`v*` tag is only another queued request, while bounded published immutable
+Releases define completed ordering. If the terminal readback observes another
+immutable Release as Latest, this release remains valid and the workflow fails
+with explicit recovery guidance for the observed Latest coordinate. A
+supersession after that final read is not observable by the completed workflow.
 
-After completed-release-order validation and immediately before the
-irreversible create request, authenticated GitHub API reads still bind both
-coordinates. The release-ref helper then observes the combined governed `main`
-and `refs/tags/v*` advertisement twice, through one `ls-remote` connection per
-observation, and requires the two canonical advertisements to be equal. This is
-a bounded repeated observation, not an atomic provider snapshot. Protected tag
-immutability and monotonic main ancestry keep a later main fast-forward from
-changing `C`; that movement remains safe only when it also preserves the
-release-control closure. Terminal readback repeats both the authenticated API
-checks and the combined-advertisement helper. A control change in the
-irreducible prewrite-to-POST window makes terminal readback fail closed even
-though GitHub may already have created the immutable Release. Recovery inspects
-that exact Release and current Latest Release; it never deletes, patches, or
-rolls back a Release. The POST has no conditional-write lease and uses
-`make_latest=legacy`. Bounded published immutable Releases, rather than raw tag
-order, define completed stable-release ordering.
+Immediately before the tag push that dispatches **Release**, a signed-in
+administrator must read back both immutable Releases as `enabled=true` and one
+exact active repository tag ruleset whose sole ref target is `refs/tags/v*`,
+whose bypass-actor set is empty, and whose exact rule types are `deletion` and
+`update`. Creation remains intentionally allowed so the new version tag can be
+created once; update and deletion must be denied to every actor afterward.
+Ruleset `19989752`, currently named `Immutable version tags`, is retained live
+evidence, but its numeric ID and name are not authority: the semantic readback
+is. If that evidence coordinate changes, resolve and retain the unique new
+semantic match before proceeding. The workflow token deliberately keeps only
+`contents:write` and cannot read either Administration endpoint. These fresh
+control-plane checks are therefore a trusted operator boundary, with a residual
+administrator-toggle window that repeated workflow reads cannot remove. The
+created and terminal Release readbacks and tag reads must still report exact
+immutable authority.
 
-Repository setup must keep immutable Releases enabled and exactly two active
-repository rulesets targeting only `refs/tags/v*`:
-
-- **Immutable version tags** has an empty bypass list and exactly the `update`
-  and `deletion` rules. No user, administrator, App, or GitHub Actions token can
-  move or delete an existing version tag.
-- **Owner-only version tag creation** has exactly one `creation` rule and one
-  always bypass: actor ID `894119`, actor type `User`. It has no repository-role,
-  team, Integration, App, or GitHub Actions bypass. The owner's existing local
-  credential may create a missing tag after the repository preflight; ordinary
-  collaborators and workflow tokens cannot.
-
-Never combine creation, update, and deletion in a bypassed ruleset. Doing so
-would also let that identity move or delete the supposedly immutable tag. The
-no-bypass immutable ruleset and owner-bypassed creation-only ruleset must remain
-separate. Existing ruleset
-`19989752`, currently named `Immutable version tags`, is retained evidence for
-the first rule; capture the new creation ruleset's numeric ID during one-time
-setup. Semantics, not either ID or name, are authority.
-
-Every downstream tag-ref run requires `github.ref_protected == true`. That
-runtime signal proves a ruleset applies to the exact triggering ref without an
-Administration API call. Reviewed-main ancestry, canonical annotation, exact
-tag/package identity, npm provenance and readback, and immutable Release
-readback remain mandatory. Workflows receive no Administration permission.
-
-Use the following privileged readback only for initial repository setup or an
-explicit drift investigation, never before each version. It requires one
-signed-in administrator session. Set
-`wrench_creation_tag_ruleset_id` to the numeric ID returned when the
-creation-only ruleset is configured. Do not continue until both projections
-pass:
-
-The local package-release helper deliberately does not call `/rulesets`:
-ordinary tag creation relies on the one-time split-ruleset setup plus the
-runtime `github.ref_protected` signal, while privileged ruleset readback stays
-outside the per-version path and does not trigger GitHub sudo mode.
+Run this with the signed-in administrator session immediately before creating
+the tag. First resolve the unique candidate from the repository ruleset list,
+then set `wrench_tag_ruleset_id` to that captured numeric ID. The validation
+records the required semantics alongside GitHub's immutable-Release diagnostic
+without granting the workflow Administration:
 
 ```bash
 immutable_release_state="$(gh api \
@@ -534,78 +560,48 @@ if (
 ) process.exit(1);
 process.stdout.write(`${JSON.stringify(value)}\n`);
 NODE
-
-wrench_immutable_tag_ruleset_id=19989752
-wrench_creation_tag_ruleset_id=<captured-creation-ruleset-id>
-immutable_tag_ruleset_state="$(gh api \
+wrench_tag_ruleset_id=19989752
+tag_ruleset_state="$(gh api \
   --header 'Accept: application/vnd.github+json' \
   --header 'X-GitHub-Api-Version: 2026-03-10' \
-  "/repos/hraness/wrench/rulesets/$wrench_immutable_tag_ruleset_id")"
-creation_tag_ruleset_state="$(gh api \
-  --header 'Accept: application/vnd.github+json' \
-  --header 'X-GitHub-Api-Version: 2026-03-10' \
-  "/repos/hraness/wrench/rulesets/$wrench_creation_tag_ruleset_id")"
-IMMUTABLE_TAG_RULESET_STATE="$immutable_tag_ruleset_state" \
-CREATION_TAG_RULESET_STATE="$creation_tag_ruleset_state" node <<'NODE'
-const immutable = JSON.parse(process.env.IMMUTABLE_TAG_RULESET_STATE ?? "null");
-const creation = JSON.parse(process.env.CREATION_TAG_RULESET_STATE ?? "null");
-const common = (value) =>
-  value !== null &&
-  typeof value === "object" &&
-  !Array.isArray(value) &&
-  value.target === "tag" &&
-  value.source_type === "Repository" &&
-  value.source === "hraness/wrench" &&
-  value.enforcement === "active" &&
-  Array.isArray(value.conditions?.ref_name?.include) &&
-  value.conditions.ref_name.include.length === 1 &&
-  value.conditions.ref_name.include[0] === "refs/tags/v*" &&
-  Array.isArray(value.conditions?.ref_name?.exclude) &&
-  value.conditions.ref_name.exclude.length === 0;
-const ruleTypes = (value) =>
-  Array.isArray(value?.rules) ? value.rules.map((rule) => rule?.type).sort() : [];
-const creationBypass = creation?.bypass_actors;
+  "/repos/hraness/wrench/rulesets/$wrench_tag_ruleset_id")"
+TAG_RULESET_STATE="$tag_ruleset_state" node <<'NODE'
+const value = JSON.parse(process.env.TAG_RULESET_STATE ?? "null");
+const refName = value?.conditions?.ref_name;
+const ruleTypes = Array.isArray(value?.rules)
+  ? value.rules.map((rule) => rule?.type).sort()
+  : [];
 if (
-  !common(immutable) ||
-  !Array.isArray(immutable.bypass_actors) ||
-  immutable.bypass_actors.length !== 0 ||
-  JSON.stringify(ruleTypes(immutable)) !== '["deletion","update"]' ||
-  !common(creation) ||
-  !Array.isArray(creationBypass) ||
-  creationBypass.length !== 1 ||
-  creationBypass[0]?.actor_id !== 894119 ||
-  creationBypass[0]?.actor_type !== "User" ||
-  creationBypass[0]?.bypass_mode !== "always" ||
-  JSON.stringify(ruleTypes(creation)) !== '["creation"]' ||
-  immutable.id === creation.id
+  value === null ||
+  typeof value !== "object" ||
+  Array.isArray(value) ||
+  value.target !== "tag" ||
+  value.source_type !== "Repository" ||
+  value.source !== "hraness/wrench" ||
+  value.enforcement !== "active" ||
+  !Array.isArray(value.bypass_actors) ||
+  value.bypass_actors.length !== 0 ||
+  refName === null ||
+  typeof refName !== "object" ||
+  !Array.isArray(refName.include) ||
+  refName.include.length !== 1 ||
+  refName.include[0] !== "refs/tags/v*" ||
+  !Array.isArray(refName.exclude) ||
+  refName.exclude.length !== 0 ||
+  JSON.stringify(ruleTypes) !== '["deletion","update"]'
 ) process.exit(1);
 process.stdout.write(`${JSON.stringify({
-  creation: {
-    bypass: creationBypass[0],
-    id: creation.id,
-    rules: ruleTypes(creation),
-  },
-  immutable: {
-    bypassActors: immutable.bypass_actors.length,
-    id: immutable.id,
-    rules: ruleTypes(immutable),
+  id: value.id,
+  name: value.name,
+  semantics: {
+    bypassActors: 0,
+    enforcement: value.enforcement,
+    ref: refName.include[0],
+    rules: ruleTypes,
   },
 })}\n`);
 NODE
 ```
-
-Actor ID `894119` is the current creation boundary because local agents already
-operate through the owner's authenticated `gh` and Git credential without a new
-prompt. Never substitute GitHub Actions Integration `15368`: any collaborator
-who can add a branch workflow could otherwise acquire `contents:write` and mint
-a release tag. For a larger maintainer group, replace the User bypass with a
-dedicated package-release GitHub App only after its immutable App ID, selected
-Wrench-only installation, exact minimal permissions, token lifetime, and local
-invocation path are implemented and tested. Existing production writer App
-`4783991` is scoped to the
-reviewer-gated `website-production` fast-forward path and is not package-release
-authority. An unconfigured or generic App must never be trusted as a future
-shortcut.
 
 The create request supplies the verified SHA as `target_commitish`, but GitHub
 does not use that field when the tag already exists, and live readback may report
@@ -621,10 +617,9 @@ recovery dispatches this workflow directly from current `main` with an untrusted
 stable-tag input. The automatic path treats the entire `workflow_run` payload as
 foreign data. It requires repository `hraness/wrench` with numeric ID
 `1316443113`, Release workflow ID `323493609`, exact workflow name and path, a
-tag-ref `push`, first attempt, successful conclusion, this
-repository as the head repository, the exact stable tag as `head_branch`, and
-its peeled immutable commit `C` as `head_sha`. The reviewed workflow source `W`
-originates from `main`, independently of that untrusted upstream payload.
+tag `push`, first attempt, successful conclusion, and this repository as the head
+repository. The reviewed workflow source `W` originates from `main`; the
+automatic head SHA must instead equal the peeled immutable tag commit `C`.
 Manual recovery carries no upstream SHA. Both paths check out exact `W`, bind
 the package version from `C`, verify the immutable asset-free Latest Release,
 and prove `C<=W<=M` for protected current main `M` before any provider or ref
@@ -634,10 +629,9 @@ invalidating reviewed `W`.
 That promotion checkout is depth one with tags and credentials disabled. The
 same bounded release-ref helper observes `main` and the bounded `refs/tags/v*`
 inventory in one combined governed-ref advertisement per observation. It then
-imports only exact advertised `main` and the requested tag, without writing
-`FETCH_HEAD`, peels the canonical one-level annotation to `C` (or accepts a
-historical direct-commit tag), proves `C<=W<=M`, and requires a second combined
-advertisement to equal the first.
+imports only exact advertised `main` and the requested lightweight tag, without
+writing `FETCH_HEAD`, proves the requested tag is direct commit `C` and proves
+`C<=W<=M`, and requires a second combined advertisement to equal the first.
 Raw tag order is not completed-release order. Every
 later promotion job checks out only the already-verified workflow SHA at depth
 one with tags disabled; provider and App/CAS authority remain separate from Git
@@ -970,7 +964,7 @@ a resolvable Git `HEAD`; missing repository metadata is a hard failure, not a
 reason to trust deployment environment variables. Keep `.git` out of
 `.vercelignore` so the Git-connected shallow clone retains the metadata needed
 for this independent check. Canonical npm name, version, and SHA-512 integrity
-are sufficient at this layer because the protected-tag Release workflow first rebuilds
+are sufficient at this layer because the tag Release workflow first rebuilds
 and compares the exact tarball with canonical npm before creating the immutable
 Release, and the separate main-origin workflow advances `website-production`
 only after it revalidates that release authority. The production verifier then
@@ -978,6 +972,6 @@ independently rechecks the promoted commit, tag, registry coordinate, and
 immutable Latest Release.
 
 See npm's documentation for [trusted
-publishing](https://docs.npmjs.com/trusted-publishers/), [trusted-publisher
-management](https://docs.npmjs.com/cli/v11/commands/npm-trust/), and [dual-use package
+publishing](https://docs.npmjs.com/trusted-publishers/), [staged
+publishing](https://docs.npmjs.com/staged-publishing/), and [dual-use package
 publishing](https://docs.npmjs.com/policies/dual-use/).

@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - "v*"
-      - "!v*-*"
 
 permissions:
   contents: read
@@ -17,7 +16,6 @@ jobs:
   verify:
     name: Verify
     permissions:
-      actions: read
       contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -28,23 +26,14 @@ jobs:
       - name: Resolve release request
         id: request
         env:
-          EVENT_ACTOR_ID: ${{ github.actor_id }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_REF: ${{ github.ref }}
           EVENT_REF_NAME: ${{ github.ref_name }}
-          EVENT_REF_PROTECTED: ${{ github.ref_protected }}
           EVENT_REF_TYPE: ${{ github.ref_type }}
-          EVENT_SENDER_ID: ${{ github.event.sender.id }}
-          EVENT_SENDER_TYPE: ${{ github.event.sender.type }}
         run: |
           set -euo pipefail
-          if [[ "$EVENT_ACTOR_ID" != "894119" || \
-                "$EVENT_SENDER_ID" != "894119" || \
-                "$EVENT_SENDER_TYPE" != "User" || \
-                "$EVENT_NAME" != "push" || "$EVENT_REF_TYPE" != "tag" || \
-                "$EVENT_REF" != "refs/tags/$EVENT_REF_NAME" || \
-                "$EVENT_REF_PROTECTED" != "true" ]]; then
-            echo "::error::Release request is not one exact owner-created protected tag push"
+          if [[ "$EVENT_NAME" != "push" || "$EVENT_REF_TYPE" != "tag" || "$EVENT_REF" != "refs/tags/$EVENT_REF_NAME" ]]; then
+            echo "::error::Release request is not one exact tag push"
             exit 1
           fi
           if [[ ! "$EVENT_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
@@ -124,54 +113,6 @@ jobs:
           fi
       - run: bun pm pack --dry-run --ignore-scripts
       - run: node --input-type=module -e 'await Promise.all(["./dist/index.js","./dist/client.js","./dist/beeper-client.js","./dist/apple-photos-client.js","./dist/whatsapp-client.js","./dist/omni-client.js","./dist/messaging.js"].map((path) => import(path)))'
-      - name: Wait for exact direct npm publication
-        env:
-          EXPECTED_SHA: ${{ steps.identity.outputs.sha }}
-          EXPECTED_TAG: ${{ steps.identity.outputs.tag }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          runs_file="$RUNNER_TEMP/npm-publication-runs.json"
-          for slot in $(seq 1 60); do
-            gh api --method GET \
-              "/repos/$GITHUB_REPOSITORY/actions/workflows/npm-stage.yml/runs" \
-              -f event=push \
-              -f head_sha="$EXPECTED_SHA" \
-              -f per_page=100 > "$runs_file"
-            state="$(RUNS_FILE="$runs_file" EXPECTED_SHA="$EXPECTED_SHA" \
-              EXPECTED_TAG="$EXPECTED_TAG" node <<'NODE'
-          const fs = require("node:fs");
-          const value = JSON.parse(fs.readFileSync(process.env.RUNS_FILE, "utf8"));
-          const runs = value?.workflow_runs;
-          if (!Number.isSafeInteger(value?.total_count) || !Array.isArray(runs) || value.total_count !== runs.length || runs.length > 100) {
-            throw new Error("npm publication workflow inventory is malformed or incomplete");
-          }
-          const matches = runs.filter((run) =>
-            run?.workflow_id === 344213783 &&
-            run?.name === "Publish npm package" &&
-            run?.path === ".github/workflows/npm-stage.yml" &&
-            run?.event === "push" &&
-            run?.head_branch === process.env.EXPECTED_TAG &&
-            run?.head_sha === process.env.EXPECTED_SHA &&
-            run?.repository?.id === 1316443113 &&
-            run?.repository?.full_name === "hraness/wrench"
-          );
-          if (matches.length === 0) process.stdout.write("pending");
-          else if (matches.length !== 1) throw new Error("npm publication workflow identity is ambiguous");
-          else if (matches[0].status !== "completed") process.stdout.write("pending");
-          else if (matches[0].conclusion === "success") process.stdout.write("success");
-          else throw new Error(`npm publication workflow ended in ${matches[0].conclusion}`);
-          NODE
-            )"
-            if [[ "$state" == "success" ]]; then
-              break
-            fi
-            if [[ "$slot" == 60 ]]; then
-              echo "::error::Timed out waiting for the exact direct npm publication"
-              exit 1
-            fi
-            sleep 10
-          done
       - name: Verify exact public npm delivery
         run: |
           set -euo pipefail
@@ -228,23 +169,11 @@ jobs:
     timeout-minutes: 5
     env:
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-      EVENT_ACTOR_ID: ${{ github.actor_id }}
-      EVENT_SENDER_ID: ${{ github.event.sender.id }}
-      EVENT_SENDER_TYPE: ${{ github.event.sender.type }}
       GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
       VERIFIED_SHA: ${{ needs.verify.outputs.verified_sha }}
       VERIFIED_TAG: ${{ needs.verify.outputs.verified_tag }}
     steps:
-      - name: Revalidate immutable owner tag request
-        run: |
-          set -euo pipefail
-          if [[ "$EVENT_ACTOR_ID" != "894119" || \
-                "$EVENT_SENDER_ID" != "894119" || \
-                "$EVENT_SENDER_TYPE" != "User" ]]; then
-            echo "::error::GitHub Release publication lost its immutable owner authority"
-            exit 1
-          fi
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
@@ -258,12 +187,6 @@ jobs:
       - name: Publish verified GitHub Release
         run: |
           set -euo pipefail
-          if [[ "$EVENT_ACTOR_ID" != "894119" || \
-                "$EVENT_SENDER_ID" != "894119" || \
-                "$EVENT_SENDER_TYPE" != "User" ]]; then
-            echo "::error::GitHub Release publication lost its immutable owner authority"
-            exit 1
-          fi
           if [[ ! "$VERIFIED_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "::error::Publish request has no verified stable release tag"
             exit 1
