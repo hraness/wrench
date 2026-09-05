@@ -68,16 +68,16 @@ describe("authenticated web-session contract identity", () => {
       "28de65047f0bd5c5565d5e85d9cf9abd60d99e21ac1f55db5fbb6ee7acb11f3a",
     );
     expect(webSessionContractHash(facebookFeed)).toBe(
-      "b261229f91340b777cba30528628897bb24b20e185ad9189c38ac65cee550bc3",
+      "e21b1bd88344b3c4980e1d0a87094f69bfa56d5f78ad24c13985c545f838c818",
     );
     expect(webSessionContractHash(facebookGroupFeed)).toBe(
-      "8961baa8706d71471ee60f1e7996db03887bc741c08649e4277388098b55139a",
+      "a32cf5eebf9f026702eef92eb48d58ad75edf025a49fed727692558375044477",
     );
     expect(webSessionContractHash(marketplaceFeed)).toBe(
-      "95799fa76f23d0493f606ce216c2cac85f17f6bfe0dd5d5498bcb945b6f1e0da",
+      "1f3e08e9bcd2d5c9ff3ff546c534fcdd2d46320e23916d17db73f15243d0e491",
     );
     expect(webSessionContractHash(marketplaceListing)).toBe(
-      "10b32a0e54a4cac7f5af6f875c15bfa6d1e55a79a8bee6411fa84294ce5828f1",
+      "36e83d29e6dfb0a3bd550ba4d7e429c1cf295d72c32dbbf33c01d8c34fa2482f",
     );
 
     for (const value of [
@@ -176,7 +176,7 @@ describe("authenticated web-session contract identity", () => {
       contractVersion: 1,
     });
     expect(webSessionContractHash(historicalMarketplaceFeed)).toBe(
-      "98cd1800fdc9539b5d9a5cc11b8f370c62c21f7eb5feb32a6c4b8c94dd4c3e21",
+      "7f3729ec9f44079d8f34be1844f1979f25dc4b544c77558239d31fd00d269006",
     );
     expect(() => contract({
       site: "facebook-marketplace",

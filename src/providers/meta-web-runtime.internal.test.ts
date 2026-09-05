@@ -11,9 +11,18 @@ import { join } from "node:path";
 import type { CookieRecordReader } from "@hraness/kb/clip/acquire";
 import type { StrictCookie } from "@hraness/kb/clip/cookies";
 import type { WrenchAuth } from "../auth";
+import { PreservedBrowserArtifactsError } from "../browser";
 import { sealCursorToken } from "../cursor-token";
 import { canonicalJson, sha256, type WebSessionRecipe } from "../model";
-import { OperationDeadline } from "../operation-deadline";
+import {
+  OperationDeadline,
+  OperationDeadlineError,
+} from "../operation-deadline";
+import {
+  InstagramProfileBrowserFailure,
+  InstagramProfileBrowserResponseRejectedError,
+  type InstagramProfileBrowserTransport,
+} from "./instagram-web-profile-browser";
 import {
   executeMetaWebOperation,
   instagramConfigureDispatchDecision,
@@ -1263,7 +1272,33 @@ describe("Meta authenticated internal-data runtime", () => {
   test("reads exact self-profile metrics without entering the dispatch ledger", async () => {
     const observedAt = Date.UTC(2026, 7, 21, 15, 0, 0);
     const instagramCalls: Call[] = [];
+    const instagramBrowserCalls: string[] = [];
     let instagramDispatches = 0;
+    const instagramTransport: InstagramProfileBrowserTransport = {
+      readCurrentViewerHtml: () => {
+        instagramBrowserCalls.push("viewer");
+        return Promise.resolve(instagramHtml);
+      },
+      readProfileJson: (profile) => {
+        instagramBrowserCalls.push(`profile:${profile}`);
+        return Promise.resolve({
+          status: "ok",
+          data: {
+            user: {
+              id: "12345",
+              username: "viewer",
+              edge_followed_by: { count: 101 },
+              edge_follow: { count: 20 },
+              edge_owner_to_timeline_media: { count: 7 },
+            },
+          },
+        });
+      },
+      close: () => {
+        instagramBrowserCalls.push("close");
+        return Promise.resolve();
+      },
+    };
     const instagram = await executeMetaWebOperation(
       recipe("instagram", "profiles.read"),
       { profile: "viewer" },
@@ -1274,35 +1309,17 @@ describe("Meta authenticated internal-data runtime", () => {
           return Promise.resolve();
         },
         dependencies: {
-          ...dependencies("instagram", instagramCalls, (call) => {
-            if (call.url.pathname === "/") {
-              return new Response(instagramHtml, {
-                status: 200,
-                headers: { "content-type": "text/html" },
-              });
-            }
-            if (call.url.pathname === "/api/v1/users/web_profile_info/") {
-              expect(call.url.searchParams.get("username")).toBe("viewer");
-              expect(call.headers.get("x-ig-app-id")).toBe("936619743392459");
-              expect(call.headers.get("referer")).toBe("https://www.instagram.com/viewer/");
-              return new Response(JSON.stringify({
-                status: "ok",
-                data: {
-                  user: {
-                    id: "12345",
-                    username: "viewer",
-                    edge_followed_by: { count: 101 },
-                    edge_follow: { count: 20 },
-                    edge_owner_to_timeline_media: { count: 7 },
-                  },
-                },
-              }), {
-                status: 200,
-                headers: { "content-type": "application/json" },
-              });
-            }
-            throw new Error(`unexpected Instagram profile request ${call.url.href}`);
+          ...dependencies("instagram", instagramCalls, () => {
+            throw new Error("Instagram browser-contained profile read used direct network access");
           }),
+          createInstagramProfileBrowserTransport: (selectedAuth, browserOptions) => {
+            expect(selectedAuth).toEqual(auth("instagram"));
+            expect(browserOptions).toMatchObject({
+              timeoutMs: 1_000,
+              maxOutputBytes: 12 * 1024 * 1024,
+            });
+            return Promise.resolve(instagramTransport);
+          },
           now: () => observedAt,
         },
       },
@@ -1325,10 +1342,8 @@ describe("Meta authenticated internal-data runtime", () => {
         },
       },
     });
-    expect(instagramCalls.map((call) => call.url.pathname)).toEqual([
-      "/",
-      "/api/v1/users/web_profile_info/",
-    ]);
+    expect(instagramBrowserCalls).toEqual(["viewer", "profile:viewer", "close"]);
+    expect(instagramCalls).toHaveLength(0);
     expect(instagramDispatches).toBe(0);
 
     const threadsCalls: Call[] = [];
@@ -1525,37 +1540,45 @@ describe("Meta authenticated internal-data runtime", () => {
 
   test("projects target-stage Meta viewer-binding changes as account mismatch", async () => {
     const instagramCalls: Call[] = [];
+    const instagramBrowserCalls: string[] = [];
+    const instagramTransport: InstagramProfileBrowserTransport = {
+      readCurrentViewerHtml: () => {
+        instagramBrowserCalls.push("viewer");
+        return Promise.resolve(instagramHtml);
+      },
+      readProfileJson: (profile) => {
+        instagramBrowserCalls.push(`profile:${profile}`);
+        return Promise.resolve({
+          status: "ok",
+          data: {
+            user: {
+              id: "99999",
+              username: "viewer",
+              edge_followed_by: { count: 101 },
+              edge_follow: { count: 20 },
+              edge_owner_to_timeline_media: { count: 7 },
+            },
+          },
+        });
+      },
+      close: () => {
+        instagramBrowserCalls.push("close");
+        return Promise.resolve();
+      },
+    };
     const instagram = await executeMetaWebOperation(
       recipe("instagram", "profiles.read"),
       { profile: "viewer" },
       auth("instagram"),
       {
-        dependencies: dependencies("instagram", instagramCalls, (call) => {
-          if (call.url.pathname === "/") {
-            return new Response(instagramHtml, {
-              status: 200,
-              headers: { "content-type": "text/html" },
-            });
-          }
-          if (call.url.pathname === "/api/v1/users/web_profile_info/") {
-            return new Response(JSON.stringify({
-              status: "ok",
-              data: {
-                user: {
-                  id: "99999",
-                  username: "viewer",
-                  edge_followed_by: { count: 101 },
-                  edge_follow: { count: 20 },
-                  edge_owner_to_timeline_media: { count: 7 },
-                },
-              },
-            }), {
-              status: 200,
-              headers: { "content-type": "application/json" },
-            });
-          }
-          throw new Error(`unexpected Instagram profile request ${call.url.href}`);
-        }),
+        dependencies: {
+          ...dependencies("instagram", instagramCalls, () => {
+            throw new Error("Instagram account binding used direct network access");
+          }),
+          createInstagramProfileBrowserTransport: () => Promise.resolve(
+            instagramTransport,
+          ),
+        },
       },
     );
     expect(instagram).toMatchObject({
@@ -1567,10 +1590,8 @@ describe("Meta authenticated internal-data runtime", () => {
       dispatchStarted: false,
       dispatch: { planned: 0, started: 0, verified: 0 },
     });
-    expect(instagramCalls.map((call) => call.url.pathname)).toEqual([
-      "/",
-      "/api/v1/users/web_profile_info/",
-    ]);
+    expect(instagramBrowserCalls).toEqual(["viewer", "profile:viewer", "close"]);
+    expect(instagramCalls).toHaveLength(0);
 
     const threadsCalls: Call[] = [];
     const threads = await executeMetaWebOperation(
@@ -1621,6 +1642,202 @@ describe("Meta authenticated internal-data runtime", () => {
       "/@viewer",
       "/insights",
     ]);
+  });
+
+  test("projects typed Instagram browser failures without direct access or retry", async () => {
+    const cases = [
+      {
+        failure: new InstagramProfileBrowserResponseRejectedError(401, "text/html"),
+        category: "auth-repair-required",
+        retryDisposition: "repair-auth",
+        stage: "viewer",
+      },
+      {
+        failure: new InstagramProfileBrowserResponseRejectedError(403, "text/html"),
+        category: "auth-repair-required",
+        retryDisposition: "repair-auth",
+        stage: "viewer",
+      },
+      {
+        failure: new InstagramProfileBrowserResponseRejectedError(429, "text/html"),
+        category: "provider-throttled",
+        retryDisposition: "retry-once-after-60s",
+        stage: "viewer",
+      },
+      {
+        failure: new InstagramProfileBrowserResponseRejectedError(503, "text/html"),
+        category: "provider-temporary",
+        retryDisposition: "retry-once-after-60s",
+        stage: "profile",
+      },
+      {
+        failure: new InstagramProfileBrowserFailure(
+          "provider-fetch",
+          "private Instagram browser fetch detail",
+        ),
+        category: "provider-temporary",
+        retryDisposition: "retry-once-after-60s",
+        stage: "profile",
+      },
+      {
+        failure: new InstagramProfileBrowserFailure(
+          "authwall",
+          "private Instagram browser authwall detail",
+        ),
+        category: "auth-repair-required",
+        retryDisposition: "repair-auth",
+        stage: "viewer",
+      },
+      {
+        failure: new InstagramProfileBrowserFailure(
+          "profile-json",
+          "private Instagram browser response-shape detail",
+        ),
+        category: "contract-drift",
+        retryDisposition: "do-not-retry",
+        stage: "profile",
+      },
+      {
+        failure: new OperationDeadlineError(
+          "Instagram profile fixture",
+          "timed-out",
+        ),
+        category: "operation-timeout",
+        retryDisposition: "retry-once-after-60s",
+        stage: "viewer",
+      },
+    ] as const;
+
+    for (const item of cases) {
+      const directCalls: Call[] = [];
+      const browserCalls: string[] = [];
+      let transportCreations = 0;
+      let dispatches = 0;
+      const transport: InstagramProfileBrowserTransport = {
+        readCurrentViewerHtml: () => {
+          browserCalls.push("viewer");
+          return item.stage === "viewer"
+            ? Promise.reject(item.failure)
+            : Promise.resolve(instagramHtml);
+        },
+        readProfileJson: (profile) => {
+          browserCalls.push(`profile:${profile}`);
+          return Promise.reject(item.failure);
+        },
+        close: () => {
+          browserCalls.push("close");
+          return Promise.resolve();
+        },
+      };
+      const result = await executeMetaWebOperation(
+        recipe("instagram", "profiles.read"),
+        { profile: "viewer" },
+        auth("instagram"),
+        {
+          beforeDispatch: () => {
+            dispatches += 1;
+            return Promise.resolve();
+          },
+          dependencies: {
+            ...dependencies("instagram", directCalls, () => {
+              throw new Error("typed Instagram browser failure used direct network access");
+            }),
+            createInstagramProfileBrowserTransport: () => {
+              transportCreations += 1;
+              return Promise.resolve(transport);
+            },
+          },
+        },
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        output: null,
+        dispatchStarted: false,
+        dispatch: { planned: 0, started: 0, verified: 0 },
+        readFailure: {
+          category: item.category,
+          retryDisposition: item.retryDisposition,
+        },
+      });
+      expect(browserCalls).toEqual(item.stage === "viewer"
+        ? ["viewer", "close"]
+        : ["viewer", "profile:viewer", "close"]);
+      expect(transportCreations).toBe(1);
+      expect(directCalls).toHaveLength(0);
+      expect(dispatches).toBe(0);
+      expect(JSON.stringify(result)).not.toContain(item.failure.message);
+    }
+  });
+
+  test("tracks Instagram browser cleanup and preserves finalization failures", async () => {
+    const directCalls: Call[] = [];
+    const browserCalls: string[] = [];
+    const cleanupBarriers: Promise<void>[] = [];
+    const cleanupPublisher = (_resource: unknown) => undefined;
+    const failure = new PreservedBrowserArtifactsError(
+      "private Instagram browser close detail",
+      "private-instagram-recovery-handle",
+      new Error("private Instagram cleanup cause"),
+    );
+    const transport: InstagramProfileBrowserTransport = {
+      readCurrentViewerHtml: () => {
+        browserCalls.push("viewer");
+        return Promise.resolve(instagramHtml);
+      },
+      readProfileJson: (profile) => {
+        browserCalls.push(`profile:${profile}`);
+        return Promise.resolve({
+          status: "ok",
+          data: {
+            user: {
+              id: "12345",
+              username: "viewer",
+              edge_followed_by: { count: 101 },
+              edge_follow: { count: 20 },
+              edge_owner_to_timeline_media: { count: 7 },
+            },
+          },
+        });
+      },
+      close: () => {
+        browserCalls.push("close");
+        return Promise.reject(failure);
+      },
+    };
+    const action = executeMetaWebOperation(
+      recipe("instagram", "profiles.read"),
+      { profile: "viewer" },
+      auth("instagram"),
+      {
+        dependencies: {
+          ...dependencies("instagram", directCalls, () => {
+            throw new Error("Instagram cleanup path used direct network access");
+          }),
+          createInstagramProfileBrowserTransport: (_selectedAuth, options) => {
+            expect(options.publishCleanupResource).toBe(cleanupPublisher);
+            return Promise.resolve(transport);
+          },
+        },
+        registerCleanupBarrier: (barrier) => {
+          cleanupBarriers.push(barrier);
+          return cleanupPublisher;
+        },
+      },
+    );
+    expect(cleanupBarriers).toHaveLength(1);
+    const operationOutcome = action.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    const cleanupOutcome = cleanupBarriers[0]!.then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(await operationOutcome).toBe(failure);
+    expect(await cleanupOutcome).toBe(failure);
+    expect(browserCalls).toEqual(["viewer", "profile:viewer", "close"]);
+    expect(directCalls).toHaveLength(0);
   });
 
   test("uploads one plan-bound Threads PNG, rebinds fresh config, and verifies the exact permalink readback", async () => {

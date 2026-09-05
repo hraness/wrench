@@ -11,6 +11,7 @@ import instagramV1Manifest from "../assets/adapters/instagram/wrench-web-adapter
 import instagramV12Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.2.0.json";
 import instagramV13Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.3.0.json";
 import instagramV15Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.5.0.json";
+import instagramV17Manifest from "../assets/adapters/instagram/wrench-web-adapter.v1.7.0.json";
 import threadsManifest from "../assets/adapters/threads/wrench-web-adapter.json";
 import threadsV1Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.0.0.json";
 import threadsV12Manifest from "../assets/adapters/threads/wrench-web-adapter.v1.2.0.json";
@@ -471,7 +472,10 @@ describe("Meta consumer-web policy", () => {
       ["threads", "feeds.read", threadsManifest, threadsV1Manifest],
     ] as const;
 
-    expect(instagramManifest.version).toBe("1.7.0");
+    expect(instagramManifest.version).toBe("1.8.0");
+    expect(instagramV17Manifest.version).toBe("1.7.0");
+    expect(instagramManifest.operations["profiles.read"])
+      .toEqual(instagramV17Manifest.operations["profiles.read"]);
     expect(instagramV15Manifest.version).toBe("1.5.0");
     expect(instagramV1Manifest.version).toBe("1.0.0");
     expect(threadsManifest.version).toBe("1.8.0");
